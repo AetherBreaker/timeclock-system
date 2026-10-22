@@ -1,0 +1,29 @@
+[project]
+  name            = "timeclock-system"
+  version         = "0.1.0"
+  description     = "Add your description here"
+  readme          = "README.md"
+  requires-python = ">=3.14"
+  dependencies    = []
+
+[dependency-groups]
+  dev = [
+    "aeth-devkit>=15.1.1",
+  ]
+
+[tool.poe]
+  include_script = [{ script = "aeth_devkit:tasks", executor = { type = "uv", frozen = true } }]
+
+[tool.uv]
+  [[tool.uv.index]]
+    name        = "SFTPyPI"
+    url         = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple"
+    publish-url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/"
+    explicit    = true
+
+  [tool.uv.sources]
+    aeth-devkit         = [{ index = "SFTPyPI" }]
+    devkit-templates    = [{ index = "SFTPyPI" }]
+    devkit-container    = [{ index = "SFTPyPI" }]
+    devkit-claude-hooks = [{ index = "SFTPyPI" }]
+    devkit-poe-complete = [{ index = "SFTPyPI" }]
