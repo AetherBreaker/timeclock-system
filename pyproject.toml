@@ -77,6 +77,10 @@
 
   executionEnvironments = [{ root = "src", extraPaths = ["src"] }]
 
+  # backend/ is a submodule with its own environment and checks. Setting exclude replaces pyright's
+  # defaults, so they're restated.
+  exclude = ["backend", "**/node_modules", "**/__pycache__", "**/.*"]
+
 [tool.pytest.ini_options]
   addopts      = [
     "--cov",

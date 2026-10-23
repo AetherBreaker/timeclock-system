@@ -228,3 +228,8 @@ __marimo__/
 *.env
 persisted_data/
 *.svg
+
+# ---- timeclock-system ----
+# The tunnel container's SSH host key pair; the .key goes into Coolify as TUNNEL_SSH_HOST_KEY_B64 (base64).
+/timeclock-tunnel.key
+/timeclock-tunnel.pub
