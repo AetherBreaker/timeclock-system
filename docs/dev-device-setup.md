@@ -99,7 +99,7 @@ The service retries every 10 seconds, so it connects once the redeploy is done. 
 3. **Servers → Add:** name `timeclock-dev`, IP `coolify-tunnel`, port `22001`, user `root`, the key from step 1. **Validate**: Coolify checks the connection and installs Docker.
 4. On the server's **Proxy** page, choose **None** (requirements, Decided 14.5).
 
-Not yet verified: whether Coolify accepts a container name as a server's address. If it refuses, use the `coolify-tunnel` container's IP on the `coolify` network: `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' coolify-tunnel` on the VPS.
+Coolify renames the container (`coolify-tunnel-<id>`) but keeps `coolify-tunnel` as its alias on the `coolify` network, and Coolify's own container resolves that name (checked). Not yet verified: whether Coolify's server form accepts a name instead of an IP. If it refuses, use the `coolify-tunnel` container's IP on the `coolify` network: `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' coolify-tunnel` on the VPS.
 
 ## 6. Afterwards
 
