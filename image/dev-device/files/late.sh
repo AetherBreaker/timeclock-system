@@ -20,4 +20,4 @@ visudo -cf /etc/sudoers.d/90-tcadmin
 systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
 
 # The Coolify tunnel helper (docs/dev-device-setup.md, step 5).
-install -m 755 "$S/timeclock-tunnel-setup" /usr/local/sbin/timeclock-tunnel-setup
+install -m 755 "$S/coolify-tunnel-setup" /usr/local/sbin/coolify-tunnel-setup

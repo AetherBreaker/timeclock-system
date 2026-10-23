@@ -3,7 +3,7 @@
 The test clock: an HP EliteDesk 800 G3 (or similar) running Debian 13 with no desktop, reachable two ways:
 
 - **On the LAN**, by SSH, for development and testing (`ssh timeclock-dev`).
-- **From Coolify on the VPS**, through a persistent reverse SSH tunnel to timeclock-backend's tunnel container (requirements, Decided 29). Coolify then installs Docker and deploys to it.
+- **From Coolify on the VPS**, through a persistent reverse SSH tunnel to [coolify-tunnel](https://github.com/AetherBreaker/coolify-tunnel) (requirements, Decided 29). Coolify then installs Docker and deploys to it.
 
 The installer image does most of the setup. Its source is [`image/dev-device/`](../image/dev-device/).
 
@@ -15,7 +15,7 @@ The installer image does most of the setup. Its source is [`image/dev-device/`](
 - SSH by key only. `tcadmin` accepts the workstation key `~/.ssh/timeclock_dev`, and `~/.ssh/config` already has a `timeclock-dev` entry for it.
 - Time zone `America/New_York`, clock synced over NTP. Sleep and suspend disabled.
 - Hardware-testing tools: `usbutils`, `libinput-tools`, `fprintd`, and libfprint's Python bindings (`gir1.2-fprint-2.0`, `python3-gi`).
-- `timeclock-tunnel-setup`, which sets up the tunnel for Coolify (step 5).
+- `coolify-tunnel-setup`, which sets up the tunnel for Coolify (step 5).
 
 ## 1. Write the USB stick
 
@@ -62,28 +62,27 @@ A quick reader test: `fprintd-enroll`, then `fprintd-verify`. Afterwards, remove
 
 ## 5. The tunnel for Coolify
 
-The VPS end is `timeclock-tunnel`, a forwarding-only SSH container in [timeclock-backend](https://github.com/AetherBreaker/timeclock-backend), included here at `backend/`. Each clock dials it on port 2223 and forwards one port there to its own SSH server. Coolify reaches the clock at `timeclock-tunnel:<port>` over the `coolify` network. Nothing is configured on the VPS host itself.
+The VPS end is [coolify-tunnel](https://github.com/AetherBreaker/coolify-tunnel), a forwarding-only SSH container shared by every project's devices. Each device dials it on port 2223 and forwards one port there to its own SSH server. Coolify reaches the device at `coolify-tunnel:<port>` over the `coolify` network. Nothing is configured on the VPS host itself.
 
-### 5a. Deploy timeclock-backend (once, for all clocks)
+### 5a. Deploy coolify-tunnel (once, for all devices)
 
-1. Make the tunnel's host key and set the Coolify environment variables, as described in [the backend's README](../backend/README.md).
-2. In Coolify, create a **Docker Compose** application from `https://github.com/AetherBreaker/timeclock-backend`, branch `main`, compose file `docker/compose.yaml`, and deploy it. Proxy: none needed.
-3. Allow TCP **2223** inbound in the VPS's firewall (the provider's panel, and `ufw` if it's on).
-4. In the `timeclock-tunnel` container's log, note the line `timeclock-tunnel host key: 256 SHA256:...`.
+Follow [its README's "Deploying"](https://github.com/AetherBreaker/coolify-tunnel#deploying). Its host key pair is already made, in the `coolify-tunnel` checkout's root (gitignored). From its log, note the line `coolify-tunnel host key: 256 SHA256:...`.
+
+Port 2223 is published by Docker, which bypasses the VPS's `ufw`, so no rule is needed there. A firewall in the hosting provider's panel would still need to allow it.
 
 ### 5b. On the device
 
 ```sh
-sudo timeclock-tunnel-setup              # defaults: tunnel port 22001, VPS 108.61.75.238, port 2223
-# or: sudo timeclock-tunnel-setup <tunnel-port> <vps> <vps-port>
+sudo coolify-tunnel-setup              # defaults: port 22001, VPS 108.61.75.238, tunnel port 2223
+# or: sudo coolify-tunnel-setup <port> <vps> <tunnel-port>
 ```
 
 The script:
 
 1. Creates the device's tunnel key.
-2. Shows the tunnel's host key fingerprint. Answer `y` only if it matches the one from the container's log (5a, step 4).
+2. Shows the tunnel's host key fingerprint. Answer `y` only if it matches the one from the container's log (5a).
 3. Starts the `coolify-tunnel` service.
-4. Prints one line for `docker/tunnel/authorized_keys` in timeclock-backend. Add it, commit, push, and redeploy the backend in Coolify.
+4. Prints one line for `docker/authorized_keys` in coolify-tunnel. Add it with a comment naming the device and project, commit, push, and redeploy coolify-tunnel in Coolify.
 
 The service retries every 10 seconds, so it connects once the redeploy is done. The next clock uses tunnel port `22002`.
 
@@ -97,10 +96,10 @@ The service retries every 10 seconds, so it connects once the redeploy is done. 
    sudo chmod 600 /root/.ssh/authorized_keys
    ```
 
-3. **Servers → Add:** name `timeclock-dev`, IP `timeclock-tunnel`, port `22001`, user `root`, the key from step 1. **Validate**: Coolify checks the connection and installs Docker.
+3. **Servers → Add:** name `timeclock-dev`, IP `coolify-tunnel`, port `22001`, user `root`, the key from step 1. **Validate**: Coolify checks the connection and installs Docker.
 4. On the server's **Proxy** page, choose **None** (requirements, Decided 14.5).
 
-Not yet verified: whether Coolify accepts a container name as a server's address. If it refuses, use the `timeclock-tunnel` container's IP on the `coolify` network: `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' timeclock-tunnel` on the VPS.
+Not yet verified: whether Coolify accepts a container name as a server's address. If it refuses, use the `coolify-tunnel` container's IP on the `coolify` network: `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' coolify-tunnel` on the VPS.
 
 ## 6. Afterwards
 

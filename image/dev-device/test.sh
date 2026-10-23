@@ -40,7 +40,7 @@ $SSH '
   sudo sshd -T | grep -E "^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin) "
   systemctl is-enabled sleep.target suspend.target 2>&1
   sudo passwd -S root
-  ls -l /usr/local/sbin/timeclock-tunnel-setup /etc/sudoers.d/90-tcadmin
+  sudo ls -ld /usr/local/sbin/coolify-tunnel-setup /etc/sudoers.d/90-tcadmin /root/.ssh
   dpkg-query -W -f="\${Package} \${Version} \${Status}\n" fprintd libfprint-2-2 gir1.2-fprint-2.0 python3-gi avahi-daemon systemd-timesyncd libinput-tools usbutils
   python3 -c "import gi; gi.require_version(\"FPrint\", \"2.0\"); from gi.repository import FPrint; print(\"FPrint import: OK\")"
   systemctl is-active avahi-daemon ssh systemd-timesyncd
