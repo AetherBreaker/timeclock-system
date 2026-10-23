@@ -4,7 +4,8 @@
 # Usage: sudo coolify-tunnel-setup [PORT] [VPS_HOST] [VPS_TUNNEL_PORT]
 set -eu
 PORT=${1:-22001}
-VPS=${2:-108.61.75.238}
+# A DNS-only name (not proxied through Cloudflare, which would block port 2223), so the VPS can move.
+VPS=${2:-tunnels.sweetfiretobacco.com}
 TUNNEL_PORT=${3:-2223}
 D=/etc/coolify-tunnel
 

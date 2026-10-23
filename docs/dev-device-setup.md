@@ -73,7 +73,7 @@ Port 2223 is published by Docker, which bypasses the VPS's `ufw`, so no rule is 
 ### 5b. On the device
 
 ```sh
-sudo coolify-tunnel-setup              # defaults: port 22001, VPS 108.61.75.238, tunnel port 2223
+sudo coolify-tunnel-setup              # defaults: port 22001, VPS tunnels.sweetfiretobacco.com, tunnel port 2223
 # or: sudo coolify-tunnel-setup <port> <vps> <tunnel-port>
 ```
 
