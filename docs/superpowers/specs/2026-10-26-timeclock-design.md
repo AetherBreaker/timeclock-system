@@ -173,14 +173,23 @@ run and alerts (R41.3).
 
 ### 4.4 Roles and notifications
 
+Two databases in the one server, identical in layout (R26.6): `timeclock` (production) and
+`timeclock_test` (everything timeclock-dev and any manual testing touches). Everything in §4 exists in both.
+
 - **`postgres`** (superuser, password from `POSTGRES_PASSWORD`): owns everything, runs migrations, and is
   what the owner uses in the SQL editor (spec call).
-- **`timeclock_clock`** (login): `SELECT` on `employees`, `groups`, `fingerprints`, `punches`,
-  `punch_corrections`, `rules`, `config.business_hours`, `config.settings`; `INSERT` on `punches`,
-  `overrides`, `fingerprints`; `USAGE` on schema `config`; nothing else (R26.2). All clocks share it
-  (spec call: a stolen clock is cut off by removing its WireGuard peer, since the database is only
-  reachable through the tunnel). Created by a migration without a password; the backend sets the password
-  from its environment at every startup (§8.3), since the repositories are public.
+- **`timeclock_clock_access`** (no login; created by the first migration if absent, since roles are
+  server-wide): `SELECT` on `employees`, `groups`, `fingerprints`, `punches`, `punch_corrections`, `rules`,
+  `config.business_hours`, `config.settings`; `INSERT` on `punches`, `overrides`, `fingerprints`; `USAGE` on
+  schema `config`; nothing else (R26.2). Migrations grant to this role, so the same plain SQL serves both
+  databases.
+- **`timeclock_clock`** and **`timeclock_clock_test`** (login, members of `timeclock_clock_access`): the
+  backend creates them if absent, sets their passwords from its environment at every startup (§8.3; the
+  repositories are public), and grants `CONNECT` on `timeclock` only to the first and on `timeclock_test`
+  only to the second, with `CONNECT` revoked from `PUBLIC` on both (spec call). A misconfigured dev device
+  therefore can't write a permanent test punch into production. All production clocks share
+  `timeclock_clock` (spec call: a stolen clock is cut off by removing its WireGuard peer, since the database
+  is only reachable through the tunnel).
 
 **Notifications** (R26.4, R30, R40.3): one trigger function on every table a clock mirrors (`employees`,
 `groups`, `fingerprints`, `punches`, `punch_corrections`, `rules`, `config.business_hours`,
@@ -366,7 +375,8 @@ offered, computed from the local store, and the recording path re-checks before 
 
 One async task owns a `psycopg` 3 async connection (spec call; `psycopg[binary]` if it ships Python 3.14
 wheels, otherwise `psycopg` plus `libpq5` in the final window) to `TIMECLOCK_DB_HOST:5432`, the backend's
-relay (§8.1), as `timeclock_clock`. TCP keepalives (idle 30 s, interval 10 s, 3 probes) detect a dead
+relay (§8.1), with the database and login from `TIMECLOCK_DB_NAME` and `TIMECLOCK_DB_USER` (§9.1). Nothing
+in the clock's code knows which database it's using (R26.6). TCP keepalives (idle 30 s, interval 10 s, 3 probes) detect a dead
 tunnel in about a minute (spec call). Loop:
 
 1. Connect; on failure retry with backoff from 1 s to 60 s. The offline mark shows while disconnected.
@@ -504,7 +514,9 @@ warning, never fatal. Postgres's own password authentication still applies, so t
 An unlisted service in the backend's compose (setup-project leaves unlisted services alone):
 
 - `image: postgres:18` (pin the minor in the tag), `restart: unless-stopped`.
-- `POSTGRES_DB=timeclock`, `POSTGRES_PASSWORD` from a Coolify secret.
+- `POSTGRES_DB=timeclock`, `POSTGRES_PASSWORD` from a Coolify secret. The image creates `timeclock` on
+  first start; the backend creates `timeclock_test` at startup if it's missing (`CREATE DATABASE` can't run
+  inside a transaction).
 - Data at `/data/timeclock_backend_postgres` bind-mounted to `/var/lib/postgresql` (Postgres 18 images keep
   their data in a versioned folder below it).
 - A private network `timeclock-db`, shared only with the backend app, which also stays on `coolify`.
@@ -514,14 +526,17 @@ An unlisted service in the backend's compose (setup-project leaves unlisted serv
 
 ### 8.3 Migrations and the clock role
 
-At startup, as `postgres`, under a session advisory lock: create `schema_migrations` if absent, then apply
-each `timeclock_schema` migration not yet recorded, in order, each in one transaction with its
-`schema_migrations` row. Then `ALTER ROLE timeclock_clock PASSWORD` from `TIMECLOCK_CLOCK_DB_PASSWORD`
-(composed with psycopg's `sql.Literal`, never string formatting). A failed migration is fatal: alert and
-exit; Docker restarts it and the clocks keep buffering.
+At startup, as `postgres`, for each of `timeclock` and `timeclock_test` in turn, under a session advisory
+lock: create `schema_migrations` if absent, then apply each `timeclock_schema` migration not yet recorded,
+in order, each in one transaction with its `schema_migrations` row. Then the login roles (§4.4): create
+`timeclock_clock` and `timeclock_clock_test` if absent, set their passwords from
+`TIMECLOCK_CLOCK_DB_PASSWORD` and `TIMECLOCK_CLOCK_TEST_DB_PASSWORD` (composed with psycopg's `sql.Literal`,
+never string formatting), and apply the per-database `CONNECT` grants. A failed migration is fatal: alert
+and exit; Docker restarts it and the clocks keep buffering.
 
 `0001_initial.sql` creates `pgcrypto`, the enums, every table, view, trigger and seed row of §4, the schema
-`config`, the role `timeclock_clock` (`LOGIN`, no password) and its grants.
+`config`, the role `timeclock_clock_access` if absent, and its grants. Being plain SQL, it runs unchanged
+in both databases.
 
 ### 8.4 Scheduler and the automatic clock-out (R37, R41)
 
@@ -535,6 +550,8 @@ exit; Docker restarts it and the clocks keep buffering.
 - **Errors:** any exception escaping a job is fatal to the whole process, relay included. The job catches
   what it expects: invalid settings (alert, skip the run, R41.3) and database errors (alert, skip; the next
   run retries). Only bugs escape.
+- **Both databases:** everything below runs once per database, each with its own `config.settings`, its own
+  `LISTEN` connection and its own job (R26.6).
 - **Schedule from the database:** the backend holds its own `LISTEN timeclock` connection. On a
   `config.settings` notification it re-reads the row and reschedules the job with a new
   `CronTrigger(hour, minute, second, timezone)`; `auto_clock_out_enabled = false` pauses it.
@@ -592,7 +609,7 @@ The clock's environment, set per clock in its Coolify application:
 | `WG_HANDSHAKE_TIMEOUT_SECS` | `10` (§11.2) |
 | `WG_LISTEN_PORT` | `51821` (§11.3) |
 | `TIMECLOCK_DB_HOST` | the backend's tunnel address |
-| `TIMECLOCK_DB_NAME`, `TIMECLOCK_DB_USER`, `TIMECLOCK_DB_PASSWORD` | `timeclock`, `timeclock_clock`, the role's password |
+| `TIMECLOCK_DB_NAME`, `TIMECLOCK_DB_USER`, `TIMECLOCK_DB_PASSWORD` | `timeclock`, `timeclock_clock` and its password; on timeclock-dev `timeclock_test`, `timeclock_clock_test` and its password (R26.6) |
 
 Each clock is one Coolify application (Docker Compose type) on its own server. The server's proxy is None
 (R14.5). Compose deploys stop the old containers before starting new ones, which blanks the screen and
@@ -604,7 +621,7 @@ stops punches: deploy outside shift changes. The owner puts the logo files in
 The listed `timeclock-backend` service on networks `coolify` and `timeclock-db`, plus the `postgres` sidecar
 (§8.2). Environment: `HEARTBEAT_SLUG=timeclock-backend`, the alert variables, the four fetched-mode `WG_*`
 variables, `WG_TOLERATE_DISCONNECTED=1`, `TZ=America/New_York`, `POSTGRES_PASSWORD`,
-`TIMECLOCK_CLOCK_DB_PASSWORD`, and `LOG_CONN_HOST=central-log-server` (on the VPS it reaches the log server
+`TIMECLOCK_CLOCK_DB_PASSWORD`, `TIMECLOCK_CLOCK_TEST_DB_PASSWORD`, and `LOG_CONN_HOST=central-log-server` (on the VPS it reaches the log server
 over the `coolify` network, not the tunnel).
 
 ### 9.3 Adding a clock
@@ -864,7 +881,8 @@ end (`AGENTS.md`).
    - wireguard-hub: rows for the backend, the log server and the first clock, and their forward rules (§12);
      the log server's spoke switch (§10.7) once its row exists.
 2. **timeclock-backend** (§8), deployed on the VPS.
-3. **The clock app and kiosk** on timeclock-dev (§5–§7, §9.1, without `discovery`). The kiosk files start
+3. **The clock app and kiosk** on timeclock-dev (§5–§7, §9.1, without `discovery`), against the test
+   database (R26.6). The kiosk files start
    from Appendix A. Once they're committed here, clean up the test leftovers: the `kiosk-test` container,
    the stopped `tc-app`, the `kiosk-test` and `apptest` images, the `tc-net` network,
    `/root/fp-test-template.bin` and `/tmp/fpdata/`.
@@ -912,8 +930,7 @@ installed before installing it):
 
 ## 15. Open questions
 
-- **Keeping test data out of production**: awaiting the owner's choice between a test schema and a test
-  database in the same PostgreSQL.
+None.
 
 ## Appendix A. Files verified on the hardware (2026-10-26)
 
