@@ -581,7 +581,7 @@ The clock's environment, set per clock in its Coolify application:
 
 | Variable | Value |
 | --- | --- |
-| `INSTANCE_ID` | the clock's number (R16.2) |
+| `INSTANCE_ID` | the clock's number, from 1; `dev` on timeclock-dev (R16.2, R3.3) |
 | `HEARTBEAT_SLUG` | `timeclock-system-${INSTANCE_ID:?}` (R14.6) |
 | `TZ` | `America/New_York` (R41.4) |
 | `LOG_HISTORY_RETENTION_DAYS` | `14` (R44) |
@@ -613,7 +613,8 @@ One-time, per device:
 
 1. Install from the image. The image no longer hardcodes a hostname: the installer asks for it (R3.2;
    `preseed.cfg.in` stops answering `netcfg/get_hostname`; spec call). Applies from the next image rebuild.
-2. `sudo coolify-tunnel-setup <port>` with the next free port (22001, 22002, …); add its line to
+2. `sudo coolify-tunnel-setup <port>` with the next free port (22001 is timeclock-dev's, so clocks start at
+   22002); add its line to
    coolify-tunnel's `docker/authorized_keys`, then redeploy coolify-tunnel (R29, `docs/dev-device-setup.md`).
 3. In Coolify: the server at `coolify-tunnel:<port>`, Coolify's key in root's `authorized_keys`, Proxy None.
 4. Enroll the clock in the hub (§12): its row with `lan`, its forward rules, a hub release.
@@ -642,8 +643,8 @@ of §10 as 10.0.0 (`uv run poe release major`), since the crash hooks are on by 
   for at most twice the timeout plus a second; past that it gives up on the send. That bounds what the
   socket timeouts can't, a stalled DNS lookup, and matters because `_handle_fatal` alerts before it
   requests the shutdown (`:141-151`).
-- *Pending the owner's decision:* whether R16.1's quick no-network check before sending is kept, dropped or
-  replaced (§15). Nothing else depends on it.
+- No pre-send network check (R16.1): every alert is attempted, and the send thread's deadline bounds the
+  wait.
 
 ### 10.2 `INSTANCE_ID` (R16.2)
 
@@ -669,26 +670,32 @@ Today `HandshakeSocketHandler.emit` does everything under the handler lock on th
 reconnect with backoff, handshake, a 5 s ack read, backlog replay and a `sendall` with a 30 s timeout
 (`central_log_server/client/__init__.py:465-530, 360-463`).
 
-The approach R16.4 proposed, the history buffer serving as the queue, doesn't work as the buffer stands:
-spills pop every entry, sent or not (`client/history.py:442-484`); `_entries` is retired at shutdown
-(`:334-388`); `_last_sent_id` resets each start (`client/durability.py:66`). The design instead (spec call):
+The history buffer is the queue (R16.4): there's no second queue of records.
 
-- **`emit`** filters, records (`RecordDurability.record`: ID and history append), and puts the record on a
-  `queue.SimpleQueue` (reentrant-safe; `queue.Queue.put` can self-deadlock a signal handler that logs).
-  Nothing else runs on the caller's thread.
-- **A daemon sender thread** owns the socket, connect and backoff, handshake, ack read, replay, sending and
-  emergency-mode tracking. After each handshake it replays from history everything after the server ack's
-  `last_record_id`, then sends queued records whose ID is above the last one sent: the server doesn't
-  dedupe (`server/id_registry.py:100-116`), so replay and the queue must not overlap. While disconnected it
-  discards what it dequeues, since those records are in history and the next replay covers them; memory
-  stays bounded through any outage.
-- **History fixes replay needs:** `find_after` takes the buffer's lock (`:486-508`; it races `append` once a
-  second thread calls it). `_search_disk` scans every retained day after the hint, not the hint's date ±1
-  (`:510-539`): today an outage longer than two days silently skips the middle days, and the clock retains
-  14. `find_after(None)`, the server never having seen this program (a new `INSTANCE_ID`), replays all
-  retained history, disk included, not just memory.
+- **`emit`** filters, records (`RecordDurability.record`: ID and history append), then rings a doorbell: a
+  token on a `queue.SimpleQueue`, the one wake-up that's safe inside a signal handler (`Event.set()` and
+  `Queue.put()` take locks the interrupted code may hold). Nothing else runs on the caller's thread.
+- **A daemon sender thread** sleeps on the doorbell and owns the socket: connect with backoff, handshake,
+  ack read, replay, sending and emergency-mode bookkeeping (`record_success` / `record_failure` /
+  `maybe_enter`). Its shape follows `ThreadedQueueDrainer` in the same file (`:907-1211`), and it reuses the
+  handler's own `_send_handshake` and `_replay_backlog`. After each handshake, replay starts from the
+  server ack's `last_record_id`, as today (`resolve_backlog`, `client/durability.py:99-113`). On each ring
+  it sends `history.find_after(last_sent_id)`, marking each sent; a send error drops the socket and the
+  thread reconnects after its backoff. The server doesn't dedupe (`server/id_registry.py:100-116`), so
+  nothing is sent twice: `last_sent_id` only moves forward.
+- **History fixes**, because spills move every entry to disk, sent or not (`client/history.py:442-484`), and
+  shutdown retires the in-memory list (`:334-388`), so the sender often reads from disk:
+  - `find_after` takes the buffer's existing `_lock` (`:205`); unlocked today (`:486-508`), it would race
+    `append` once a second thread calls it;
+  - `_search_disk` scans every retained day after the hint, not the hint's date ±1 (`:510-539`): today an
+    outage longer than two days silently skips the middle days, and the clock retains 14;
+  - `find_after(None)`, a program the server has never seen (a new `INSTANCE_ID`), returns all retained
+    history, disk included, not just memory.
 - **`connect_and_verify()`** still runs synchronously at startup, before the thread starts, then hands the
   socket over.
+- **Tests:** four test files exercise this handler (`tests/central_log_server/test_client.py`,
+  `test_client_server_integration.py`, `test_client_transport_reentrancy.py`, `tests/logging/test_setup.py`);
+  those that expect `emit` to deliver synchronously wait for the sender instead.
 - **Shutdown:** `_finish_shutdown` / `close()` (`:310-318, 538-557`) signal the thread, flush within what's
   left of the transport's budget (`LOGGING_TRANSPORT_PRIORITY`), and join; `close()` is idempotent and
   bounded, since `logging.shutdown` calls it again at exit. On a fatal shutdown, durability still comes from
@@ -833,7 +840,10 @@ spoke talks only to the hub and only the hub publishes ports; this design supers
 - **Peer rows** in `src/wireguard_hub/peers.toml`: one per clock (named `timeclock-system-<INSTANCE_ID>`,
   with `lan = "office"`), `timeclock-backend`, and aeth_ext's central log server (R16.7), with `/32`
   addresses allocated from `.24` up as the README describes. A row's own `endpoint` field is the hub
-  endpoint that spoke dials, not the spoke's address; clocks leave it unset.
+  endpoint that spoke dials, not the spoke's address; clocks leave it unset. timeclock-dev's row,
+  `timeclock-system-dev`, gets `lan = "dev"`, never the production clocks' value, so its test punches and
+  prints can't reach a real clock over the LAN (spec call); a second test device for LAN tests shares
+  `"dev"`.
 - **Forward rules** in `rules.v4`, one line per clock per flow (the tests require every CIDR to be a peer
   or hub address): clock → log server TCP 9020 (R22), clock → backend TCP 5432 (R26.1).
 - Each clock's private key, hub URL, repo and token go in that clock's Coolify environment (§9).
@@ -902,8 +912,8 @@ installed before installing it):
 
 ## 15. Open questions
 
-- **Pre-send network check** (§10.1, R16.1): inside a container no local signal shows whether the internet
-  is reachable, so the original no-route check would almost never fire. Awaiting the owner's decision.
+- **Keeping test data out of production**: awaiting the owner's choice between a test schema and a test
+  database in the same PostgreSQL.
 
 ## Appendix A. Files verified on the hardware (2026-10-26)
 
