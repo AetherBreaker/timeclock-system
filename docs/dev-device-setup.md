@@ -36,7 +36,7 @@ Press **F10** at power-on.
 1. Plug in **wired** network, the fingerprint reader and the touchscreen.
 2. Boot from the stick: press **F9** at power-on and pick the USB stick.
 3. At the menu, **Timeclock dev install** is already selected: press **Enter**. The menu has no timeout, so a stick left plugged in can't start a reinstall on its own.
-4. The installer runs by itself and stops at its disk confirmations: **"Write the changes to disks?"**, and with two drives possibly also one about configuring RAID first. Check that they name the internal drives (on the EliteDesk, two 500 GB NVMe drives), not the USB stick, then choose **Yes** each time. Everything on those drives is erased.
+4. The installer runs by itself and stops at **"Write the changes to disks?"**. With one internal drive, nothing has been touched yet: check that it names that drive, not the USB stick, then choose **Yes**. With two (the EliteDesk's two 500 GB NVMe drives), it builds the mirror on both before asking, so both are already repartitioned by then and pressing Enter in step 3 was the point of no return; choose **Yes** at each prompt. Everything on the internal drives is erased.
 5. When it reboots, remove the stick.
 
 ## 4. First checks
