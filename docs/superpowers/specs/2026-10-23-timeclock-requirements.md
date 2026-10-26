@@ -34,8 +34,8 @@ Short requirements list, to be expanded into a full design spec once the main de
 13. Display: cage runs Firefox as the only app on screen, in a privileged container started with `seatd-launch`.
     1. The kiosk is a compose service not listed in `[tool.docker].services`, with its own Dockerfile, so aeth_devkit and devkit-container leave it alone (the one exception to Decided 18). Only the kiosk is privileged; the app container stays minimal.
     2. Lockdown: Firefox policies baked into the kiosk image turn off pinch zoom, swipe-back and the session-restore prompt; the page turns off text selection and the long-press (context) menu.
-14. Deployment: Coolify's Docker Compose type with two services, app and kiosk.
-    1. Both with `restart: unless-stopped`. Neither uses host networking: the app is on the `coolify` network as the template requires (and its WireGuard interface stays inside its own namespace); the kiosk joins the same network and opens the app by service name. No ports published to the host.
+14. Deployment: Coolify's Docker Compose type with three services: app, kiosk, and the discovery service (28.3).
+    1. All with `restart: unless-stopped`. Neither app nor kiosk uses host networking (only discovery does, 28.3): the app is on the `coolify` network as the template requires (and its WireGuard interface stays inside its own namespace); the kiosk joins the same network and opens the app by service name. The only port published to the host is the app's WireGuard listen port (28.2).
     2. The kiosk runs its own `systemd-udevd` (default rules only) plus `udevadm trigger` before cage, so a replugged touchscreen is detected without host networking. Confirmed on the EliteDesk (2026-10-26): kernel device events reach the kiosk's namespace, and a replugged touchscreen works again, including on a different USB port.
     3. The app does not detect a replugged fingerprint reader: it exits when it loses the reader, and the restart picks it up. The same udevd approach can be added later if wanted.
     4. The kiosk waits for the app's health check.
