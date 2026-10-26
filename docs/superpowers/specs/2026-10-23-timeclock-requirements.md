@@ -32,7 +32,7 @@ Short requirements list, to be expanded into a full design spec once the main de
     1. The kiosk is a compose service not listed in `[tool.docker].services`, with its own Dockerfile, so aeth_devkit and devkit-container leave it alone (the one exception to Decided 18). Only the kiosk is privileged; the app container stays minimal.
 14. Deployment: Coolify's Docker Compose type with two services, app and kiosk.
     1. Both with `restart: unless-stopped`. Neither uses host networking: the app is on the `coolify` network as the template requires (and its WireGuard interface stays inside its own namespace); the kiosk joins the same network and opens the app by service name. No ports published to the host.
-    2. The kiosk runs its own `systemd-udevd` (default rules only) plus `udevadm trigger` before cage, so a replugged touchscreen is detected without host networking. To be confirmed on the EliteDesk that kernel device events reach the kiosk's namespace.
+    2. The kiosk runs its own `systemd-udevd` (default rules only) plus `udevadm trigger` before cage, so a replugged touchscreen is detected without host networking. Confirmed on the EliteDesk (2026-10-26): kernel device events reach the kiosk's namespace, and a replugged touchscreen works again, including on a different USB port.
     3. The app does not detect a replugged fingerprint reader: it exits when it loses the reader, and the restart picks it up. The same udevd approach can be added later if wanted.
     4. The kiosk waits for the app's health check.
     5. Coolify's proxy set to None on this server.
@@ -99,6 +99,7 @@ Short requirements list, to be expanded into a full design spec once the main de
     4. Every repository in the project is public unless something forces otherwise.
 38. Punches are an append-only log of events (clock in/out, break start/end, lunch start/end), each with a UUID and the recording clock's `INSTANCE_ID`; shifts are worked out when reading. Syncing inserts with `ON CONFLICT DO NOTHING` on the UUID, so re-sends never duplicate.
     1. Rows are never updated or deleted. Edits and deletions are themselves appended events that reference the UUID they correct or void, and every read applies them. This keeps the original values, and a delayed re-send can't resurrect or overwrite anything.
+39. The UI carries the company's branding: its colors and logo. The logo files are `SFT-Logo-June-2022-color.svg` and `SFT-Logo-June-2022-black.svg` in this repository's root (the color logo uses yellow `#F9E60D`, red `#ED1A2C`, near-black `#161514` and white).
 
 ## Proposed
 
