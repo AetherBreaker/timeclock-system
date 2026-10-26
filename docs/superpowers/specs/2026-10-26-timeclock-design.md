@@ -329,7 +329,8 @@ warning; spec call). Large touch targets, landscape layout from 1024×600 up; no
 text selection and the long-press menu (R13.2).
 
 - **Idle.** Logo, date and time, "Place your finger on the reader" (or "Tap to scan" after hours), a "Use
-  PIN" button, and a small offline mark while the database connection is down (spec call). No match:
+  PIN" button, and a database status icon: green while connected, red while not, with a small timestamp of
+  the last contact with the database. No match:
   "Not recognized: try again or use your PIN", 3 s. Retry: "Couldn't read that, try again".
 - **Action menu** (R45). The employee's name, current state ("Clocked in since 8:02 AM"), hours this week,
   and one button per valid punch (§4.5). Clock-in always takes a tap (R45.1); the layout leaves room for a
@@ -341,8 +342,8 @@ text selection and the long-press menu (R13.2).
   after 5 s. Hours this week use the local copy, so offline they miss other clocks' unsynced punches
   (R27.1).
 - **PIN login** (R23). Username, then password, on the number pad; verified against the local `pin_hash`
-  with `bcrypt` off the event loop (spec call: the `bcrypt` package checks pgcrypto's `$2a$` hashes). Five
-  wrong passwords for one username lock it on that clock for 60 s (spec call). Then:
+  with `bcrypt` off the event loop (spec call: the `bcrypt` package checks pgcrypto's `$2a$` hashes). No
+  lockout after wrong PINs: punching still needs a fingerprint or an override. Then:
   - no registered print → "Register your fingerprint" or "Manager override" (R23.2);
   - registered print → "Scan your finger" (confirm mode; must match this employee) or "Manager override"
     (R23.3).
@@ -380,7 +381,8 @@ relay (§8.1), with the database and login from `TIMECLOCK_DB_NAME` and `TIMECLO
 in the clock's code knows which database it's using (R26.6). TCP keepalives (idle 30 s, interval 10 s, 3 probes) detect a dead
 tunnel in about a minute (spec call). Loop:
 
-1. Connect; on failure retry with backoff from 1 s to 60 s. The offline mark shows while disconnected.
+1. Connect; on failure retry with backoff from 1 s to 60 s. The idle screen's status icon turns red while
+   disconnected (§6.4); the last-contact time is the last successful exchange with the database.
 2. `LISTEN timeclock`.
 3. Catch up (R26.4, R41): fetch the current week's punches and corrections plus everything since the oldest
    open shift held locally; all employees, groups, fingerprints, rules and config. Replace the local copies.
@@ -886,7 +888,8 @@ end (`AGENTS.md`).
      here as a submodule at `schema/`;
    - wireguard-hub: rows for the backend, the log server and the first clock, and their forward rules (§12);
      the log server's spoke switch (§10.7) once its row exists.
-2. **timeclock-backend** (§8), deployed on the VPS.
+2. **timeclock-backend** (§8), deployed on the VPS. With the database up, install DBeaver Community on the
+   owner's workstation and set up its SSH connection to the VPS (R30.2).
 3. **The clock app and kiosk** on timeclock-dev (§5–§7, §9.1, without `discovery`), against the test
    database (R26.6). The kiosk files start
    from Appendix A. Once they're committed here, clean up the test leftovers: the `kiosk-test` container,
@@ -915,7 +918,8 @@ installed before installing it):
 - libfprint fork with prebuilt binaries, if compiling on every deploy is too slow (R40.4).
 - Once the project is stable, revisit blocking updates and deletes on punches and corrections for every
   account, the owner's included (R38.1).
-- Per-clock business hours (R40.3); employee schedules on the action menu (R45.1).
+- Per-clock business hours (R40.3); employee schedules on the action menu (R45.1); a lockout after
+  repeated wrong PINs.
 - Review whether an employee will ever need more than one group (§4.2). If so: a join table replacing
   `employees.group_id`, a migration, and a precedence rule for conflicting group rules.
 - Host settings such as the update policy and reboot time, configured from the database (R42).
