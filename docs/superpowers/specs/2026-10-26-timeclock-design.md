@@ -217,10 +217,11 @@ means it was deleted); for `config.*` it re-fetches the whole table.
 Input: one employee's punches and their corrections. Steps:
 
 1. Apply corrections: drop voided punches; replace `at`/`kind` from the newest `amend`.
-2. Sort by effective `at`. A shift runs from a `clock_in` to the next `clock_in`. Within one shift, a real
-   `clock_out` overrides an automatic one, in either order (R41.2): drop the automatic one.
+2. Sort by effective `at`. A shift runs from a `clock_in` to the next `clock_in`.
 3. Walk the events with this state machine; an event that isn't valid from the current state is an
-   anomaly: skipped for state and totals, reported to the caller (payroll sees it in `punch_log`).
+   anomaly: skipped for state and totals, reported to the caller (payroll sees it in `punch_log`). This is
+   R41.2: of two consecutive punches of the same type, the oldest counts, automatic or not. A late-synced real
+   `clock_out` after an automatic one is skipped, and an automatic one after a real one is skipped.
 
 | State | Valid punches | Next state |
 | --- | --- | --- |
