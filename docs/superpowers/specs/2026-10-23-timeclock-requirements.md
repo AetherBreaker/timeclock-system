@@ -99,7 +99,7 @@ Short requirements list, to be expanded into a full design spec once the main de
     4. Every repository in the project is public unless something forces otherwise.
 38. Punches are an append-only log of events (clock in/out, break start/end, lunch start/end), each with a UUID and the recording clock's `INSTANCE_ID`; shifts are worked out when reading. Syncing inserts with `ON CONFLICT DO NOTHING` on the UUID, so re-sends never duplicate.
     1. Rows are never updated or deleted. Edits and deletions are themselves appended events that reference the UUID they correct or void, and every read applies them. This keeps the original values, and a delayed re-send can't resurrect or overwrite anything.
-39. The UI carries the company's branding: its colors and logo. The logo files are `SFT-Logo-June-2022-color.svg` and `SFT-Logo-June-2022-black.svg` in this repository's root (the color logo uses yellow `#F9E60D`, red `#ED1A2C`, near-black `#161514` and white).
+39. The UI carries the company's branding: its colors and logo. The logo files are `SFT-Logo-June-2022-color.svg` and `SFT-Logo-June-2022-black.svg`, kept in the project folder but out of git (ignored by `*.svg`) until it's decided whether they can be public (the color logo uses yellow `#F9E60D`, red `#ED1A2C`, near-black `#161514` and white).
 
 ## Proposed
 
@@ -108,7 +108,7 @@ Short requirements list, to be expanded into a full design spec once the main de
 
 ## Open
 
-None.
+1. How the logo reaches the deployed clock while it stays out of the public repository (devkit-container builds the image from a clone of the repository).
 
 ## Deferred
 
