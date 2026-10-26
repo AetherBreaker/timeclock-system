@@ -1,3 +1,6 @@
 [submodule "backend"]
 	path = backend
 	url = https://github.com/AetherBreaker/timeclock-backend.git
+[submodule "schema"]
+	path = schema
+	url = https://github.com/AetherBreaker/timeclock-schema.git
