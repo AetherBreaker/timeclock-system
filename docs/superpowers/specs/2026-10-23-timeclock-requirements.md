@@ -101,6 +101,8 @@ Short requirements list, to be expanded into a full design spec once the main de
     1. Rows are never updated or deleted. Edits and deletions are themselves appended events that reference the UUID they correct or void, and every read applies them. This keeps the original values, and a delayed re-send can't resurrect or overwrite anything.
 39. The UI carries the company's branding: its colors and logo. The logo files are `SFT-Logo-June-2022-color.svg` and `SFT-Logo-June-2022-black.svg`, kept in the project folder but out of git (ignored by `*.svg`) until it's decided whether they can be public (the color logo uses yellow `#F9E60D`, red `#ED1A2C`, near-black `#161514` and white).
     1. The logo files aren't part of the image: the owner puts them in a persisted data directory on each device, and the GUI loads them from there at runtime, so they survive every deploy. They may move into the repository later.
+40. The fingerprint reader stays ready (waiting for a finger) during business hours. libfprint's generic overheating model, which would make an always-waiting clock refuse scans about two-thirds of the time, is turned off for the 4500: its `uru4000` driver sets `temp_hot_seconds = -1`, the opt-out the match-on-chip drivers use. The model isn't based on the 4500 (a 2021 precaution "for bad/old devices"), and HID rates the reader's waiting state (blue glow, 120 mA) with no time limit. This means building a patched libfprint into the image instead of using Debian's package.
+    1. Outside business hours the clock stops waiting, so the reader sleeps (USB autosuspend) and its LED rests. Business hours are configurable in the database, in each device's local time.
 
 ## Proposed
 
@@ -109,7 +111,7 @@ Short requirements list, to be expanded into a full design spec once the main de
 
 ## Open
 
-None.
+1. Punching outside business hours (e.g. a late clock-out) while the reader sleeps (Decided 40.1).
 
 ## Deferred
 
