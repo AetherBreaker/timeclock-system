@@ -767,7 +767,7 @@ template changes only when they re-run `setup-project` or `docker-pin` after bum
   unhealthy, and the kiosk, which waits for a healthy app (R14.4), never starts: the screen stays blank
   through the whole outage while the app could punch offline. With `WG_TOLERATE_DISCONNECTED=1` in its
   environment, the `healthcheck` subcommand (`src/healthcheck.rs`) treats the tunnel heartbeat file as
-  satisfied and judges the app's heartbeat alone (spec call). The supervisor's pings still report a stale
+  satisfied and judges the app's heartbeat alone (R18.1). The supervisor's pings still report a stale
   tunnel to healthchecks.io, so a technician is still told.
 - The Disconnected repair logs a line on every poll (`supervisor.rs:351,356`), about 2,900 a day offline,
   into `devkit-container.log`, which is never rotated. Log the first repair of a disconnection, then at most
@@ -809,8 +809,8 @@ server or the backend.
   `latest-handshakes` for K on the 250 ms wakes, never blocking the loop: a handshake newer than the set
   within 5 s confirms it; otherwise it reverts to the previous endpoint, or, if there was none, removes and
   re-adds the peer without one. A reverted address is retried only when the file changes again.
-- **Discovery** (spec call: a `devkit-container discover` subcommand, so both halves of the protocol share
-  the peer-table code): run as its own compose service from the app's image with `network_mode: host`
+- **Discovery** (R28.3): a `devkit-container discover` subcommand, so both halves of the protocol share the
+  peer-table code. Run as its own compose service from the app's image with `network_mode: host`
   and the app's persisted directory mounted. Every 30 s it broadcasts
   `{"key": "<own public key>", "endpoint": "<host LAN IP>:<WG_LISTEN_PORT>"}` over UDP to
   `255.255.255.255:51822` (spec call), listens on the same port, ignores its own key and keys that aren't
