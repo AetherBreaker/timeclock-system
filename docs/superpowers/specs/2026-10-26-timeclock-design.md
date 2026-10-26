@@ -568,7 +568,7 @@ Services (R14, as amended by R28):
 - **`kiosk`** (unlisted): `build: {context: ., dockerfile: docker/kiosk/Dockerfile}`, `privileged: true`,
   `/dev:/dev`, `KIOSK_URL=http://timeclock-system:8080`, `depends_on` the app with
   `condition: service_healthy` (R14.4), network `coolify`, `restart: unless-stopped`. The Dockerfile and
-  `kiosk.sh` are the ones verified on the hardware (handoff §4); `policies.json` in
+  `kiosk.sh` are the ones verified on the hardware (Appendix A); `policies.json` in
   `/usr/lib/firefox-esr/distribution/` turns off pinch zoom, swipe-back and the session-restore prompt
   (R13.2), with Firefox autoconfig for any preference policies can't set. The kiosk builds from the deployed
   checkout, not `GIT_TAG`.
