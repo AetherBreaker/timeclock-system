@@ -1,16 +1,18 @@
 #_preseed_V1
-# Debian 13 answer file for the timeclock test device. Everything is answered except the
-# partitioner's confirmations before it writes to a disk (partman/confirm for disks with
+# Debian 13 answer file for a timeclock device. Everything is answered except the hostname and
+# the partitioner's confirmations before it writes to a disk (partman/confirm for disks with
 # partitions, partman/confirm_nooverwrite for empty ones, and the RAID ones), the guard before
 # erasing anything. @PASSWORD_HASH@ is filled in by build.sh.
 
 d-i debian-installer/locale string en_US.UTF-8
 d-i keyboard-configuration/xkb-keymap select us
 
+# The install runs at priority=critical, which hides the high-priority hostname question, so it's
+# asked here at critical priority unless the kernel command line already answers it.
+d-i preseed/early_command string grep -q 'netcfg/get_hostname=' /proc/cmdline || { . /usr/share/debconf/confmodule; db_fset netcfg/get_hostname seen false; db_input critical netcfg/get_hostname || true; db_go || true; }
+
 d-i netcfg/choose_interface select auto
-d-i netcfg/get_hostname string timeclock-dev
 d-i netcfg/get_domain string
-d-i netcfg/hostname string timeclock-dev
 d-i hw-detect/load_firmware boolean true
 
 d-i mirror/country string manual
@@ -58,7 +60,8 @@ d-i apt-setup/non-free-firmware boolean true
 d-i apt-setup/contrib boolean false
 
 tasksel tasksel/first multiselect standard, ssh-server
-d-i pkgsel/include string sudo avahi-daemon usbutils curl systemd-timesyncd libinput-tools fprintd libfprint-2-2 gir1.2-fprint-2.0 python3-gi rsync efibootmgr dosfstools
+d-i pkgsel/include string sudo avahi-daemon usbutils curl systemd-timesyncd libinput-tools fprintd libfprint-2-2 gir1.2-fprint-2.0 python3-gi rsync efibootmgr dosfstools unattended-upgrades
+d-i pkgsel/update-policy select unattended-upgrades
 d-i pkgsel/upgrade select full-upgrade
 popularity-contest popularity-contest/participate boolean false
 

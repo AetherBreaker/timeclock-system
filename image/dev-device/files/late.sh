@@ -27,6 +27,7 @@ install -m 755 "$S/coolify-tunnel-setup" /usr/local/sbin/coolify-tunnel-setup
 # Its partition is #1 on the same drive as each RAID member of / (partition #3, timeclock-raid.recipe).
 install -m 755 "$S/sync-esp" /usr/local/sbin/sync-esp
 install -m 644 "$S/90-sync-esp" /etc/apt/apt.conf.d/90-sync-esp
+install -m 644 "$S/52timeclock-unattended" /etc/apt/apt.conf.d/52timeclock-unattended
 root_dev=$(findmnt -no SOURCE /)
 main_esp=$(findmnt -no SOURCE /boot/efi || true)
 case "$root_dev" in /dev/md*)

@@ -10,11 +10,12 @@ The installer image does most of the setup. Its source is [`image/dev-device/`](
 ## What the image sets up
 
 - With two internal drives: mirrored (Linux software RAID1 for `/` and swap), with an EFI partition on each drive, kept identical by `sync-esp` after every package change, so either drive boots alone. With one drive: a plain install. Set the BIOS storage controller to AHCI (not Intel RAID).
-- Debian 13.7, no desktop. Hostname `timeclock-dev`, announced on the LAN as `timeclock-dev.local`.
+- Debian 13.7, no desktop. Hostname asked during the install (`timeclock-dev` is the test device's), announced on the LAN as `<hostname>.local`.
 - User `tcadmin`, password `timeclock` (console only; change it with `passwd`). Passwordless `sudo`, so tests can run over SSH.
 - Root has no password. It can log in over SSH by key only, which is how Coolify connects.
 - SSH by key only. `tcadmin` accepts the workstation key `~/.ssh/timeclock_dev`, and `~/.ssh/config` already has a `timeclock-dev` entry for it.
 - Time zone `America/New_York`, clock synced over NTP. Sleep and suspend disabled.
+- Security updates installed automatically (`unattended-upgrades`, Debian-Security only), rebooting at 03:00 when one needs it.
 - Hardware-testing tools: `usbutils`, `libinput-tools`, `fprintd`, and libfprint's Python bindings (`gir1.2-fprint-2.0`, `python3-gi`).
 - `coolify-tunnel-setup`, which sets up the tunnel for Coolify (step 5).
 
@@ -36,7 +37,7 @@ Press **F10** at power-on.
 1. Plug in **wired** network, the fingerprint reader and the touchscreen.
 2. Boot from the stick: press **F9** at power-on and pick the USB stick.
 3. At the menu, **Timeclock dev install** is already selected: press **Enter**. The menu has no timeout, so a stick left plugged in can't start a reinstall on its own.
-4. The installer runs by itself and stops at **"Write the changes to disks?"**. With one internal drive, nothing has been touched yet: check that it names that drive, not the USB stick, then choose **Yes**. With two (the EliteDesk's two 500 GB NVMe drives), it builds the mirror on both before asking, so both are already repartitioned by then and pressing Enter in step 3 was the point of no return; choose **Yes** at each prompt. Everything on the internal drives is erased.
+4. The installer asks for the **hostname** (`timeclock-dev` for the test device), then runs by itself and stops at **"Write the changes to disks?"**. With one internal drive, nothing has been touched yet: check that it names that drive, not the USB stick, then choose **Yes**. With two (the EliteDesk's two 500 GB NVMe drives), it builds the mirror on both before asking, so both are already repartitioned by then and pressing Enter in step 3 was the point of no return; choose **Yes** at each prompt. Everything on the internal drives is erased.
 5. When it reboots, remove the stick.
 
 ## 4. First checks
