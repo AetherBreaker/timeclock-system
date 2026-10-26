@@ -478,7 +478,7 @@ No aeth_ext change is needed. Replaced later by aeth_ext's hold-and-resend (TODO
 
 - The patch, `docker/libfprint/uru4000-no-heat-model.patch`, adds `dev_class->temp_hot_seconds = -1;` to
   the `uru4000` driver's class init: the opt-out the match-on-chip drivers use.
-- In the `builder-setup` window (§11.1), the build `COPY`s the patch from the build context (repo files
+- In the `builder-cached` window (§11.1), the build `COPY`s the patch from the build context (repo files
   from the clone aren't available in any window), downloads libfprint's upstream 1.94.100 release tarball,
   checks a pinned SHA-256, applies the patch (failing the build if it doesn't apply), and builds with meson
   into a prefix such as `/opt/libfprint`: only the `uru4000` driver, introspection on, docs and examples off.
@@ -488,7 +488,9 @@ No aeth_ext change is needed. Replaced later by aeth_ext's hold-and-resend (TODO
 - The final window `COPY --from=builder`s the prefix and installs libfprint's runtime libraries, and the
   image sets `GI_TYPELIB_PATH` and the linker path so PyGObject finds `FPrint-2.0.typelib` and the library.
   Debian's `libfprint-2-2` and `gir1.2-fprint-2.0` are not installed in the image.
-- libfprint compiles on every deploy. If that makes deploys too slow, the fallback is a fork repository that
+- That window sits above the template's `GIT_TAG`/`GIT_REPO` build arguments, so Docker reuses the libfprint
+  build between deploys and recompiles it only when the window changes, or when the device's build cache is
+  pruned. If a fresh build still makes deploys too slow, the fallback is a fork repository that
   publishes prebuilt binaries for the image to download (R40.4, §14).
 - The hardware tests ran on 1.94.9; the first deploy re-checks the reader on 1.94.100 (§13).
 
@@ -791,7 +793,7 @@ comments citing "spec N" point at two older documents; new code cites "timeclock
 template is rendered by aeth-devkit's setup-project from the locked devkit-container, so projects pick up
 template changes only when they re-run `setup-project` or `docker-pin` after bumping the lock.
 
-### 11.1 Trixie and the `builder-setup` window (R18.2, blocking)
+### 11.1 Trixie, and the `builder-setup` and `builder-cached` windows (R18.2, blocking)
 
 - `python/devkit_container/template.Dockerfile`: both `FROM` lines become
   `ghcr.io/astral-sh/uv:python3.14-trixie-slim` (lines 4 and 63 today). No per-project setting.
@@ -800,6 +802,11 @@ template changes only when they re-run `setup-project` or `docker-pin` after bum
   repo files aren't available here (the clone comes later), so a window that needs one `COPY`s it from the
   build context. Window names are free-form, so aeth-devkit needs no change (it already keeps windows,
   ≥ 15.1.1); the template's smoke helper (`tests/common/mod.rs:243-276`) is unaffected by comment markers.
+- Insert `# !window builder-cached:` / `# !end builder-cached` right after the builder stage's
+  `WORKDIR /app` and before its `ARG GIT_TAG` / `ARG GIT_REPO` lines (R18.2, owner 2026-10-26), for heavy
+  steps that don't depend on the release. An `ARG` declared above a `RUN` becomes part of that `RUN`'s
+  environment and so of its cache key, so every new tag re-runs every `RUN` below it, used or not; commands in
+  this window see neither argument and stay cached across releases (verified with a two-build test).
 - Docs: `README.md` says "two `# !window` regions" (line 14); the `todo.md` Rust-toolchain item names
   bookworm.
 - Release as a minor version. Other projects move to trixie on their next re-render; tunnel-probe's final
@@ -929,7 +936,8 @@ installed before installing it):
 
 ## 14. Follow-ups and known issues
 
-- libfprint fork with prebuilt binaries, if compiling on every deploy is too slow (R40.4).
+- libfprint fork with prebuilt binaries, if a fresh compile is still too slow despite the cached window
+  (R40.4).
 - Once the project is stable, revisit blocking updates and deletes on punches and corrections for every
   account, the owner's included (R38.1).
 - Per-clock business hours (R40.3); employee schedules on the action menu (R45.1); a lockout after
