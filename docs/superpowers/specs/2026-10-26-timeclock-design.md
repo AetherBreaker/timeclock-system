@@ -122,15 +122,22 @@ can't log in or punch, and their prints drop out of matching (spec call).
 
 **`fingerprints`** (plain rows; the owner deletes one to force re-registration, R27.3, R27.4): `id uuid PK`
 (made by the clock), `employee_id bigint FK employees ON DELETE CASCADE`, `template bytea` (libfprint's
-serialized `FpPrint`), `registered_at timestamptz`, `instance_id text`. Several per employee are allowed;
-registration enrolls one (R27.3).
+serialized `FpPrint`), `registered_at timestamptz`, `instance_id text`, `db_login text default
+session_user`. Several per employee are allowed; registration enrolls one (R27.3).
+
+**`db_login`** (on `fingerprints`, `punches` and `overrides`; R26.2): the database login that inserted the
+row, which identifies the clock without trusting its `INSTANCE_ID`. The clocks' column-level `INSERT`
+grants leave it out (§4.4), so a clock can't set it and the default always applies. A mismatch with
+`instance_id` isn't rejected, since a misconfigured clock would then never sync; it's visible in
+`punch_log` instead (spec call).
 
 **`punches`** (append-only, R38): `id uuid PK` (made by the recording clock), `employee_id bigint FK
 employees`, `kind punch_kind` (enum: `clock_in`, `clock_out`, `break_start`, `break_end`, `lunch_start`,
 `lunch_end`), `at timestamptz`, `instance_id text` (the recording clock's `INSTANCE_ID`; `backend` for
 automatic clock-outs, `admin` by convention for punches the owner adds by hand), `automatic boolean default
 false` (R41.1), `received_at timestamptz default now()` (server receipt time, for spotting late syncs; spec
-call). The clocks can only insert (§4.4), so to them the log is append-only. The owner's admin account
+call), `db_login text default session_user`. The clocks can only insert (§4.4), so to them the log is
+append-only. The owner's admin account
 (`postgres`) can still update or delete rows to fix bugs (R38.1); no trigger blocks it, at least until the
 project is stable (§14).
 
@@ -144,7 +151,8 @@ punch with `instance_id = 'admin'`.
 **`overrides`** (append-only, R23.5): `id uuid PK`, `punch_id uuid FK punches` (the single punch it
 authorized), `employee_id bigint FK`, `manager_id bigint FK`, `reason override_reason`
 (`no_fingerprint` | `fingerprint_skipped`), `pin_only boolean` (the manager authorized by PIN alone),
-`at timestamptz`, `instance_id text`, `received_at timestamptz default now()`. Written with its punch, in
+`at timestamptz`, `instance_id text`, `received_at timestamptz default now()`, `db_login text default
+session_user`. Written with its punch, in
 the same local transaction and the same sync transaction. An override that's never used to punch isn't
 recorded (spec call).
 
@@ -155,7 +163,7 @@ rule_action` (`refuse` | `warn` | `accept`, R34.2).
 **`schema_migrations`**: `version int PK`, `name text`, `applied_at timestamptz` (§8.3).
 
 **View `punch_log`** (R30.1): every punch joined to its employee's current name, with the punch's latest
-correction (action, new values) beside it. It's what the owner reads and exports to CSV; it applies no
+correction (action, new values) and its `db_login` beside it. It's what the owner reads and exports to CSV; it applies no
 shift logic.
 
 ### 4.3 Tables (schema `config`, edited in place)
@@ -181,16 +189,21 @@ Two databases in the one server, identical in layout (R26.6): `timeclock` (produ
   what the owner uses in the SQL editor (spec call).
 - **`timeclock_clock_access`** (no login; created by the first migration if absent, since roles are
   server-wide): `SELECT` on `employees`, `groups`, `fingerprints`, `punches`, `punch_corrections`, `rules`,
-  `config.business_hours`, `config.settings`; `INSERT` on `punches`, `overrides`, `fingerprints`; `USAGE` on
-  schema `config`; nothing else (R26.2). Migrations grant to this role, so the same plain SQL serves both
-  databases.
-- **`timeclock_clock`** and **`timeclock_clock_test`** (login, members of `timeclock_clock_access`): the
-  backend creates them if absent, sets their passwords from its environment at every startup (§8.3; the
-  repositories are public), and grants `CONNECT` on `timeclock` only to the first and on `timeclock_test`
-  only to the second, with `CONNECT` revoked from `PUBLIC` on both (spec call). A misconfigured dev device
-  therefore can't write a permanent test punch into production. All production clocks share
-  `timeclock_clock` (spec call: a stolen clock is cut off by removing its WireGuard peer, since the database
-  is only reachable through the tunnel).
+  `config.business_hours`, `config.settings`; column-level `INSERT` on `punches`, `overrides` and
+  `fingerprints`, every column except `db_login`, `received_at` and `punches.automatic` (only the backend
+  makes automatic clock-outs); `USAGE` on schema `config`; nothing else (R26.2). Migrations grant to this
+  role, so the same plain SQL serves both databases.
+- **`timeclock_clocks`** and **`timeclock_test_clocks`** (no login, both members of
+  `timeclock_clock_access`): `CONNECT` on `timeclock` goes only to the first and on `timeclock_test` only to
+  the second, with `CONNECT` revoked from `PUBLIC` on both. The backend sets these up at every startup
+  (§8.3). A dev login therefore can't write a permanent test punch into production.
+- **One login per clock** (R26.2), which the owner creates by hand in the SQL editor when adding the clock,
+  and pastes its password into the clock's Coolify environment (§9.3):
+  `CREATE ROLE timeclock_clock_3 LOGIN PASSWORD '<random>' IN ROLE timeclock_clocks;` (timeclock-dev's is
+  `timeclock_clock_dev` `IN ROLE timeclock_test_clocks`). To cut one clock off:
+  `ALTER ROLE timeclock_clock_3 NOLOGIN;`, then
+  `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'timeclock_clock_3';` for its open
+  connection. No passwords live in the backend or the repositories.
 
 **Notifications** (R26.4, R30, R40.3): one trigger function on every table a clock mirrors (`employees`,
 `groups`, `fingerprints`, `punches`, `punch_corrections`, `rules`, `config.business_hours`,
@@ -536,11 +549,11 @@ An unlisted service in the backend's compose (setup-project leaves unlisted serv
 
 At startup, as `postgres`, for each of `timeclock` and `timeclock_test` in turn, under a session advisory
 lock: create `schema_migrations` if absent, then apply each `timeclock_schema` migration not yet recorded,
-in order, each in one transaction with its `schema_migrations` row. Then the login roles (§4.4): create
-`timeclock_clock` and `timeclock_clock_test` if absent, set their passwords from
-`TIMECLOCK_CLOCK_DB_PASSWORD` and `TIMECLOCK_CLOCK_TEST_DB_PASSWORD` (composed with psycopg's `sql.Literal`,
-never string formatting), and apply the per-database `CONNECT` grants. A failed migration is fatal: alert
-and exit; Docker restarts it and the clocks keep buffering.
+in order, each in one transaction with its `schema_migrations` row. Then the group roles (§4.4): create
+`timeclock_clocks` and `timeclock_test_clocks` if absent, make both members of `timeclock_clock_access`,
+and apply the per-database `CONNECT` grants and the revoke from `PUBLIC`. The clock logins themselves are
+the owner's, by hand. A failed migration is fatal: alert and exit; Docker restarts it and the clocks keep
+buffering.
 
 `0001_initial.sql` creates `pgcrypto`, the enums, every table, view, trigger and seed row of §4, the schema
 `config`, the role `timeclock_clock_access` if absent, and its grants. Being plain SQL, it runs unchanged
@@ -617,7 +630,7 @@ The clock's environment, set per clock in its Coolify application:
 | `WG_HANDSHAKE_TIMEOUT_SECS` | `10` (§11.2) |
 | `WG_LISTEN_PORT` | `51821` (§11.3) |
 | `TIMECLOCK_DB_HOST` | the backend's tunnel address |
-| `TIMECLOCK_DB_NAME`, `TIMECLOCK_DB_USER`, `TIMECLOCK_DB_PASSWORD` | `timeclock`, `timeclock_clock` and its password; on timeclock-dev `timeclock_test`, `timeclock_clock_test` and its password (R26.6) |
+| `TIMECLOCK_DB_NAME`, `TIMECLOCK_DB_USER`, `TIMECLOCK_DB_PASSWORD` | `timeclock`, the clock's own login (e.g. `timeclock_clock_3`) and its password; on timeclock-dev `timeclock_test`, `timeclock_clock_dev` (R26.2, R26.6) |
 
 Each clock is one Coolify application (Docker Compose type) on its own server. The server's proxy is None
 (R14.5). Compose deploys stop the old containers before starting new ones, which blanks the screen and
@@ -629,7 +642,7 @@ stops punches: deploy outside shift changes. The owner puts the logo files in
 The listed `timeclock-backend` service on networks `coolify` and `timeclock-db`, plus the `postgres` sidecar
 (§8.2). Environment: `HEARTBEAT_SLUG=timeclock-backend`, the alert variables, the four fetched-mode `WG_*`
 variables, `WG_DISCONNECTED_LIMIT_SECS=1` (no tolerate, §8), `TZ=America/New_York`, `POSTGRES_PASSWORD`,
-`TIMECLOCK_CLOCK_DB_PASSWORD`, `TIMECLOCK_CLOCK_TEST_DB_PASSWORD`, and `LOG_CONN_HOST=central-log-server` (on the VPS it reaches the log server
+and `LOG_CONN_HOST=central-log-server` (on the VPS it reaches the log server
 over the `coolify` network, not the tunnel).
 
 ### 9.3 Adding a clock
@@ -643,7 +656,8 @@ One-time, per device:
    coolify-tunnel's `docker/authorized_keys`, then redeploy coolify-tunnel (R29, `docs/dev-device-setup.md`).
 3. In Coolify: the server at `coolify-tunnel:<port>`, Coolify's key in root's `authorized_keys`, Proxy None.
 4. Enroll the clock in the hub (§12): its row with `lan`, its forward rules, a hub release.
-5. Create the clock's Coolify application with its environment (§9.1); deploy.
+5. Create the clock's database login in the SQL editor with a random password (§4.4).
+6. Create the clock's Coolify application with its environment (§9.1), that password included; deploy.
 
 ## 10. aeth_ext changes (R16)
 
