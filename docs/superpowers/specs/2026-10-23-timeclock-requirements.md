@@ -17,10 +17,12 @@ Short requirements list, to be expanded into a full design spec once the main de
 1. Fingerprint reader drivers and SDK cost nothing: no subscriptions, no license fees.
 2. Readers: the DigitalPersona U.are.U 4500s already on the shelf.
 3. The time clock runs on Linux.
+    1. Host OS: Debian 13, no desktop.
 4. Written in Python, targeting 3.14 (per `pyproject.toml`). Custom Rust bindings are acceptable if needed.
 5. uvloop as the event loop. Blocking work on threads is fine.
 6. A touchscreen at the clock, where employees can see the hours they've accumulated this week and other data.
 7. The touchscreen must be cheap.
+    1. The design stays touchscreen-agnostic (any USB multitouch screen) until one turns up that doesn't work as is. No model is specified.
 8. Hardware: probably an HP EliteDesk 800 G3 or similar, wiped for Linux.
 9. Browser: Firefox.
 10. The device is a Docker host that our Coolify server deploys to. The whole stack, display included, runs in containers. Startup and maintenance are controlled from the repo, with no manual changes on the device.
@@ -30,6 +32,7 @@ Short requirements list, to be expanded into a full design spec once the main de
 12. UI: NiceGUI served locally, shown full-screen in Firefox kiosk mode.
 13. Display: cage runs Firefox as the only app on screen, in a privileged container started with `seatd-launch`.
     1. The kiosk is a compose service not listed in `[tool.docker].services`, with its own Dockerfile, so aeth_devkit and devkit-container leave it alone (the one exception to Decided 18). Only the kiosk is privileged; the app container stays minimal.
+    2. Lockdown: Firefox policies baked into the kiosk image turn off pinch zoom, swipe-back and the session-restore prompt; the page turns off text selection and the long-press (context) menu.
 14. Deployment: Coolify's Docker Compose type with two services, app and kiosk.
     1. Both with `restart: unless-stopped`. Neither uses host networking: the app is on the `coolify` network as the template requires (and its WireGuard interface stays inside its own namespace); the kiosk joins the same network and opens the app by service name. No ports published to the host.
     2. The kiosk runs its own `systemd-udevd` (default rules only) plus `udevadm trigger` before cage, so a replugged touchscreen is detected without host networking. Confirmed on the EliteDesk (2026-10-26): kernel device events reach the kiosk's namespace, and a replugged touchscreen works again, including on a different USB port.
@@ -75,6 +78,7 @@ Short requirements list, to be expanded into a full design spec once the main de
     1. Known issue, not coded around: while offline, a clock's weekly totals only include its own punches and what it last synced, so punches made at another clock in the meantime are missing.
     2. Fingerprint registration also works without the database: the new fingerprint is stored locally (with a UUID) and synced once the connection is back, like a punch. The clocks' restricted role can insert registered fingerprints.
     3. An employee can have several registered prints; registration enrolls one, so adding another finger later is UI work only. When a print stops matching, the owner removes it, and the employee's next PIN entry prompts a new registration.
+    4. Fingerprint rows aren't append-only: the owner deletes one in SQL, the delete notifies the clocks, and a clock that was offline re-fetches the full list on reconnect. (A delayed re-send could only bring back a print the database hadn't yet confirmed, and deletions come much later.)
 28. Clocks on the same LAN share punches and newly registered fingerprints directly over WireGuard, so each clock sees the others' punches and enrollments even while the hub or internet is down.
     1. On each punch or fingerprint registration, a clock sends it to every other clock, best effort. Receivers insert into their local SQLite copy, ignoring duplicate UUIDs. No catch-up between clocks; only the recording clock syncs a record to PostgreSQL.
     2. The hub's peer table lists every clock (public key, `/32` tunnel address) without LAN endpoints. Each clock listens on a fixed WireGuard port published on its host (e.g. `51821/udp`).
@@ -82,7 +86,7 @@ Short requirements list, to be expanded into a full design spec once the main de
     4. devkit-container's supervisor applies a changed address with `wg set ... endpoint`, then confirms it by a fresh handshake within a few seconds (`latest-handshakes`); with no handshake it reverts to the previous address. WireGuard's endpoint roaming covers address changes between announcements.
 29. The Coolify server (on the VPS) reaches each clock's host through a persistent reverse SSH tunnel, pos-tunnel's pattern without its relay. The VPS end is [coolify-tunnel](https://github.com/AetherBreaker/coolify-tunnel), a forwarding-only `sshd` container in its own repository and Coolify application, shared with other projects' devices. It's published on port 2223, with its host key from a Coolify secret; its `authorized_keys` is the registry of devices and their ports. Each host runs a systemd service, `ssh -N -R 0.0.0.0:<port>:localhost:22`, with its own key and automatic reconnect; its key may only open its own port (`permitlisten`, no shell, no local forwards). Each device has a fixed port (22001, 22002, ...). Coolify adds each clock as a server at `coolify-tunnel:<port>` over the `coolify` network. Nothing is configured on the VPS host. The systemd unit and key are part of each host's one-time install.
 30. Admin tasks (adding employees, correcting punches) are done by the owner directly in PostgreSQL with an SQL editor for now; a streamlined interface may come later. Any change to employee data is pushed to the clocks (`NOTIFY` on the employees table, like punches), and each clock keeps a local copy of the employee list.
-    1. Employee rows are edited in place; only punches and overrides are append-only. Everything else refers to an employee by an internal ID, never by name, so a name change shows on all their records.
+    1. Employee rows are edited in place; only punches and overrides are append-only. Everything else refers to an employee by an internal ID, never by name, so a name change shows on all their records. Employee IDs are auto-incrementing integers (only the owner creates employees). Punches store only the ID; a `punch_log` view joins in the current name, so old punches show the name as it is now, and CSV exports read from it.
 31. After a punch, the clock screen confirms it and shows the employee's hours this week; nothing more for now. The screen is designed so more information can be added later.
 32. Pydantic is used heavily throughout, for validation and as the shape of stored and exchanged data.
 33. The week runs Monday to Sunday (weekly totals, and the week of punches each clock keeps).
@@ -119,11 +123,15 @@ Short requirements list, to be expanded into a full design spec once the main de
 42. The clock hosts install Debian security updates automatically (`unattended-upgrades`, security only), rebooting at 03:00 when an update needs it. Set in the install image's preseed, so it applies from the next image rebuild. A later version should make settings like these configurable from the database.
 43. Images are built on each device (Coolify's default). Revisit together with the libfprint fallback (40.4) if deploys get slow.
 44. The clock's `log_history_retention_days` is 14. An outage never lasts longer than a week: the offices have backup generators and Starlink as backup internet.
+45. Punching: the employee scans first; the screen then shows only the punches valid from their current state (e.g. clocked in: clock out, start break, start lunch), and a tap records one.
+    1. Clock-in is never automatic: it always takes a tap on "Clock in", so the same screen can later show the employee's scheduled time (schedules aren't in version 1; the screen leaves room for them).
+    2. Buddy-punch guard: a punch button tapped more than 30 s after the scan asks for a new scan, which must match the same employee; a scan matching someone else opens their menu instead, with no punch. This covers every punch button.
+    3. An employee who got in by PIN plus manager override needs a fresh manager override for every punch, including re-authenticating after 30 s, unless they provide a fingerprint.
+    4. A new scan while a menu is open switches to that person's menu. A menu nobody touches closes after 2 minutes.
 
 ## Proposed
 
-1. Host OS: Debian 13, no desktop.
-2. Touchscreen: Waveshare 10.1" HDMI LCD (B) with case, about $111.
+None.
 
 ## Open
 
