@@ -100,6 +100,7 @@ Short requirements list, to be expanded into a full design spec once the main de
 38. Punches are an append-only log of events (clock in/out, break start/end, lunch start/end), each with a UUID and the recording clock's `INSTANCE_ID`; shifts are worked out when reading. Syncing inserts with `ON CONFLICT DO NOTHING` on the UUID, so re-sends never duplicate.
     1. Rows are never updated or deleted. Edits and deletions are themselves appended events that reference the UUID they correct or void, and every read applies them. This keeps the original values, and a delayed re-send can't resurrect or overwrite anything.
 39. The UI carries the company's branding: its colors and logo. The logo files are `SFT-Logo-June-2022-color.svg` and `SFT-Logo-June-2022-black.svg`, kept in the project folder but out of git (ignored by `*.svg`) until it's decided whether they can be public (the color logo uses yellow `#F9E60D`, red `#ED1A2C`, near-black `#161514` and white).
+    1. The logo files aren't part of the image: the owner puts them in a persisted data directory on each device, and the GUI loads them from there at runtime, so they survive every deploy. They may move into the repository later.
 
 ## Proposed
 
@@ -108,7 +109,7 @@ Short requirements list, to be expanded into a full design spec once the main de
 
 ## Open
 
-1. How the logo reaches the deployed clock while it stays out of the public repository (devkit-container builds the image from a clone of the repository).
+None.
 
 ## Deferred
 
