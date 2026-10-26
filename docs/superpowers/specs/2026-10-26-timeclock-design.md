@@ -880,6 +880,8 @@ installed before installing it):
 
 - libfprint fork with prebuilt binaries, if compiling on every deploy is too slow (R40.4).
 - Per-clock business hours (R40.3); employee schedules on the action menu (R45.1).
+- Review whether an employee will ever need more than one group (§4.2). If so: a join table replacing
+  `employees.group_id`, a migration, and a precedence rule for conflicting group rules.
 - Host settings such as the update policy and reboot time, configured from the database (R42).
 - Deferred 1–4: QuickBooks, an employee phone page, reports and exports, database backups.
 - aeth_ext TODO #21 (hold-and-resend), which replaces §6.8; TODO #15 (decorators treat the exit nudge as
