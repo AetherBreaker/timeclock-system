@@ -103,6 +103,7 @@ Short requirements list, to be expanded into a full design spec once the main de
     1. The logo files aren't part of the image: the owner puts them in a persisted data directory on each device, and the GUI loads them from there at runtime, so they survive every deploy. They may move into the repository later.
 40. The fingerprint reader stays ready (waiting for a finger) during business hours. libfprint's generic overheating model, which would make an always-waiting clock refuse scans about two-thirds of the time, is turned off for the 4500: its `uru4000` driver sets `temp_hot_seconds = -1`, the opt-out the match-on-chip drivers use. The model isn't based on the 4500 (a 2021 precaution "for bad/old devices"), and HID rates the reader's waiting state (blue glow, 120 mA) with no time limit. This means building a patched libfprint into the image instead of using Debian's package.
     1. Outside business hours the clock stops waiting, so the reader sleeps (USB autosuspend) and its LED rests. Business hours are configurable in the database, in each device's local time.
+    2. Outside business hours, a tap on the screen wakes the reader: it opens and waits about 30 s for a finger, then closes so the reader sleeps again. Anything else that needs a scan (the PIN path's fingerprint step, a manager override, registration) wakes it the same way. A scan in progress when business hours end finishes before the reader closes.
 
 ## Proposed
 
@@ -111,7 +112,7 @@ Short requirements list, to be expanded into a full design spec once the main de
 
 ## Open
 
-1. Punching outside business hours (e.g. a late clock-out) while the reader sleeps (Decided 40.1).
+None in this doc. The spec handoff lists the remaining open questions.
 
 ## Deferred
 
