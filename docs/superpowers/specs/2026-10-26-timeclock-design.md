@@ -130,15 +130,16 @@ employees`, `kind punch_kind` (enum: `clock_in`, `clock_out`, `break_start`, `br
 `lunch_end`), `at timestamptz`, `instance_id text` (the recording clock's `INSTANCE_ID`; `backend` for
 automatic clock-outs, `admin` by convention for punches the owner adds by hand), `automatic boolean default
 false` (R41.1), `received_at timestamptz default now()` (server receipt time, for spotting late syncs; spec
-call). Never updated or deleted; a trigger rejects `UPDATE` and `DELETE` for every role (spec call: it
-protects the log from the owner's own SQL editor too).
+call). The clocks can only insert (§4.4), so to them the log is append-only. The owner's admin account
+(`postgres`) can still update or delete rows to fix bugs (R38.1); no trigger blocks it, at least until the
+project is stable (§14).
 
 **`punch_corrections`** (append-only, R38.1): `id uuid PK default gen_random_uuid()`, `punch_id uuid FK
 punches`, `action correction_action` (`void` | `amend`), `new_at timestamptz null`, `new_kind punch_kind
 null`, `note text`, `recorded_at timestamptz default now()`. A check constraint requires `new_at` or
 `new_kind` for `amend` and neither for `void`. For each punch the newest correction wins, so a later `amend`
 can restore a voided punch. Only the owner writes corrections; to add a missed punch, the owner inserts a
-punch with `instance_id = 'admin'`. Same no-update trigger as punches.
+punch with `instance_id = 'admin'`.
 
 **`overrides`** (append-only, R23.5): `id uuid PK`, `punch_id uuid FK punches` (the single punch it
 authorized), `employee_id bigint FK`, `manager_id bigint FK`, `reason override_reason`
@@ -486,9 +487,14 @@ Today it's a heartbeat-only skeleton (`src/timeclock_backend/__main__.py:22-37`,
 - **Dependencies:** `aeth-ext[async]>=10` (`initialize(asyncio=True)` imports uvloop), `apscheduler>=3.11,<4`,
   the same Postgres driver as the clock (§6.6), `timeclock-schema`.
 - **`[tool.docker] wireguard = true`**, then re-run setup-project (it re-renders compose and the
-  Dockerfile: WireGuard env, `cap_add: NET_ADMIN`, the two-file health check). `WG_TOLERATE_DISCONNECTED=1`
-  (spec call): without it a hub outage keeps the backend from starting, and after 30 minutes disconnected
-  devkit-container stops it, taking the daily auto clock-out down with the relay.
+  Dockerfile: WireGuard env, `cap_add: NET_ADMIN`, the two-file health check).
+- **No tolerate** (R37.6): the backend shares the VPS with the hub, so a WireGuard failure there means a
+  misconfiguration or a problem with the server, and the backend stops and alerts. Without
+  `WG_TOLERATE_DISCONNECTED`, a boot without a handshake already exits with healthchecks.io's `/fail` ping.
+  `WG_DISCONNECTED_LIMIT_SECS=1` makes a running backend give up as soon as the tunnel counts as
+  Disconnected: WireGuard renews handshakes only every 2 minutes, so that's about 150 s after the tunnel
+  dies (`WG_STALE_SECS` can't go lower). Docker's restart then retries, and each boot fails and alerts again
+  until the tunnel works.
 - **Entry point**, following ScheduledReportAggregator's (`__main__.py:20-50`, `startup.py:121-200`):
   `PROJECT_NAME = "timeclock-backend"`, `REQUIRE_LOG_SERVER = False`, `SHUTDOWN_ON_LOG_REJECTION = False`
   (spec call: a log-server outage mustn't take the relay down); `initialize(asyncio=True, logging="socket")`,
@@ -620,7 +626,7 @@ stops punches: deploy outside shift changes. The owner puts the logo files in
 
 The listed `timeclock-backend` service on networks `coolify` and `timeclock-db`, plus the `postgres` sidecar
 (§8.2). Environment: `HEARTBEAT_SLUG=timeclock-backend`, the alert variables, the four fetched-mode `WG_*`
-variables, `WG_TOLERATE_DISCONNECTED=1`, `TZ=America/New_York`, `POSTGRES_PASSWORD`,
+variables, `WG_DISCONNECTED_LIMIT_SECS=1` (no tolerate, §8), `TZ=America/New_York`, `POSTGRES_PASSWORD`,
 `TIMECLOCK_CLOCK_DB_PASSWORD`, `TIMECLOCK_CLOCK_TEST_DB_PASSWORD`, and `LOG_CONN_HOST=central-log-server` (on the VPS it reaches the log server
 over the `coolify` network, not the tunnel).
 
@@ -907,6 +913,8 @@ installed before installing it):
 ## 14. Follow-ups and known issues
 
 - libfprint fork with prebuilt binaries, if compiling on every deploy is too slow (R40.4).
+- Once the project is stable, revisit blocking updates and deletes on punches and corrections for every
+  account, the owner's included (R38.1).
 - Per-clock business hours (R40.3); employee schedules on the action menu (R45.1).
 - Review whether an employee will ever need more than one group (§4.2). If so: a join table replacing
   `employees.group_id`, a migration, and a precedence rule for conflicting group rules.
