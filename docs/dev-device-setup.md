@@ -9,6 +9,7 @@ The installer image does most of the setup. Its source is [`image/dev-device/`](
 
 ## What the image sets up
 
+- With two internal drives: mirrored (Linux software RAID1 for `/` and swap), with an EFI partition on each drive, kept identical by `sync-esp` after every package change, so either drive boots alone. With one drive: a plain install. Set the BIOS storage controller to AHCI (not Intel RAID).
 - Debian 13.7, no desktop. Hostname `timeclock-dev`, announced on the LAN as `timeclock-dev.local`.
 - User `tcadmin`, password `timeclock` (console only; change it with `passwd`). Passwordless `sudo`, so tests can run over SSH.
 - Root has no password. It can log in over SSH by key only, which is how Coolify connects.
@@ -35,7 +36,7 @@ Press **F10** at power-on.
 1. Plug in **wired** network, the fingerprint reader and the touchscreen.
 2. Boot from the stick: press **F9** at power-on and pick the USB stick.
 3. At the menu, **Timeclock dev install** is already selected: press **Enter**. The menu has no timeout, so a stick left plugged in can't start a reinstall on its own.
-4. The installer runs by itself and stops once, at **"Write the changes to disks?"**. Check that the disk it names is the internal drive, not the USB stick, then choose **Yes**. Everything on that disk is erased.
+4. The installer runs by itself and stops at its disk confirmations: **"Write the changes to disks?"**, and with two drives possibly also one about configuring RAID first. Check that they name the internal drives (on the EliteDesk, two 500 GB NVMe drives), not the USB stick, then choose **Yes** each time. Everything on those drives is erased.
 5. When it reboots, remove the stick.
 
 ## 4. First checks
@@ -99,7 +100,9 @@ The service retries every 10 seconds, so it connects once the redeploy is done. 
 3. **Servers → Add:** name `timeclock-dev`, IP `coolify-tunnel`, port `22001`, user `root`, the key from step 1. **Validate**: Coolify checks the connection and installs Docker.
 4. On the server's **Proxy** page, choose **None** (requirements, Decided 14.5).
 
-Coolify renames the container (`coolify-tunnel-<id>`) but keeps `coolify-tunnel` as its alias on the `coolify` network, and Coolify's own container resolves that name (checked). Not yet verified: whether Coolify's server form accepts a name instead of an IP. If it refuses, use the `coolify-tunnel` container's IP on the `coolify` network: `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' coolify-tunnel` on the VPS.
+Coolify renames the container (`coolify-tunnel-<id>`) but keeps `coolify-tunnel` as its alias on the `coolify` network, and the server form accepts that name: `timeclock-dev` validated this way (2026-10-26).
+
+**After reinstalling a device**, its tunnel key and SSH host key are new: rerun `coolify-tunnel-setup`, replace the device's line in coolify-tunnel's `docker/authorized_keys` and redeploy, put Coolify's public key back in `/root/.ssh/authorized_keys`, and validate the server again in Coolify (it reinstalls Docker). If it refuses, use the `coolify-tunnel` container's IP on the `coolify` network: `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' coolify-tunnel` on the VPS.
 
 ## 6. Afterwards
 

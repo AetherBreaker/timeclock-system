@@ -1,0 +1,2 @@
+// Re-copy the EFI partition to the second drive after any package change (shim, GRUB, kernel).
+DPkg::Post-Invoke { "if [ -x /usr/local/sbin/sync-esp ]; then /usr/local/sbin/sync-esp; fi"; };

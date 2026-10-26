@@ -1,0 +1,6 @@
+#!/bin/sh
+# Keep the second drive's EFI partition (/boot/efi2) identical to the first (/boot/efi), so either
+# drive of the RAID1 pair boots on its own. Run by apt after every dpkg run (90-sync-esp).
+mountpoint -q /boot/efi2 || exit 0
+mountpoint -q /boot/efi || exit 0
+rsync -a --delete /boot/efi/ /boot/efi2/

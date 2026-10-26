@@ -1,0 +1,7 @@
+timeclock-raid ::
+  1024 1024 1024 free
+    $iflabel{ gpt } $reusemethod{ } method{ efi } format{ } .
+  4096 4096 4096 raid
+    $primary{ } method{ raid } .
+  10000 10000 -1 raid
+    $primary{ } method{ raid } .

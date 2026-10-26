@@ -22,6 +22,7 @@ sed -i 's/\r$//' build/timeclock/*
 HASH=$(openssl passwd -6 "${TC_PASSWORD:-timeclock}")
 sed -e 's/\r$//' -e "s|@PASSWORD_HASH@|$HASH|" "$SRC/preseed.cfg.in" > build/initrd/preseed.cfg
 debconf-set-selections -c build/initrd/preseed.cfg
+sed 's/\r$//' "$SRC/timeclock-raid.recipe" > build/initrd/timeclock-raid.recipe
 
 xorriso -osirrox on -indev "$ISO" \
   -extract /install.amd/initrd.gz build/x/initrd.gz \
@@ -31,9 +32,9 @@ xorriso -osirrox on -indev "$ISO" \
   -extract /md5sum.txt build/x/md5sum.txt >/dev/null 2>&1
 chmod u+w build/x/*
 
-# The kernel unpacks concatenated cpio archives in order, so appending one adds /preseed.cfg,
-# which the installer loads automatically.
-(cd build/initrd && echo preseed.cfg | cpio -H newc -o --quiet | gzip -9) > build/preseed.cpio.gz
+# The kernel unpacks concatenated cpio archives in order, so appending one adds /preseed.cfg (which
+# the installer loads automatically) and /timeclock-raid.recipe (named by preseed's early_command).
+(cd build/initrd && printf 'preseed.cfg\ntimeclock-raid.recipe\n' | cpio -H newc -o --quiet | gzip -9) > build/preseed.cpio.gz
 cat build/preseed.cpio.gz >> build/x/initrd.gz
 cat build/preseed.cpio.gz >> build/x/gtk-initrd.gz
 

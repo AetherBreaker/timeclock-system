@@ -1,7 +1,8 @@
 #_preseed_V1
 # Debian 13 answer file for the timeclock test device. Everything is answered except the
-# partitioner's "write the changes to disk?" confirmation, the one guard before erasing a disk.
-# @PASSWORD_HASH@ is filled in by build.sh.
+# partitioner's confirmations before it writes to a disk (partman/confirm for disks with
+# partitions, partman/confirm_nooverwrite for empty ones, and the RAID ones), the guard before
+# erasing anything. @PASSWORD_HASH@ is filled in by build.sh.
 
 d-i debian-installer/locale string en_US.UTF-8
 d-i keyboard-configuration/xkb-keymap select us
@@ -27,32 +28,45 @@ d-i clock-setup/utc boolean true
 d-i time/zone string America/New_York
 d-i clock-setup/ntp boolean true
 
-# Target the first disk that isn't the installer's own USB stick; the confirmation screen names it.
+# Every disk except the installer's own USB stick. Two or more: mirror the first two (an EFI
+# partition on each, RAID1 for swap and for /, per /timeclock-raid.recipe). One: a plain install.
 d-i partman/early_command string \
   media=$(mount | sed -n 's|^/dev/\([a-z]*\)[0-9]* on /cdrom .*|\1|p'); \
-  for d in $(list-devices disk); do \
-    if [ "$d" != "/dev/$media" ]; then debconf-set partman-auto/disk "$d"; break; fi; \
-  done
+  disks=""; \
+  for d in $(list-devices disk); do [ "$d" = "/dev/$media" ] || disks="$disks $d"; done; \
+  set -- $disks; \
+  if [ $# -ge 2 ]; then \
+    p1=$1; p2=$2; \
+    case $1 in *nvme*|*mmcblk*) p1=${1}p ;; esac; \
+    case $2 in *nvme*|*mmcblk*) p2=${2}p ;; esac; \
+    debconf-set partman-auto/method raid; \
+    debconf-set partman-auto/disk "$1 $2"; \
+    debconf-set partman-auto/expert_recipe_file /timeclock-raid.recipe; \
+    debconf-set partman-auto-raid/recipe "1 2 0 swap - ${p1}2#${p2}2 . 1 2 0 ext4 / ${p1}3#${p2}3 ."; \
+  else \
+    debconf-set partman-auto/disk "$1"; \
+  fi
 d-i partman-auto/method string regular
 d-i partman-auto/choose_recipe select atomic
 d-i partman-lvm/device_remove_lvm boolean true
 d-i partman-md/device_remove_md boolean true
 d-i partman-partitioning/confirm_write_new_label boolean true
 d-i partman/choose_partition select finish
-d-i partman/confirm_nooverwrite boolean true
-# partman/confirm is deliberately left unanswered.
+# partman/confirm, partman/confirm_nooverwrite and partman-md/confirm are deliberately unanswered.
 
 d-i apt-setup/non-free-firmware boolean true
 d-i apt-setup/contrib boolean false
 
 tasksel tasksel/first multiselect standard, ssh-server
-d-i pkgsel/include string sudo avahi-daemon usbutils curl systemd-timesyncd libinput-tools fprintd libfprint-2-2 gir1.2-fprint-2.0 python3-gi
+d-i pkgsel/include string sudo avahi-daemon usbutils curl systemd-timesyncd libinput-tools fprintd libfprint-2-2 gir1.2-fprint-2.0 python3-gi rsync efibootmgr dosfstools
 d-i pkgsel/upgrade select full-upgrade
 popularity-contest popularity-contest/participate boolean false
 
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean true
 d-i grub-installer/bootdev string default
+# Also install to \EFI\BOOT\BOOTX64.EFI, which firmware boots from any drive without a boot entry.
+d-i grub-installer/force-efi-extra-removable boolean true
 
 d-i preseed/late_command string \
   cp -a /cdrom/timeclock /target/root/timeclock-setup; \
