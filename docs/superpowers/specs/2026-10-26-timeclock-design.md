@@ -293,7 +293,7 @@ Rules every path follows:
 - **Finger touch** (`notify::finger-status`) shows "Scanning…" at once; a resting thumb can take up to 16 s.
 - **Reader gone** (removed, or open fails) → fatal shutdown; Docker's restart and the startup script pick
   it up when it's back (R14.3, R14.7).
-- **Hung thread** (spec call, the owner left it to the builder): in ready mode the thread cancels and re-arms
+- **Hung thread** (spec call; the owner left the mechanism open): in ready mode the thread cancels and re-arms
   its wait every 60 s. It records the start time of every blocking libfprint call; the heartbeat task
   stops writing aeth_ext's heartbeat while a call has been running longer than 90 s. A hung thread then
   turns the heartbeat stale, devkit-container's health check fails after 180 s, and the existing fail
