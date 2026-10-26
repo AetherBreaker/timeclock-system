@@ -554,7 +554,9 @@ exit; Docker restarts it and the clocks keep buffering.
 The file exists but is empty. Don't delete it: setup-project and `docker-pin` search breadth-first and would
 then edit `backend/docker/compose.yaml`. Give it a block-form `services:` key first; with
 `[tool.docker].services = ["timeclock-system"]` and `wireguard = true` committed, setup-project then offers
-to add the service and renders the Dockerfile from the template.
+to add the service and renders the Dockerfile from the template. The clock's `[tool.docker]`:
+`services = ["timeclock-system"]`, `required_persisted_dirs = ["persisted_data"]`, `wireguard = true`,
+`startup_scripts = ["timeclock-reader-access"]`.
 
 Services (R14, as amended by R28):
 
@@ -640,7 +642,8 @@ of §10 as 10.0.0 (`uv run poe release major`), since the crash hooks are on by 
   for at most twice the timeout plus a second; past that it gives up on the send. That bounds what the
   socket timeouts can't, a stalled DNS lookup, and matters because `_handle_fatal` alerts before it
   requests the shutdown (`:141-151`).
-- <<PENDING owner: Q-route-check>>
+- *Pending the owner's decision:* whether R16.1's quick no-network check before sending is kept, dropped or
+  replaced (§15). Nothing else depends on it.
 
 ### 10.2 `INSTANCE_ID` (R16.2)
 
@@ -896,4 +899,5 @@ installed before installing it):
 
 ## 15. Open questions
 
-- **Q-route-check** (§10.1): <<PENDING owner>>
+- **Pre-send network check** (§10.1, R16.1): inside a container no local signal shows whether the internet
+  is reachable, so the original no-route check would almost never fire. Awaiting the owner's decision.
