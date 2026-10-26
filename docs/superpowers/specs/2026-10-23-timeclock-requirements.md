@@ -74,6 +74,7 @@ Short requirements list, to be expanded into a full design spec once the main de
 27. A clock that can't reach the database still accepts punches: it stores them locally (on its persisted volume) and syncs them once the connection is back.
     1. Known issue, not coded around: while offline, a clock's weekly totals only include its own punches and what it last synced, so punches made at another clock in the meantime are missing.
     2. Fingerprint registration also works without the database: the new fingerprint is stored locally (with a UUID) and synced once the connection is back, like a punch. The clocks' restricted role can insert registered fingerprints.
+    3. An employee can have several registered prints; registration enrolls one, so adding another finger later is UI work only. When a print stops matching, the owner removes it, and the employee's next PIN entry prompts a new registration.
 28. Clocks on the same LAN share punches and newly registered fingerprints directly over WireGuard, so each clock sees the others' punches and enrollments even while the hub or internet is down.
     1. On each punch or fingerprint registration, a clock sends it to every other clock, best effort. Receivers insert into their local SQLite copy, ignoring duplicate UUIDs. No catch-up between clocks; only the recording clock syncs a record to PostgreSQL.
     2. The hub's peer table lists every clock (public key, `/32` tunnel address) without LAN endpoints. Each clock listens on a fixed WireGuard port published on its host (e.g. `51821/udp`).
@@ -81,6 +82,7 @@ Short requirements list, to be expanded into a full design spec once the main de
     4. devkit-container's supervisor applies a changed address with `wg set ... endpoint`, then confirms it by a fresh handshake within a few seconds (`latest-handshakes`); with no handshake it reverts to the previous address. WireGuard's endpoint roaming covers address changes between announcements.
 29. The Coolify server (on the VPS) reaches each clock's host through a persistent reverse SSH tunnel, pos-tunnel's pattern without its relay. The VPS end is [coolify-tunnel](https://github.com/AetherBreaker/coolify-tunnel), a forwarding-only `sshd` container in its own repository and Coolify application, shared with other projects' devices. It's published on port 2223, with its host key from a Coolify secret; its `authorized_keys` is the registry of devices and their ports. Each host runs a systemd service, `ssh -N -R 0.0.0.0:<port>:localhost:22`, with its own key and automatic reconnect; its key may only open its own port (`permitlisten`, no shell, no local forwards). Each device has a fixed port (22001, 22002, ...). Coolify adds each clock as a server at `coolify-tunnel:<port>` over the `coolify` network. Nothing is configured on the VPS host. The systemd unit and key are part of each host's one-time install.
 30. Admin tasks (adding employees, correcting punches) are done by the owner directly in PostgreSQL with an SQL editor for now; a streamlined interface may come later. Any change to employee data is pushed to the clocks (`NOTIFY` on the employees table, like punches), and each clock keeps a local copy of the employee list.
+    1. Employee rows are edited in place; only punches and overrides are append-only. Everything else refers to an employee by an internal ID, never by name, so a name change shows on all their records.
 31. After a punch, the clock screen confirms it and shows the employee's hours this week; nothing more for now. The screen is designed so more information can be added later.
 32. Pydantic is used heavily throughout, for validation and as the shape of stored and exchanged data.
 33. The week runs Monday to Sunday (weekly totals, and the week of punches each clock keeps).
@@ -114,6 +116,9 @@ Short requirements list, to be expanded into a full design spec once the main de
     3. Configuration tables live in a Postgres `config` schema: `config.business_hours` (40.3) and a one-row `config.settings` holding `auto_clock_out_enabled` (on), `auto_clock_out_run_time` and `auto_clock_out_stamp_time`. Those times, and business hours' open and close times, are Postgres `time` values (no date, no zone; `datetime.time` in pydantic). A stamp time later than the run time fails validation: the job skips that run and alerts.
     4. Local time everywhere comes from aeth_ext's `settings.tz` (the `TZ` environment variable), which compose sets explicitly to `America/New_York` on the backend and the clocks; never the host's time zone (the VPS runs UTC).
     5. Weekly totals split a shift that crosses Monday 00:00 at midnight.
+42. The clock hosts install Debian security updates automatically (`unattended-upgrades`, security only), rebooting at 03:00 when an update needs it. Set in the install image's preseed, so it applies from the next image rebuild. A later version should make settings like these configurable from the database.
+43. Images are built on each device (Coolify's default). Revisit together with the libfprint fallback (40.4) if deploys get slow.
+44. The clock's `log_history_retention_days` is 14. An outage never lasts longer than a week: the offices have backup generators and Starlink as backup internet.
 
 ## Proposed
 
@@ -128,5 +133,5 @@ None in this doc. The spec handoff lists the remaining open questions.
 
 1. QuickBooks: Online or Desktop, which payroll provider or plan, and whether and how the clock sends hours to it.
 2. Employees checking hours from their phones: our own page, QuickBooks Workforce, or only at the clock.
-3. Reports and exports: decided once the foundation is built and payroll's preferred shape is known.
+3. Reports and exports: decided once the foundation is built and payroll's preferred shape is known. Until then, payroll uses manual SQL exports to CSV, outside the spec.
 4. Database backups (e.g. off-VPS storage): not a requirement for version 1; slotted in later.
