@@ -57,7 +57,7 @@ version 2 matcher (R36.2), any rule kind (R34), host settings configured from th
 
 ## 3. System overview
 
-```
+```text
  Office LAN (one or more clocks)                         VPS (Coolify)
  ┌──────────────── clock host (Debian 13) ─────────┐     ┌──────────────────────────────────────────┐
  │ kiosk   cage + Firefox ── http://app:8080 ──┐   │     │ Coolify ── coolify network ──┐           │
@@ -439,8 +439,8 @@ No aeth_ext change is needed. Replaced later by aeth_ext's hold-and-resend (TODO
 ### 6.10 Reader access and the image
 
 - `[tool.docker].startup_scripts = ["timeclock-reader-access"]` runs as root before the app (R14.7). Startup
-  scripts must be `[project.scripts]` names, so it's a Python console script (the spike's shell version is
-  in the handoff): find `05ba:000a` in `/sys/bus/usb/devices`, chown its `/dev/bus/usb/BBB/DDD` node to
+  scripts must be `[project.scripts]` names, so it's a Python port of the spike's shell version (Appendix A):
+  find `05ba:000a` in `/sys/bus/usb/devices`, chown its `/dev/bus/usb/BBB/DDD` node to
   999:999, exit nonzero if it isn't there. The supervisor sends healthchecks.io's `/fail` ping when a startup
   script fails (devkit-container `src/run.rs:111-114`), so a missing reader alerts someone. The screen stays
   blank meanwhile (the kiosk waits on the app's health check; accepted, R14.7).
@@ -854,9 +854,10 @@ end (`AGENTS.md`).
    - wireguard-hub: rows for the backend, the log server and the first clock, and their forward rules (§12);
      the log server's spoke switch (§10.7) once its row exists.
 2. **timeclock-backend** (§8), deployed on the VPS.
-3. **The clock app and kiosk** on timeclock-dev (§5–§7, §9.1, without `discovery`). First clean up the test
-   leftovers: the `kiosk-test` container, the stopped `tc-app`, the `kiosk-test` and `apptest` images, the
-   `tc-net` network, `/root/fp-test-template.bin` and `/tmp/fpdata/`.
+3. **The clock app and kiosk** on timeclock-dev (§5–§7, §9.1, without `discovery`). The kiosk files start
+   from Appendix A. Once they're committed here, clean up the test leftovers: the `kiosk-test` container,
+   the stopped `tc-app`, the `kiosk-test` and `apptest` images, the `tc-net` network,
+   `/root/fp-test-template.bin` and `/tmp/fpdata/`.
 4. **LAN sharing:** devkit-container §11.3 with `discover`, the hub's `lan` field (§12), the `discovery`
    service and clock-to-clock sharing (§6.7). The clocks already work through the hub without it.
 
@@ -901,3 +902,56 @@ installed before installing it):
 
 - **Pre-send network check** (§10.1, R16.1): inside a container no local signal shows whether the internet
   is reachable, so the original no-route check would almost never fire. Awaiting the owner's decision.
+
+## Appendix A. Files verified on the hardware (2026-10-26)
+
+From the spikes on timeclock-dev (EliteDesk 800 G3 Mini, Debian 13.7). The kiosk files are the starting point
+for `docker/kiosk/`; the reader script is the logic `timeclock-reader-access` ports to Python.
+
+**Kiosk** (R13, R14.2). cage runs Firefox ESR alone under `seatd-launch`, in a privileged container with its
+own udevd; no host networking. Touch arrives as real touch events; a replugged touchscreen works again,
+including on another USB port. The DBus and `xdg_surface` warnings in its log are cosmetic.
+
+```dockerfile
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cage seatd udev firefox-esr libgl1-mesa-dri libegl-mesa0 fonts-dejavu-core ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY kiosk.sh /kiosk.sh
+ENTRYPOINT ["/kiosk.sh"]
+```
+
+```sh
+#!/bin/sh
+set -eu
+/usr/lib/systemd/systemd-udevd --daemon
+udevadm trigger --action=add
+udevadm settle --timeout=10 || true
+export XDG_RUNTIME_DIR=/run/kiosk
+mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+exec seatd-launch -- cage -- firefox-esr --kiosk "${KIOSK_URL}"
+```
+
+The spike ran it as `docker run --network tc-net --privileged -v /dev:/dev -e KIOSK_URL=http://tc-app:8080
+kiosk-test`.
+
+**Reader access** (R14.7), run as root; without it, libfprint as uid 999 gets "Access denied (insufficient
+permissions)":
+
+```sh
+# Give the 4500 (05ba:000a) to uid 999; fail startup without it.
+found=""
+for d in /sys/bus/usb/devices/*; do
+  [ "$(cat "$d/idVendor" 2>/dev/null)" = 05ba ] && [ "$(cat "$d/idProduct" 2>/dev/null)" = 000a ] || continue
+  node=$(printf '/dev/bus/usb/%03d/%03d' "$(cat "$d/busnum")" "$(cat "$d/devnum")")
+  chown 999:999 "$node" && found=1
+done
+[ -n "$found" ] || { echo "reader-access: fingerprint reader not found" >&2; exit 1; }
+```
+
+**App container spike** (superseded by the devkit template, §11.1, but it fixes the package lists):
+PyGObject 3.58.1 from PyPI builds on Python 3.14.9 in `ghcr.io/astral-sh/uv:python3.14-trixie-slim` in
+about 12 s with `gcc pkg-config libgirepository-2.0-dev libcairo2-dev`; runtime needs
+`libgirepository-2.0-0 libcairo2` plus libfprint and its typelib. It fails on bookworm (PyGObject ≥ 3.51
+needs GLib ≥ 2.80). NiceGUI runs uvicorn on uvloop. The reader was reachable as uid 999 with
+`-v /dev/bus/usb:/dev/bus/usb --device-cgroup-rule='c 189:* rmw'` plus the script above.
