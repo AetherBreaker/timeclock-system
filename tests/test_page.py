@@ -16,7 +16,7 @@ from timeclock_schema.models import BusinessHours, Employee, Fingerprint
 
 # First party imports
 from timeclock_system.clock import Clock
-from timeclock_system.scanner import Matched, ReaderMode
+from timeclock_system.scanner import FingerDown, Matched, ReaderMode, ReaderPaused
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
 from timeclock_system.ui import text
@@ -151,3 +151,31 @@ async def test_a_double_tap_anywhere_ends_the_confirmation(controller: KioskCont
     user.find(marker="confirm-tap").click()
     user.find(marker="confirm-tap").click()
     await user.should_see(text.IDLE_READY)
+
+
+async def test_the_reader_indicator_shows_on_every_screen_and_follows_the_scan(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    [icon] = user.find(marker="reader-indicator").elements
+    assert {"fixed", "bottom-2", "left-4"} <= set(icon.classes)
+    assert "reader-ready" in icon.classes
+    await controller.on_scanner_event(FingerDown())
+    await user.should_see(marker="reader-scanning")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("Ann")
+    await user.should_see(marker="reader-ready")  # on the menu too
+    await controller.on_scanner_event(ReaderPaused(60.0))
+    await user.should_see(marker="reader-paused")
+    await user.should_not_see("Scanning")
+
+
+async def test_the_reader_indicator_says_how_to_wake_a_sleeping_reader(tmp_path: Path) -> None:
+  store = LocalStore(tmp_path / "clock.sqlite3")
+  clock = Clock(store, instance_id="1", tz=NY, alert=lambda _s, _b: None)
+  await clock.load()  # no business hours: the reader sleeps
+  controller = KioskController(clock, RecordingReader(), tz=NY)
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await user.should_see(marker="reader-asleep")
+    await user.should_see(text.READER_ASLEEP)
+  store.close()

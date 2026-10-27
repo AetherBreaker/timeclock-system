@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import pytest
 
 # First party imports
+from timeclock_system import scanner as scanner_module
 from timeclock_system.scanner import (
   CancelToken,
   Enrolled,
@@ -25,6 +26,7 @@ from timeclock_system.scanner import (
   ReaderFailure,
   ReaderGone,
   ReaderMode,
+  ReaderPaused,
   ReaderTooHot,
   Retry,
   RetryScan,
@@ -243,11 +245,14 @@ def test_a_capture_ends_the_failure_streak(make: Callable[..., Harness]) -> None
     h.fatal.get(timeout=0.5)
 
 
-def test_too_hot_posts_retry_and_pauses_long(make: Callable[..., Harness]) -> None:
+def test_too_hot_posts_paused_alerts_and_pauses_long(make: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch) -> None:
+  alerts: list[str] = []
+  monkeypatch.setattr(scanner_module, "alert", lambda reason, *_a, **_k: alerts.append(reason))
   timings = ScannerTimings(too_hot_pause=0.3, retry_pause=0.01)
   h = make(FakeReader([ReaderTooHot()]), timings)
   first, _ = h.reader.next_call("identify")
-  assert h.event() == Retry("The reader is warming down, try again in a minute")
+  assert h.event() == ReaderPaused(timings.too_hot_pause)
+  assert alerts == ["Fingerprint reader paused itself (too hot)"]  # the patch should make this impossible (§7)
   second, _ = h.reader.next_call("identify")
   assert second - first >= timings.too_hot_pause - TICK
 

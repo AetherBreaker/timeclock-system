@@ -14,6 +14,9 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, Protocol
 from uuid import UUID  # noqa: TC003  # the dataclass annotation is evaluated at runtime
 
+# Third party imports
+from aeth_ext.errors import alert
+
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Callable, Sequence
@@ -52,7 +55,14 @@ class Retry:
 
 @dataclass(frozen=True)
 class FingerDown:
-  """A finger touched the reader; the UI shows "Scanning…" at once."""
+  """A finger touched the reader; the screen's reader indicator lights at once."""
+
+
+@dataclass(frozen=True)
+class ReaderPaused:
+  """The reader reported itself too hot and is paused for `seconds`; the patched reader shouldn't (§7)."""
+
+  seconds: float
 
 
 @dataclass(frozen=True)
@@ -77,7 +87,7 @@ class EnrollFailed:
   reason: Literal["timeout", "error"]
 
 
-type ScannerEvent = Matched | NoMatch | Retry | FingerDown | EnrollStage | Enrolled | EnrollFailed
+type ScannerEvent = Matched | NoMatch | Retry | FingerDown | ReaderPaused | EnrollStage | Enrolled | EnrollFailed
 
 
 class ReaderMode(StrEnum):
@@ -150,9 +160,6 @@ class ScannerTimings:
   finger_off_pause: float = 2.0  # after a capture; see _ready_once
   failure_limit: float = 180.0  # a ReaderFailure streak this long is fatal
   enroll_idle_timeout: float = 30.0
-
-
-TOO_HOT_MESSAGE = "The reader is warming down, try again in a minute"
 
 
 class Scanner:
@@ -284,7 +291,9 @@ class Scanner:
       except ScanCancelled:
         pass  # the re-arm timer, a mode or gallery change, or stop; the loop re-reads the state
       except ReaderTooHot:
-        self._post(Retry(TOO_HOT_MESSAGE))
+        # The patched reader never reports too hot (§7), so one that does means the patch isn't working on this clock.
+        alert("Fingerprint reader paused itself (too hot)", f"Paused for {self._timings.too_hot_pause:g} s", wait=False)
+        self._post(ReaderPaused(self._timings.too_hot_pause))
         self._wake.wait(self._timings.too_hot_pause)
       except ReaderFailure as e:
         self._on_failure(e)

@@ -410,10 +410,16 @@ Rules every path follows:
   exponentially, 1 s up to 30 s, reset by a successful capture. A reader failing continuously logs a warning
   on the streak's first failure and is fatal, as a lost reader is, once the streak passes about 3 minutes
   (owner, 2026-10-27). `FP_DEVICE_ERROR_TOO_HOT` (shouldn't happen
-  with the patch) → 60 s. After any capture, pause 2 s before re-arming, so the tail of one press isn't read
+  with the patch) → 60 s, the reader indicator red with no text, and an alert, since it means the patch isn't
+  working on that clock (owner, 2026-10-27). After any capture, pause 2 s before re-arming, so the tail of one press isn't read
   as the next (seen at 0.54 s in the spike). libfprint 1.94 resets `finger-status` when a capture completes, so
   waiting for "no finger" never waits.
-- **Finger touch** (`notify::finger-status`) shows "Scanning…" at once; a resting thumb can take up to 16 s.
+- **Finger touch** (`notify::finger-status`) lights the reader indicator at once; a resting thumb can take up
+  to 16 s.
+- **Reader indicator** (owner, 2026-10-27; replaces the "Scanning…" message): a fingerprint icon in the
+  bottom-left corner of every screen. Dim while waiting for a finger; company yellow from a finger's touch until
+  its scan finishes; red, with no text, while the reader has paused itself (above); greyed with "Tap to wake
+  the reader" while it sleeps outside business hours (§6.3).
 - **Reader gone** (removed, or open fails) → fatal shutdown; Docker's restart and the startup script pick
   it up when it's back (R14.3, R14.7).
 - **Hung thread** (spec call; the owner left the mechanism open): in ready mode the thread cancels and re-arms

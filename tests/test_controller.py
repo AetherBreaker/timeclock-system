@@ -14,7 +14,7 @@ from timeclock_schema.models import BusinessHours, Employee, Fingerprint
 
 # First party imports
 from timeclock_system.clock import Clock, OverrideGrant
-from timeclock_system.scanner import Enrolled, EnrollFailed, EnrollStage, FingerDown, Matched, NoMatch, ReaderMode
+from timeclock_system.scanner import Enrolled, EnrollFailed, EnrollStage, FingerDown, Matched, NoMatch, ReaderMode, ReaderPaused
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
 from timeclock_system.ui import text
@@ -27,6 +27,7 @@ from timeclock_system.ui.controller import (
   OverrideRequest,
   PinEntry,
   PinScan,
+  ReaderIndicator,
   Registering,
   RegisterPrompt,
   Rescan,
@@ -419,3 +420,45 @@ async def test_set_mode_is_called_only_on_a_change(kiosk: Kiosk) -> None:
   await kiosk.ctl.tick()
   await kiosk.ctl.tick()
   assert kiosk.reader.modes == [ReaderMode.READY]
+
+
+async def test_the_indicator_lights_while_a_finger_is_down(kiosk: Kiosk) -> None:
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+  await kiosk.ctl.on_scanner_event(FingerDown())
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.SCANNING
+  assert kiosk.ctl.screen == Idle(), "no Scanning… message any more"
+  await kiosk.ctl.on_scanner_event(NoMatch())
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+
+
+async def test_the_indicator_drops_back_if_a_scan_never_finishes(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(FingerDown())
+  kiosk.t.advance(16.5)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+
+
+async def test_a_match_ends_the_scanning_indicator(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(FingerDown())
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  assert isinstance(kiosk.ctl.screen, Menu)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+
+
+async def test_a_paused_reader_shows_red_for_its_pause_then_recovers(kiosk: Kiosk) -> None:
+  heard: list[None] = []
+  kiosk.ctl.add_listener(lambda: heard.append(None))
+  await kiosk.ctl.on_scanner_event(ReaderPaused(60.0))
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.PAUSED
+  assert kiosk.ctl.screen == Idle(), "nothing on screen to wait for"
+  assert heard, "the page redraws for an indicator change"
+  kiosk.t.advance(60.5)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+
+
+async def test_the_indicator_shows_the_reader_asleep_after_hours(kiosk: Kiosk) -> None:
+  await kiosk.no_hours()
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.ASLEEP
+  await kiosk.ctl.tap()
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
