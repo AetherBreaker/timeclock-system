@@ -19,7 +19,7 @@ from timeclock_system.clock import Clock
 from timeclock_system.scanner import FingerDown, Matched, ReaderMode, ReaderPaused
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
-from timeclock_system.ui import text
+from timeclock_system.ui import page, text
 from timeclock_system.ui.controller import KioskController
 from timeclock_system.ui.page import build_root
 
@@ -229,3 +229,11 @@ async def test_typed_form_text_survives_a_finger_touch_and_errors(controller: Ki
     await user.should_see(text.PHONE_INVALID)
     redrawn = next(iter(user.find(marker="field-phone").elements))
     assert cast("ui.input", redrawn).value == "555-12"  # the redraw keeps what was typed
+
+
+async def test_the_page_carries_the_cursor_script_and_no_blanket_rule(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    client = await user.open("/")
+    head = client._head_html  # pyright: ignore[reportPrivateUsage]  # NiceGUI has no public reader
+  assert page.KIOSK_CURSOR in head
+  assert 'addStyle("* { cursor: none' not in head  # the old blanket ui.add_css rule

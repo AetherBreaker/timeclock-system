@@ -66,8 +66,28 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 """
 # R13.2: no text selection, no long-press menu.
 _NO_SELECT_CSS = "body { user-select: none; -webkit-user-select: none; touch-action: manipulation; }"
-# A touch-only kiosk: cage still draws a pointer in the middle of the screen unless the page hides it.
-_NO_CURSOR_CSS = "* { cursor: none !important; }"
+# cage draws a pointer mid-screen unless the page hides it. Only the kiosk hides it (its KIOSK_URL carries `?kiosk`);
+# any other browser, e.g. one through an SSH tunnel, keeps it. Pointer events, not mouse events: a touch also fires
+# compatibility mouse events, but its pointer events say `touch`, so touching never shows the cursor (owner,
+# 2026-10-27). A mouse shows it until a touch or a minute without mouse movement.
+KIOSK_CURSOR = """<style>html.sft-hide-cursor, html.sft-hide-cursor * { cursor: none !important; }</style>
+<script>
+if (new URLSearchParams(location.search).has("kiosk")) {
+  const root = document.documentElement;
+  let timer;
+  const hide = () => root.classList.add("sft-hide-cursor");
+  hide();
+  document.addEventListener("pointermove", e => {
+    if (e.pointerType !== "mouse") return;
+    root.classList.remove("sft-hide-cursor");
+    clearTimeout(timer);
+    timer = setTimeout(hide, 60000);
+  });
+  document.addEventListener("pointerdown", e => {
+    if (e.pointerType !== "mouse") { clearTimeout(timer); hide(); }
+  });
+}
+</script>"""
 _NO_CONTEXT_MENU = '<script>document.addEventListener("contextmenu", e => e.preventDefault());</script>'
 _PAD = ("1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "✓")
 
@@ -129,7 +149,7 @@ class _KioskPage:
         logger.warning("no logo at %s; the page renders without it (R39.1)", self._branding_dir / LOGO_FILE)
     ui.add_css(_THEME_CSS)
     ui.add_css(_NO_SELECT_CSS)
-    ui.add_css(_NO_CURSOR_CSS)
+    ui.add_head_html(KIOSK_CURSOR)
     ui.add_head_html(_NO_CONTEXT_MENU)
     ui.keyboard(on_key=self._on_key)
 
