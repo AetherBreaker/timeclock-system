@@ -1,0 +1,13 @@
+--- a/libfprint/drivers/uru4000.c
++++ b/libfprint/drivers/uru4000.c
+@@ -1491,6 +1491,10 @@ fpi_device_uru4000_class_init (FpiDeviceUru4000Class *klass)
+   dev_class->type = FP_DEVICE_TYPE_USB;
+   dev_class->id_table = id_table;
+   dev_class->scan_type = FP_SCAN_TYPE_PRESS;
++  /* timeclock-system: an always-waiting clock would trip the generic heat model about 65% of the
++   * time; HID rates the 4500's waiting state with no time limit (timeclock design section 7, R40).
++   * -1 is the opt-out the match-on-chip drivers use. */
++  dev_class->temp_hot_seconds = -1;
+ 
+   img_class->img_open = dev_init;
+   img_class->img_close = dev_deinit;
