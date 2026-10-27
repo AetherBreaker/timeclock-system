@@ -411,7 +411,7 @@ Rules every path follows:
   on the streak's first failure and is fatal, as a lost reader is, once the streak passes about 3 minutes
   (owner, 2026-10-27). `FP_DEVICE_ERROR_TOO_HOT` (shouldn't happen
   with the patch) → 60 s, the reader indicator red with no text, and an alert, since it means the patch isn't
-  working on that clock (owner, 2026-10-27). After any capture, pause 2 s before re-arming, so the tail of one press isn't read
+  working on that clock (owner, 2026-10-27). After any capture, pause 1 s before re-arming (owner, 2026-10-27: down from 2 s), so the tail of one press isn't read
   as the next (seen at 0.54 s in the spike). libfprint 1.94 resets `finger-status` when a capture completes, so
   waiting for "no finger" never waits.
 - **Finger touch** (`notify::finger-status`) lights the reader indicator at once; a resting thumb can take up

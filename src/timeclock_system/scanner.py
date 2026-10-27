@@ -157,7 +157,7 @@ class ScannerTimings:
   backoff_max: float = 30.0
   too_hot_pause: float = 60.0
   rearm_every: float = 60.0
-  finger_off_pause: float = 2.0  # after a capture; see _ready_once
+  finger_off_pause: float = 1.0  # after a capture, about twice the 0.54 s tail the spike saw; see _ready_once
   failure_limit: float = 180.0  # a ReaderFailure streak this long is fatal
   enroll_idle_timeout: float = 30.0
 
