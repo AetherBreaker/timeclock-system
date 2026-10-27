@@ -115,9 +115,6 @@ class FakeReader:
     assert isinstance(self.enroll_result, bytes)
     return self.enroll_result
 
-  def wait_finger_off(self, timeout: float) -> None:
-    self._record("finger_off", timeout)
-
   def next_call(self, name: str, timeout: float = WAIT) -> tuple[float, object]:
     """Wait for the next call named `name`, skipping others."""
     deadline = time.monotonic() + timeout
@@ -177,26 +174,23 @@ def make() -> Iterator[Callable[..., Harness]]:
       assert not thread.is_alive(), thread
 
 
-def test_ready_posts_match_and_waits_for_finger_off(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader([A]))
+PAUSE = ScannerTimings(finger_off_pause=0.3)
+
+
+def test_ready_pauses_after_a_capture_before_rearming(make: Callable[..., Harness]) -> None:
+  # Review Focus 1: libfprint reports no finger after a capture completes, so the 2 s wait (§6.2) is a real pause.
+  h = make(FakeReader([A, B]), PAUSE)
   assert h.event() == Matched(print_id=A, employee_id=1)
-  _, timeout = h.reader.next_call("finger_off")
-  assert timeout == pytest.approx(2.0)
+  first_end, _ = h.reader.next_call("identify_end")
+  second_start, _ = h.reader.next_call("identify")
+  assert second_start - first_end >= 0.25  # noqa: PLR2004
 
 
-def test_rearm_waits_for_finger_off(make: Callable[..., Harness]) -> None:
-  # Review Focus 1: a finger left on the reader isn't re-captured before it lifts (or 2 s pass).
-  h = make(FakeReader([B, A]))
-  order: list[str] = []
-  while order.count("identify") < 3:  # noqa: PLR2004
-    order.append(h.reader.calls.get(timeout=WAIT)[0])
-  assert [name for name in order if name in {"identify", "finger_off"}] == [
-    "identify",
-    "finger_off",
-    "identify",
-    "finger_off",
-    "identify",
-  ]
+def test_a_mode_change_ends_the_pause(make: Callable[..., Harness]) -> None:
+  h = make(FakeReader([A]), ScannerTimings(finger_off_pause=10.0))
+  assert h.event() == Matched(print_id=A, employee_id=1)
+  h.scanner.set_mode(ReaderMode.CLOSED)
+  h.reader.next_call("close", timeout=1.0)
 
 
 def test_no_match_posts_no_match(make: Callable[..., Harness]) -> None:
@@ -289,13 +283,12 @@ def test_busy_seconds_reports_a_running_call(make: Callable[..., Harness]) -> No
 
 
 def test_enroll_posts_stages_then_enrolled_and_returns_to_ready(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader(enroll_result=b"new-template"), mode=ReaderMode.ENROLL)
+  h = make(FakeReader(enroll_result=b"new-template"), PAUSE, mode=ReaderMode.ENROLL)
   assert [h.event() for _ in range(6)] == [*(EnrollStage(done, 5) for done in range(1, 6)), Enrolled(b"new-template")]
-  order: list[str] = []
-  while "identify" not in order:
-    order.append(h.reader.calls.get(timeout=WAIT)[0])
-  # The last stage's finger must lift before identify, or it's matched as the employee just enrolled.
-  assert [name for name in order if name in {"enroll", "finger_off", "identify"}] == ["enroll", "finger_off", "identify"]
+  enrolled_at = time.monotonic()
+  # The last stage's finger may still be down when enroll returns; identifying at once would match the new employee.
+  identify_at, _ = h.reader.next_call("identify")
+  assert identify_at - enrolled_at >= 0.25  # noqa: PLR2004
   assert h.scanner.mode is ReaderMode.READY
 
 
@@ -307,7 +300,11 @@ def test_enroll_stages_restart_the_idle_timer(make: Callable[..., Harness]) -> N
 
 
 def test_enroll_idle_timeout_posts_enroll_failed(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader(enroll_stages=0, enroll_result=BLOCK), ScannerTimings(enroll_idle_timeout=0.1), mode=ReaderMode.ENROLL)
+  h = make(
+    FakeReader(enroll_stages=0, enroll_result=BLOCK),
+    ScannerTimings(enroll_idle_timeout=0.1, finger_off_pause=0.01),
+    mode=ReaderMode.ENROLL,
+  )
   assert h.event() == EnrollFailed("timeout")
   h.reader.next_call("identify")
   assert h.scanner.mode is ReaderMode.READY
@@ -320,7 +317,7 @@ def test_enroll_reader_error_posts_enroll_failed() -> None:
       raise ReaderFailure("usb error")
 
   reader = FailingEnroll()
-  harness = Harness(reader, ScannerTimings())
+  harness = Harness(reader, ScannerTimings(finger_off_pause=0.01))
   harness.scanner.set_mode(ReaderMode.ENROLL)
   harness.scanner.start()
   try:

@@ -1005,7 +1005,7 @@ APT::Periodic::Unattended-Upgrade "1";
   device's"; in step 3 "Install", say the installer asks for the hostname. Add a short section "Deploying the
   clock" listing §9.3's steps 2–6 with this plan's compose variables.
 - [x] **Step 4: Commit** `feat(image): install security updates and ask for the hostname`.
-- [ ] **Step 5: Full checks** — `uv run pytest` (Postgres up, variable set: nothing skipped), `uv run ruff check .`,
+- [x] **Step 5: Full checks** — `uv run pytest` (Postgres up, variable set: nothing skipped), `uv run ruff check .`,
   `uv run pyright`. Fix what fails in its task's style.
 - [ ] **Step 6: PR** — `git push`, `gh pr create --title "Clock app and kiosk" --body "<tasks 1–14, Task 12's four hardware results, and the Claude Code attribution line>"`.
 - [ ] **Step 7 (Owner):** review, run the suite by hand, merge.

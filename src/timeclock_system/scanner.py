@@ -134,9 +134,6 @@ class Reader(Protocol):
     """Run every enrollment stage; return the serialized template."""
     ...
 
-  def wait_finger_off(self, timeout: float) -> None:
-    """Return once no finger is on the reader, or after `timeout` seconds."""
-
 
 @dataclass(frozen=True)
 class ScannerTimings:
@@ -147,7 +144,7 @@ class ScannerTimings:
   backoff_max: float = 30.0
   too_hot_pause: float = 60.0
   rearm_every: float = 60.0
-  finger_off_timeout: float = 2.0
+  finger_off_pause: float = 2.0  # after a capture; see _ready_once
   enroll_idle_timeout: float = 30.0
 
 
@@ -296,8 +293,10 @@ class Scanner:
       self._wake.wait(self._timings.retry_pause)
       return
     self._backoff = self._timings.backoff_start
-    # Re-arm only once the finger lifts, so the tail of one press isn't read as the next (§6.2).
-    self._blocking(self._reader.wait_finger_off, self._timings.finger_off_timeout)
+    # §6.2: no re-capture until the finger lifts or 2 s pass. libfprint resets the finger status to none as a capture
+    # completes, so the lift can't be seen and the bound is a plain pause; it keeps a bounce or a resting finger from
+    # being read as the next press.
+    self._wake.wait(self._timings.finger_off_pause)
 
   def _identify_once(self) -> Matched | NoMatch | Retry:
     """The one matcher boundary (R36.3): the only `reader.identify` call, which version 2 replaces.
@@ -369,6 +368,6 @@ class Scanner:
       return
     if outcome is not None:
       self._post(outcome)
-    # Posted first so the UI shows the result at once; then the finger from the last stage must lift before READY's
-    # identify, or it is captured and matched as the employee who just enrolled (§6.2, Review Focus 1).
-    self._blocking(self._reader.wait_finger_off, self._timings.finger_off_timeout)
+    # Posted first so the UI shows the result at once. libfprint can finish before the last stage's finger lifts, and
+    # READY's identify would match it as the employee who just enrolled: the same pause as _ready_once.
+    self._wake.wait(self._timings.finger_off_pause)
