@@ -1528,7 +1528,7 @@ wheels = [
 
 [[package]]
 name = "timeclock-backend"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "backend" }
 dependencies = [
     { name = "aeth-ext", extra = ["async"] },
@@ -1545,7 +1545,7 @@ requires-dist = [
     { name = "apscheduler", specifier = ">=3.11.2,<4" },
     { name = "devkit-container", specifier = ">=2.3.1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.10" },
-    { name = "timeclock-schema", specifier = ">=0.3.1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "timeclock-schema", specifier = ">=0.4.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "tzdata", specifier = ">=2026.5" },
 ]
 
@@ -1567,14 +1567,14 @@ dev = [
 
 [[package]]
 name = "timeclock-schema"
-version = "0.3.1"
+version = "0.4.0"
 source = { registry = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/62e/17850ceca41a1/timeclock_schema-0.3.1.tar.gz", hash = "sha256:62e17850ceca41a1ecaf8045c7da91fc6630a4fc9c075be5eb19e992085f7b15" }
+sdist = { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/716/62389c75378a1/timeclock_schema-0.4.0.tar.gz", hash = "sha256:71662389c75378a14e2900df0783dbbafa7bc6613dad92e6b7561daba702da2d" }
 wheels = [
-    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/d39/7455616adfdca/timeclock_schema-0.3.1-py3-none-any.whl", hash = "sha256:d397455616adfdca4aaf5efef0c8064267e49d1c7d387f7e4c4b51150e3f696c" },
+    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/71d/6d1a0d9df1fbc/timeclock_schema-0.4.0-py3-none-any.whl", hash = "sha256:71d6d1a0d9df1fbc7a0d12a249b122429d4de738b7fd6fa1638de14102f75909" },
 ]
 
 [[package]]
@@ -1620,7 +1620,7 @@ requires-dist = [
     { name = "nicegui", specifier = ">=3.18,<4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pygobject", marker = "sys_platform == 'linux'", specifier = ">=3.58.1" },
-    { name = "timeclock-schema", specifier = ">=0.3.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "timeclock-schema", specifier = ">=0.4.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "uvicorn", specifier = ">=0.54,<0.55" },
     { name = "uvloop", marker = "sys_platform == 'linux'", specifier = ">=0.23" },
 ]
