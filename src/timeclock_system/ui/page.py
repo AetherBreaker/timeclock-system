@@ -227,7 +227,7 @@ class _KioskPage:
 
   def _pin_pad(self, s: PinEntry) -> None:
     ui.label(text.ENTER_USERNAME if s.field == "username" else text.ENTER_PIN).classes("sft-title")
-    ui.label(s.digits if s.field == "username" else "•" * len(s.digits)).classes("text-4xl h-12")
+    ui.label(s.username if s.field == "username" else "•" * len(s.pin.get_secret_value())).classes("text-4xl h-12")
     if s.error:
       ui.label(s.error).classes("sft-error")
     with ui.grid(columns=3).classes("gap-2"):

@@ -228,11 +228,25 @@ async def test_pin_login_with_print_requires_that_employees_finger(kiosk: Kiosk)
   assert screen.auth is None
 
 
+async def test_the_pin_is_never_held_as_plain_text(kiosk: Kiosk) -> None:
+  # Typed PIN digits stay in a SecretStr until bcrypt checks them, so no repr, log or alert can show them.
+  await kiosk.ctl.use_pin()
+  await kiosk.type_and_enter(PINS[1])
+  for d in "1234":
+    await kiosk.ctl.digit(d)
+  s = kiosk.ctl.screen
+  assert isinstance(s, PinEntry)
+  assert isinstance(s.pin, SecretStr)
+  assert s.pin.get_secret_value() == "1234"
+  assert "1234" not in repr(s)
+  assert s.username == PINS[1]  # the username isn't secret
+
+
 async def test_wrong_pin_returns_to_username_with_error(kiosk: Kiosk) -> None:
   await kiosk.ctl.use_pin()
   await kiosk.type_and_enter(PINS[ANN])
   await kiosk.type_and_enter("9999")
-  assert kiosk.ctl.screen == PinEntry("username", "", "", None, touched_at=kiosk.t.mono, error=text.WRONG_PIN)
+  assert kiosk.ctl.screen == PinEntry("username", "", SecretStr(""), None, touched_at=kiosk.t.mono, error=text.WRONG_PIN)
 
 
 async def test_registration_happy_path_ends_in_the_menu(kiosk: Kiosk) -> None:
@@ -284,7 +298,7 @@ async def test_override_by_manager_pin_sets_pin_only(kiosk: Kiosk) -> None:
   await kiosk.ctl.request_override()
   await kiosk.ctl.use_pin()
   request = OverrideRequest(BOB, OverrideReason.NO_FINGERPRINT, None)
-  assert kiosk.ctl.screen == PinEntry("username", "", "", request, touched_at=kiosk.t.mono)
+  assert kiosk.ctl.screen == PinEntry("username", "", SecretStr(""), request, touched_at=kiosk.t.mono)
   await kiosk.type_and_enter(PINS[MIA])
   await kiosk.type_and_enter("1234")
   screen = kiosk.ctl.screen
