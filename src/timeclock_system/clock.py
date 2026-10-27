@@ -1,4 +1,4 @@
-"""The clock's domain rules (spec §4.5, §4.6, §6.4, §6.5): punches, PINs, overrides, registration, the gallery and the prune.
+"""The clock's domain rules (spec Â§4.5, Â§4.6, Â§6.4, Â§6.5): punches, PINs, overrides, registration, the gallery and the prune.
 
 Sync store calls run in `asyncio.to_thread`. The small mirrored tables are cached in memory and reloaded synchronously
 by `notify_changed`.
@@ -18,7 +18,7 @@ from pydantic import SecretBytes
 from timeclock_schema.enums import OverrideReason, PunchKind, RuleAction
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Override, Punch, RuleRow, Settings
 from timeclock_schema.rules import RuleContext, RuleValidationError, ValidatedRule, applicable_rules, evaluate, validate_rule
-from timeclock_schema.shifts import EmployeeState, build_timeline, week_bounds, worked_time
+from timeclock_schema.shifts import EmployeeState, apply_corrections, build_timeline, week_bounds, worked_time
 
 # First party imports
 from timeclock_system.hours import applicable_hours
@@ -308,7 +308,12 @@ class Clock:
   # -- weekly prune -------------------------------------------------------------------------------------------------
 
   async def _open_clock_ins(self) -> dict[int, datetime]:
-    """Each employee's open shift's clock-in, from the punches held locally."""
+    """Per employee with an open shift, the earliest *stored* `at` among that shift's punches.
+
+    Prune and the catch-up window compare stored times, so a correction moving the clock-in later must not make its
+    stored row look older than the bound (§6.5 keeps the whole open shift regardless of corrections). The shift's punches
+    are the clock-in plus every punch whose corrected time isn't before the corrected clock-in.
+    """
     punches, corrections = await asyncio.to_thread(lambda: (self._store.punches(), self._store.corrections()))
     by_employee: dict[int, list[Punch]] = defaultdict(list)
     for p in punches:
@@ -317,7 +322,10 @@ class Clock:
     for employee_id, employee_punches in by_employee.items():
       open_shift = build_timeline(employee_punches, corrections).open_shift
       if open_shift is not None:
-        open_clock_ins[employee_id] = open_shift.clock_in.at
+        stored_at = {p.id: p.at for p in employee_punches}
+        open_clock_ins[employee_id] = min(
+          stored_at[e.id] for e in apply_corrections(employee_punches, corrections) if e.at >= open_shift.clock_in.at
+        )
     return open_clock_ins
 
   async def catch_up_since(self) -> datetime:

@@ -11,12 +11,13 @@ import bcrypt
 import pytest
 from pydantic import BaseModel, SecretBytes, SecretStr
 from timeclock_schema import rules as schema_rules
-from timeclock_schema.enums import OverrideReason, PunchKind, RuleAction
-from timeclock_schema.models import Employee, Fingerprint, Punch, RuleRow
+from timeclock_schema.enums import CorrectionAction, OverrideReason, PunchKind, RuleAction
+from timeclock_schema.models import Employee, Fingerprint, Punch, PunchCorrection, RuleRow
 from timeclock_schema.shifts import EmployeeState
 
 # First party imports
 from timeclock_system.clock import Clock, OverrideGrant, PunchRefused
+from timeclock_system.scanner import GalleryPrint
 from timeclock_system.store import LocalStore
 
 if TYPE_CHECKING:
@@ -291,3 +292,32 @@ async def test_notify_changed_reloads_caches(env: Env) -> None:
 async def test_business_hours_and_settings_come_from_the_cache(env: Env) -> None:
   assert env.clock.business_hours() == ()
   assert env.clock.settings().subtract_lunch is True
+
+
+async def _amended_open_shift(env: Env) -> tuple[datetime, Punch]:
+  """An open shift stored Sunday 21:50 NY whose clock-in the owner amended to 22:00; clock is at Monday 09:00."""
+  stored = datetime(2026, 11, 8, 21, 50, tzinfo=NY).astimezone(UTC)
+  p = punch_at(1, PunchKind.CLOCK_IN, stored)
+  env.store.insert_punch(p, origin="db")
+  env.store.upsert_correction(
+    PunchCorrection(
+      id=uuid4(), punch_id=p.id, action=CorrectionAction.AMEND, new_at=stored + timedelta(minutes=10), recorded_at=stored
+    )
+  )
+  env.now = datetime(2026, 11, 9, 9, tzinfo=NY).astimezone(UTC)
+  return stored, p
+
+
+async def test_prune_keeps_a_clock_in_amended_later(env: Env) -> None:
+  await _amended_open_shift(env)
+  assert await env.clock.prune_week() == 0
+  assert (await env.clock.record_punch(1, PunchKind.CLOCK_OUT)).punch.kind is PunchKind.CLOCK_OUT
+
+
+async def test_catch_up_since_uses_the_stored_time_of_an_amended_clock_in(env: Env) -> None:
+  stored, _ = await _amended_open_shift(env)
+  assert await env.clock.catch_up_since() == stored
+
+
+def test_gallery_print_repr_hides_the_template() -> None:
+  assert "SECRETBYTES" not in repr(GalleryPrint(uuid4(), 1, b"SECRETBYTES"))
