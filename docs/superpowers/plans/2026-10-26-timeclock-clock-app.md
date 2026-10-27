@@ -810,7 +810,7 @@ async def test_pin_scan_after_hours_opens_the_reader()
   `raise SystemExit(1 if SHUTDOWN.kind >= ShutdownKind.FATAL else 0)`. Never wrap `serve()` in
   `handle_fatal_exc_sync` (the exit nudge would count as fatal, TODO #15).
 
-- [ ] **Step 1: Failing tests:**
+- [x] **Step 1: Failing tests:**
   `test_heartbeat_writes_each_interval` (fake `write`, `interval=0.05`, ≥ 3 calls in 0.2 s, each with `tz`),
   `test_heartbeat_skips_while_the_scanner_is_hung` (`scanner_busy` returns 91 → no calls);
   `test_crash_alert_line_shape` (a trail from `build_exception_trail(exc)` → one JSON line with those keys),
@@ -819,9 +819,9 @@ async def test_pin_scan_after_hours_opens_the_reader()
   GRACEFUL → nothing; FATAL → one line; capture the closure by patching `crash_alerts.register_for_shutdown`);
   `test_main_constants` (`PROJECT_NAME == "timeclock-system"`, `REQUIRE_LOG_SERVER is False`,
   `SHUTDOWN_ON_LOG_REJECTION is False`).
-- [ ] **Step 2: Run; they fail.** — **Step 3: Implement the three modules and `run_app`.**
-- [ ] **Step 4: Run; they pass** (+ ruff, pyright).
-- [ ] **Step 5: Commit** `feat(app): wire the clock, scanner, sync and page together`.
+- [x] **Step 2: Run; they fail.** — **Step 3: Implement the three modules and `run_app`.**
+- [x] **Step 4: Run; they pass** (+ ruff, pyright).
+- [x] **Step 5: Commit** `feat(app): wire the clock, scanner, sync and page together`.
 
 ---
 
