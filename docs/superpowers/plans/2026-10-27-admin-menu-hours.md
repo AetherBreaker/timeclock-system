@@ -86,19 +86,19 @@ tests `schema/tests/test_sql.py`, `test_models.py`.
 `fingerprint_exempt: bool = False`; `PHONE_PATTERN`, `EMAIL_PATTERN` in `models`; `Settings.paid_break_minutes: int = 30`,
 `weekly_hours_alert: Decimal = Decimal(40)`, `subtract_*` removed.
 
-- [ ] **Step 1: failing SQL tests** in `test_sql.py`: seed row has the new settings and no `subtract_*`; an employee
+- [x] **Step 1: failing SQL tests** in `test_sql.py`: seed row has the new settings and no `subtract_*`; an employee
   insert with an explicit `id` works and a later default insert still takes the sequence; phone and email checks accept
   `+15551234567` / `a@b.co` and refuse `5551234567` / `a@b`; `fingerprint_exempt` defaults false; a clock login inserts an
   employee (manager) with its own id, is refused an admin (`CheckViolation`) and can't set `fingerprint_exempt`; `postgres`
   inserts an admin; the bypass check (override row without `punch_id` refused, login row with `manager_id` refused, login
   row without punch accepted); the clock login inserts bypasses with `ON CONFLICT (id) DO NOTHING`; every table loads into
   its model (update the existing test for the rename).
-- [ ] **Step 2: run them** — `uv run pytest tests/test_sql.py` in `schema/`. Expected: the new tests FAIL.
-- [ ] **Step 3: revise 0001** per the decisions above; rename the `overrides` table, enum and grants; header comment
+- [x] **Step 2: run them** — `uv run pytest tests/test_sql.py` in `schema/`. Expected: the new tests FAIL.
+- [x] **Step 3: revise 0001** per the decisions above; rename the `overrides` table, enum and grants; header comment
   names the 2026-10-27 revision.
-- [ ] **Step 4: failing model tests** in `test_models.py`: patterns, bypass validator, settings defaults.
-- [ ] **Step 5: models and enums**; run `uv run pytest` in `schema/`. Expected: PASS.
-- [ ] **Step 6: commit** `feat(migrations): add contact fields, fingerprint_exempt, fingerprint_bypasses and hours settings`.
+- [x] **Step 4: failing model tests** in `test_models.py`: patterns, bypass validator, settings defaults.
+- [x] **Step 5: models and enums**; run `uv run pytest` in `schema/`. Expected: PASS.
+- [x] **Step 6: commit** `feat(migrations): add contact fields, fingerprint_exempt, fingerprint_bypasses and hours settings`.
 
 ### Task 2: the hours function
 
@@ -109,16 +109,16 @@ tests `schema/tests/test_sql.py`, `test_models.py`.
 `total_hours(punches, corrections, *, settings: Settings, tz: ZoneInfo, start, end, now) -> HoursTotals`.
 `worked_time` is deleted.
 
-- [ ] **Step 1: failing tests**: a shift with a 20-minute break → all paid; two breaks 20 + 20 → 30 paid, 10 unpaid; lunch
+- [x] **Step 1: failing tests**: a shift with a 20-minute break → all paid; two breaks 20 + 20 → 30 paid, 10 unpaid; lunch
   always unpaid; break over the allowance in one piece splits at the allowance; a break started 23:50 local and ended
   00:20 counts against the first day; allowance resets the next local day; a range starting mid-break clips the paid head
   and unpaid tail, not the allocation; an open break runs to `now`; a punch stamped after `now` (an automatic clock-out)
   doesn't count; `paid_break_minutes = 0` makes every break unpaid; `build_timeline(..., as_of=)` drops later punches; naive
   inputs raise `ValueError`.
-- [ ] **Step 2: run** `uv run pytest tests/test_shifts.py`. Expected: new tests FAIL (ImportError for `total_hours`).
-- [ ] **Step 3: implement.** Port the existing tests of `worked_time` to `total_hours(...).worked` + `paid_break` etc.
-- [ ] **Step 4: run**. Expected: PASS.
-- [ ] **Step 5: commit** `feat(shifts): one hours function with a daily paid break allowance`.
+- [x] **Step 2: run** `uv run pytest tests/test_shifts.py`. Expected: new tests FAIL (ImportError for `total_hours`).
+- [x] **Step 3: implement.** Port the existing tests of `worked_time` to `total_hours(...).worked` + `paid_break` etc.
+- [x] **Step 4: run**. Expected: PASS.
+- [x] **Step 5: commit** `feat(shifts): one hours function with a daily paid break allowance`.
 
 ### Task 3: the alert registry, and release 0.4.0
 
@@ -129,18 +129,18 @@ tests `schema/tests/test_sql.py`, `test_models.py`.
 `fired_hooks(ctx, hooks=HOOKS) -> tuple[Firing, ...]`; `WEEKLY_HOURS = "weekly_hours"`,
 `CONFIRMATION_NOTICE = "confirmation_notice"`; one registered type and one hook (lead 0).
 
-- [ ] **Step 1: failing tests**: weekly measure = worked + paid break for the week containing `now`; the hook fires at
+- [x] **Step 1: failing tests**: weekly measure = worked + paid break for the week containing `now`; the hook fires at
   exactly the limit and above, not below; a hook with a 1 h lead fires an hour early; registering a duplicate type key
   raises.
-- [ ] **Step 2: run**. Expected: FAIL.
-- [ ] **Step 3: implement**; README mentions the alert module if it lists modules.
-- [ ] **Step 4: full suite, pyright, ruff** in `schema/`. Expected: clean.
-- [ ] **Step 5: commit, PR, merge (rebase), release 0.4.0** (`poe release minor` from the main session).
+- [x] **Step 2: run**. Expected: FAIL.
+- [x] **Step 3: implement**; README mentions the alert module if it lists modules.
+- [x] **Step 4: full suite, pyright, ruff** in `schema/`. Expected: clean.
+- [x] **Step 5: commit, PR, merge (rebase), release 0.4.0** (`poe release minor` from the main session).
 
 ### Task 4: backend bump
 
-- [ ] **Step 1:** `timeclock-schema>=0.4.0`, relock, full backend suite against a fresh `timeclock-backend-pg`.
-- [ ] **Step 2:** commit `chore(deps): require timeclock-schema 0.4.0`, PR, merge, release (minor), pin it here.
+- [x] **Step 1:** `timeclock-schema>=0.4.0`, relock, full backend suite against a fresh `timeclock-backend-pg`.
+- [x] **Step 2:** commit `chore(deps): require timeclock-schema 0.4.0`, PR, merge, release (minor), pin it here.
 
 ### Task 5: clock domain, store and sync
 
