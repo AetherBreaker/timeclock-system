@@ -40,7 +40,6 @@ if hasattr(FPrint, "device_retry_quark"):
 else:
   _RETRY_SOURCE, _RETRY_DOMAIN = "FPrint.DeviceRetry.quark", GLib.quark_to_string(FPrint.DeviceRetry.quark())
 _ERROR_DOMAIN = GLib.quark_to_string(FPrint.device_error_quark())
-_POLL_SECS = 0.05
 
 
 def _reader_error(e: GLib.Error) -> Exception:
@@ -134,17 +133,6 @@ class FprintReader:
       raise _reader_error(e) from e
     return bytes(enrolled.serialize())
 
-  def wait_finger_off(self, timeout: float) -> None:
-    """Return once no finger is on the reader, or after `timeout` seconds."""
-    deadline = time.monotonic() + timeout
-    context = GLib.MainContext.default()
-    while self._device.get_finger_status() & FPrint.FingerStatusFlags.PRESENT and time.monotonic() < deadline:
-      # The driver reports finger status from main-context callbacks, which only run while someone iterates the
-      # context; between sync calls that is this thread, without blocking (R11.1 still holds: no main loop runs).
-      while context.iteration(may_block=False):
-        pass
-      time.sleep(_POLL_SECS)
-
 
 def _probe_identify(reader: FprintReader) -> None:
   # Split out of main for PLR0915.
@@ -155,7 +143,7 @@ def _probe_identify(reader: FprintReader) -> None:
     print(f"template_bytes={len(template)}")
     gallery = [GalleryPrint(uuid4(), 0, template)]
     for attempt in range(1, 4):
-      reader.wait_finger_off(2.0)
+      time.sleep(2.0)  # the scanner's finger_off_pause
       print(f"identify {attempt}: press the finger")
       started = time.monotonic()
       try:
@@ -181,7 +169,7 @@ def _soak(reader: FprintReader, minutes: float) -> None:
         # An empty gallery still captures (§6.2's version-2 path), so no enrollment is needed to soak.
         reader.identify([], token, lambda: None)
         print(f"{time.strftime('%H:%M:%S')} capture")
-        reader.wait_finger_off(2.0)
+        time.sleep(2.0)  # the scanner's finger_off_pause
       except ScanCancelled:
         print(f"{time.strftime('%H:%M:%S')} re-armed")
       except ReaderTooHot:
