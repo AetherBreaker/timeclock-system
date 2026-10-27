@@ -884,7 +884,7 @@ async def test_pin_scan_after_hours_opens_the_reader()
   `docker run --rm --entrypoint /app/.venv/bin/python timeclock-system:dev -c "import gi; gi.require_version('FPrint', '2.0'); from gi.repository import FPrint; print(FPrint.Context.new())"`
   prints a Context; and `docker run --rm --entrypoint sh timeclock-system:dev -c "dpkg -l | grep -c libfprint-2-2"` prints `0`.
 - [x] **Step 5: Commit** `feat(docker): build the patched libfprint into the image`.
-- [ ] **Step 6: On timeclock-dev, the reader checks.** Say first that you're loading the `timeclock-system:dev`
+- [x] **Step 6: On timeclock-dev, the reader checks.** (done 2026-10-27; soak skipped by the owner) Say first that you're loading the `timeclock-system:dev`
   image onto timeclock-dev (no packages installed). `docker save timeclock-system:dev | ssh timeclock-dev sudo docker load`.
   The spike's `kiosk-test` container doesn't touch the reader; leave it until Task 15. Then, each with
   `ssh -t timeclock-dev sudo docker run --rm -it -v /dev/bus/usb:/dev/bus/usb --device-cgroup-rule='c 189:* rmw' --entrypoint /app/.venv/bin/python timeclock-system:dev -m timeclock_system.fprint_reader …`
@@ -1007,9 +1007,9 @@ APT::Periodic::Unattended-Upgrade "1";
 - [x] **Step 4: Commit** `feat(image): install security updates and ask for the hostname`.
 - [x] **Step 5: Full checks** — `uv run pytest` (Postgres up, variable set: nothing skipped), `uv run ruff check .`,
   `uv run pyright`. Fix what fails in its task's style.
-- [ ] **Step 6: PR** — `git push`, `gh pr create --title "Clock app and kiosk" --body "<tasks 1–14, Task 12's four hardware results, and the Claude Code attribution line>"`.
-- [ ] **Step 7 (Owner):** review, run the suite by hand, merge.
-- [ ] **Step 8: Release** — on `main`: `uv run poe release-and-pin` (no bump word: publishes 0.1.0 and pins
+- [x] **Step 6: PR** (PR #1) — `git push`, `gh pr create --title "Clock app and kiosk" --body "<tasks 1–14, Task 12's four hardware results, and the Claude Code attribution line>"`.
+- [x] **Step 7 (Owner):** review, run the suite by hand, merge. (the owner waived the review; merged 2026-10-27)
+- [x] **Step 8: Release** (v0.1.0) — on `main`: `uv run poe release-and-pin` (no bump word: publishes 0.1.0 and pins
   compose's `GIT_TAG` to `v0.1.0`). It needs the repo's `UV_INDEX_SFTPYPI_USERNAME`/`UV_INDEX_SFTPYPI_PASSWORD`
   GitHub secrets; if the publish job fails on them, stop and ask the owner (`docker-pin` refuses an incomplete
   release).
