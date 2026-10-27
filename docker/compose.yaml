@@ -66,6 +66,8 @@ services:
     privileged: true
     volumes:
       - /dev:/dev
+      # Remote access: the RustDesk client package (kept out of git) and its settings (docker/kiosk/remote.sh).
+      - /data/timeclock_system_files/remote:/remote
     environment:
       - KIOSK_URL=http://timeclock-system:8080/?kiosk  # `?kiosk`: only this browser hides the cursor (page.py)
     depends_on:

@@ -1230,6 +1230,15 @@ for `docker/kiosk/`; the reader script is the logic `timeclock-reader-access` po
 own udevd; no host networking. Touch arrives as real touch events; a replugged touchscreen works again,
 including on another USB port. The DBus and `xdg_surface` warnings in its log are cosmetic.
 
+Remote access (owner, 2026-10-27): the kiosk also runs RustDesk (the owner's custom client, Sweet Fire Support Desk)
+unattended on cage's Wayland session, beside cage and never in its way (`docker/kiosk/remote.sh`); a failure only costs
+remote access. The client package is kept out of git (its password is baked in) and installed at every start from
+`/data/timeclock_system_files/remote/`, where its settings, and so its ID, persist. The image adds the screen-sharing
+stack (session bus, PipeWire, `xdg-desktop-portal-wlr` set to share the one screen without asking) and a stand-in
+`loginctl` reporting cage's session, since RustDesk's service needs a logind session. X11 also worked; cage was kept
+since a RustDesk failure can't affect the app. The cage-only kiosk stays in `docker/kiosk-cage-only/` as a backup.
+The Dockerfile below is the cage-only one.
+
 ```dockerfile
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \

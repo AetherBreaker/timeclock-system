@@ -231,3 +231,6 @@ persisted_data/
 # ---- project-specific ----
 # ---- SFT additions ----
 *.svg
+
+# The remote-access client: its password is baked in (docker/kiosk/remote.sh)
+*.deb
