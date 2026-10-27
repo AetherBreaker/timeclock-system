@@ -73,6 +73,14 @@ services:
         condition: service_healthy
     networks:
       - coolify
+    # The compositor and the browser are running; a Firefox exit ends cage and the container anyway, so this mostly
+    # gives Coolify a health status (the image has grep, not pgrep).
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qsx cage /proc/[0-9]*/comm && grep -qsx firefox-esr /proc/[0-9]*/comm"]
+      start_period: 30s
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 networks:
   coolify:
