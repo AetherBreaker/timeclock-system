@@ -159,13 +159,13 @@ tests `schema/tests/test_sql.py`, `test_models.py`.
   `check_new_pin(pin) -> bool`; `EmployeeBlockFull(PunchRefused)`; `override_manager` refuses pending employees.
 - Sync: employees pushed first (plain insert, refusal alerted once), login bypasses after punches.
 
-- [ ] **Step 1: failing tests** for each Produces item, including Review Focus 1 and 2: a refused employee's punch is
+- [x] **Step 1: failing tests** for each Produces item, including Review Focus 1 and 2: a refused employee's punch is
   never pushed; a mirror employee sharing a pending id is hidden from menu and gallery; a lost ack settles without an
   alert; next number with an empty block, after the clock's own pending one, and full block; phone formats.
-- [ ] **Step 2: run** targeted. Expected: FAIL.
-- [ ] **Step 3: implement**; compose gets `CLOCK_NUMBER=${CLOCK_NUMBER:?}`; the setup doc's env table gets the row.
-- [ ] **Step 4: run** targeted. Expected: PASS.
-- [ ] **Step 5: commit** `feat(clock): add clock-created employees, PIN-only login and fingerprint bypasses`.
+- [x] **Step 2: run** targeted. Expected: FAIL.
+- [x] **Step 3: implement**; compose gets `CLOCK_NUMBER=${CLOCK_NUMBER:?}`; the setup doc's env table gets the row.
+- [x] **Step 4: run** targeted. Expected: PASS.
+- [x] **Step 5: commit** `feat(clock): add clock-created employees, PIN-only login and fingerprint bypasses`.
 
 ### Task 6: screens
 
@@ -175,18 +175,20 @@ tests `schema/tests/test_sql.py`, `test_models.py`.
 `PinEntry.purpose: OverrideRequest | PinRecheck | None`; entry points `admin()`, `add_employee()`, `edit_details(**)`,
 `submit_details()`, `skip_fingerprint()`; `Confirmation.notices`.
 
-- [ ] **Step 1: failing tests**: admin PIN login → menu with a bypass row; exempt likewise; Admin button only for admins;
+- [x] **Step 1: failing tests**: admin PIN login → menu with a bypass row; exempt likewise; Admin button only for admins;
   reconfirm by finger and by PIN (PIN recorded; another person's PIN refused); a scan by someone else on reconfirm opens
   their menu; the details form's errors per field; editing a field doesn't change screen equality (Review Focus 4); PIN
   mismatch clears both; save happens only after the PIN; skip, cancel and enrol paths reach the Done screen; the weekly
   notice shows on the confirmation at 40 h; an admin/exempt rescan accepts a PIN.
-- [ ] **Step 2: run** targeted. Expected: FAIL.
-- [ ] **Step 3: implement**.
-- [ ] **Step 4: full suite, pyright, ruff**. Expected: clean.
-- [ ] **Step 5: commit** `feat(ui): admin menu, add-employee flow and the weekly-hours notice`.
+- [x] **Step 2: run** targeted. Expected: FAIL.
+- [x] **Step 3: implement**.
+- [x] **Step 4: full suite, pyright, ruff**. Expected: clean.
+- [x] **Step 5: commit** `feat(ui): admin menu, add-employee flow and the weekly-hours notice`.
 
 ### Task 7: hardware check and hand-off
 
 - [ ] **Step 1:** rebuild the demo image on timeclock-dev and run it; the owner plugs a keyboard into the running clock and
   types into the form (§13). If it isn't picked up, fix the kiosk image.
-- [ ] **Step 2:** PR for the clock; report to the owner.
+  - [x] demo image rebuilt and running as tc-demo (`CLOCK_NUMBER=99`)
+  - [ ] keyboard check (the owner deferred it to 2026-10-28; a failure gets a follow-up PR)
+- [x] **Step 2:** PR for the clock; report to the owner.
