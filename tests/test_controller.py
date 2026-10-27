@@ -21,6 +21,7 @@ from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
 from timeclock_system.ui import text
 from timeclock_system.ui.controller import (
+  IDLE_CLOSE_SECS,
   AddEmployeeDetails,
   AdminMenu,
   AdminReconfirm,
@@ -657,6 +658,28 @@ async def test_cancel_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) -> 
   await kiosk.ctl.cancel()
   assert isinstance(kiosk.ctl.screen, EmployeeAdded)
   assert [e.id for e in kiosk.store.pending_employees()] == [10001]
+
+
+async def test_a_timeout_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) -> None:
+  await fill_details(kiosk)
+  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("11")
+  kiosk.t.advance(IDLE_CLOSE_SECS)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)
+  kiosk.t.advance(IDLE_CLOSE_SECS)
+  await kiosk.ctl.tick()  # Done itself times out to idle
+  assert kiosk.ctl.screen == Idle()
+
+
+async def test_a_timeout_while_registering_the_new_employee_counts_as_a_skip(kiosk: Kiosk) -> None:
+  await fill_details(kiosk)
+  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("11")
+  await kiosk.ctl.register()
+  kiosk.t.advance(IDLE_CLOSE_SECS)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)
 
 
 async def test_the_weekly_hours_notice_shows_on_the_confirmation(kiosk: Kiosk) -> None:
