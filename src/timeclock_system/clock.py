@@ -1,4 +1,4 @@
-"""The clock's domain rules (spec Â§4.5, Â§4.6, Â§6.4, Â§6.5): punches, PINs, overrides, registration, the gallery and the prune.
+"""The clock's domain rules (spec §4.5, §4.6, §6.4, §6.5): punches, PINs, overrides, registration, the gallery and the prune.
 
 Sync store calls run in `asyncio.to_thread`. The small mirrored tables are cached in memory and reloaded synchronously
 by `notify_changed`.
