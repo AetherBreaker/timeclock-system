@@ -47,6 +47,12 @@ _SELECT: Final[dict[str, LiteralString]] = {
   "punch_corrections": "SELECT id, punch_id, action, new_at, new_kind, note, recorded_at FROM punch_corrections",
   "fingerprints": "SELECT id, employee_id, template, registered_at, instance_id, db_login FROM fingerprints",
 }
+# Every employee's punches before the window with no clock-out at or after them: an open shift's tail, however old, so a
+# shift begun at another clock while this one was offline across Monday 00:00 still offers a clock-out (§6.6 step 3).
+_OPEN_TAILS: Final = (
+  _SELECT["punches"] + " p WHERE at < %(since)s AND NOT EXISTS (SELECT 1 FROM punches o WHERE o.employee_id = p.employee_id "
+  "AND o.kind = 'clock_out' AND o.at >= p.at AND o.at < %(since)s)"
+)
 # The small tables a notification updates row by row; business hours and settings are re-fetched whole.
 _ROW_MIRRORED: Final[dict[MirrorTable, type[TimeclockModel]]] = {"employees": Employee, "groups": Group, "rules": RuleRow}
 _CHANGE_NAME: Final[dict[str, ChangeTable]] = {
@@ -198,11 +204,13 @@ class DatabaseSync:
     """Fetch the local window and every small table, then replace the local copies (§6.6 step 3)."""
     since = await self._clock.catch_up_since()
     punches = await self._fetch(conn, Punch, _SELECT["punches"] + " WHERE at >= %(since)s", since=since)
+    open_tails = await self._fetch(conn, Punch, _OPEN_TAILS, since=since)
     corrections = await self._fetch(
       conn,
       PunchCorrection,
-      _SELECT["punch_corrections"] + " WHERE punch_id IN (SELECT id FROM punches WHERE at >= %(since)s)",
+      _SELECT["punch_corrections"] + " WHERE punch_id IN (SELECT id FROM punches WHERE at >= %(since)s) OR punch_id = ANY(%(tails)s)",
       since=since,
+      tails=[t.id for t in open_tails],
     )
     small: dict[MirrorTable, list[TimeclockModel]] = {
       table: await self._fetch(conn, model, _SELECT[table]) for table, model in _ROW_MIRRORED.items()
@@ -212,7 +220,9 @@ class DatabaseSync:
     settings = await self._fetch(conn, Settings, _SELECT["config.settings"])
 
     def store_all() -> None:
-      self._store.replace_db_punches(punches, since=since)
+      # The tails are only upserted: outside the window, so never deleted here. Once stored they're open shifts the
+      # clock holds, so the next catch_up_since reaches back to them and owner deletes land then.
+      self._store.replace_db_punches([*open_tails, *punches], since=since)
       self._store.replace_corrections(corrections)
       for table, rows in small.items():
         self._store.replace_table(table, rows)
