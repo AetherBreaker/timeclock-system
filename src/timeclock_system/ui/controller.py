@@ -9,6 +9,7 @@ import contextlib
 import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, Protocol
 
 # Third party imports
@@ -18,7 +19,17 @@ from timeclock_schema.enums import OverrideReason
 # First party imports
 from timeclock_system.clock import MenuInfo, OverrideGrant, PunchRefused
 from timeclock_system.hours import is_open
-from timeclock_system.scanner import Enrolled, EnrollFailed, EnrollStage, FingerDown, Matched, NoMatch, ReaderMode, Retry
+from timeclock_system.scanner import (
+  Enrolled,
+  EnrollFailed,
+  EnrollStage,
+  FingerDown,
+  Matched,
+  NoMatch,
+  ReaderMode,
+  ReaderPaused,
+  Retry,
+)
 from timeclock_system.ui import text
 
 if TYPE_CHECKING:
@@ -41,6 +52,15 @@ WAKE_SECS = 30  # R40.2
 DOUBLE_TAP_SECS = 0.5  # two taps this close end a confirmation early
 SCAN_IN_PROGRESS_SECS = 16  # the spike's slowest resting thumb
 _MAX_DIGITS = 12
+
+
+class ReaderIndicator(StrEnum):
+  """The reader icon in the screen's corner, on every screen."""
+
+  READY = "ready"  # waiting for a finger
+  SCANNING = "scanning"  # a finger is down and its scan hasn't finished
+  PAUSED = "paused"  # the reader paused itself (too hot), which the patched reader shouldn't do
+  ASLEEP = "asleep"  # closed outside business hours until a tap
 
 
 @dataclass(frozen=True)
@@ -183,6 +203,8 @@ class KioskController:
     # The confirmation and time of its last tap, kept off the screen so the first tap of a double tap doesn't redraw it.
     self._confirmation_tap: tuple[Confirmation, float] | None = None
     self._last_finger = float("-inf")
+    self._scanning = False  # a FingerDown not yet followed by its scan's outcome
+    self._paused_until = float("-inf")
     self._mode: ReaderMode | None = None
     self._sync_reader()
 
@@ -196,8 +218,20 @@ class KioskController:
     """Whether the reader is open; the idle screen says "Tap to scan" when it isn't."""
     return self._mode is not ReaderMode.CLOSED
 
+  @property
+  def reader_indicator(self) -> ReaderIndicator:
+    """What the reader icon shows; a scan with no outcome within the slowest scan's time stops counting."""
+    now = self._mono()
+    if not self.reader_awake:
+      return ReaderIndicator.ASLEEP
+    if now < self._paused_until:
+      return ReaderIndicator.PAUSED
+    if self._scanning and now - self._last_finger < SCAN_IN_PROGRESS_SECS:
+      return ReaderIndicator.SCANNING
+    return ReaderIndicator.READY
+
   def add_listener(self, cb: Callable[[], object]) -> None:
-    """Call `cb` after any entry point that changed `screen` or `reader_awake`."""
+    """Call `cb` after any entry point that changed `screen`, `reader_awake` or `reader_indicator`."""
     self._listeners.append(cb)
 
   def _sync_reader(self) -> None:
@@ -221,10 +255,10 @@ class KioskController:
   async def _transition(self) -> AsyncGenerator[None]:
     """Run one entry point under the lock, then set the reader's mode and tell the listeners of any change."""
     async with self._lock:
-      before = (self._screen, self.reader_awake)
+      before = (self._screen, self.reader_awake, self.reader_indicator)
       yield
       self._sync_reader()
-      if (self._screen, self.reader_awake) != before:
+      if (self._screen, self.reader_awake, self.reader_indicator) != before:
         for cb in self._listeners:
           cb()
 
@@ -269,15 +303,15 @@ class KioskController:
     async with self._transition():
       now = self._mono()
       s = self._screen
+      # Every outcome below ends the scan the indicator shows; only FingerDown starts one.
+      self._scanning = isinstance(ev, FingerDown)
       match ev:
         case FingerDown():
           self._last_finger = now
-          if isinstance(s, Idle):
-            self._screen = Idle(text.SCANNING, until=now + SCAN_IN_PROGRESS_SECS)
-          elif isinstance(s, Rescan | PinScan | OverridePrompt):
-            self._screen = replace(s, message=text.SCANNING, touched_at=now)
-          elif isinstance(s, Menu | PinEntry | RegisterPrompt | Registering):
+          if not isinstance(s, Idle | Confirmation):
             self._screen = replace(s, touched_at=now)
+        case ReaderPaused(seconds=seconds):
+          self._paused_until = now + seconds
         case NoMatch() | Retry():
           message = text.NOT_RECOGNIZED if isinstance(ev, NoMatch) else text.RETRY
           if isinstance(s, Idle):

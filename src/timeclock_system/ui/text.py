@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 IDLE_READY: Final = "Place your finger on the reader"
 IDLE_ASLEEP: Final = "Tap to scan"
-SCANNING: Final = "Scanning…"
+READER_ASLEEP: Final = "Tap to wake the reader"
 NOT_RECOGNIZED: Final = "Not recognized: try again or use your PIN"
 RETRY: Final = "Couldn't read that, try again"
 USE_PIN: Final = "Use PIN"

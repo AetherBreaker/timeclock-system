@@ -21,6 +21,7 @@ from timeclock_system.ui.controller import (
   OverridePrompt,
   PinEntry,
   PinScan,
+  ReaderIndicator,
   Registering,
   RegisterPrompt,
   Rescan,
@@ -52,6 +53,10 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
   color: var(--sft-black) !important; }
 .sft-error { color: var(--sft-red); }
 .sft-title { font-size: 2.5rem; font-weight: 600; }
+.reader-ready { color: var(--sft-white); opacity: 0.35; }
+.reader-scanning { color: var(--sft-yellow); }
+.reader-paused { color: var(--sft-red); }
+.reader-asleep { color: var(--sft-white); opacity: 0.35; }
 """
 # R13.2: no text selection, no long-press menu.
 _NO_SELECT_CSS = "body { user-select: none; -webkit-user-select: none; touch-action: manipulation; }"
@@ -144,6 +149,7 @@ class _KioskPage:
   @ui.refreshable_method
   def screen(self) -> None:
     s = self._controller.screen
+    self._reader_indicator()
     with ui.column().classes("w-full items-center gap-6 pt-8"):
       match s:
         case Idle():
@@ -171,6 +177,18 @@ class _KioskPage:
           self._confirmation(s)
 
   # The per-screen renderers below are split out of `screen` for C901/PLR0912.
+
+  def _reader_indicator(self) -> None:
+    # The reader icon, on every screen; redrawn with the screen, since the controller reports its changes too.
+    indicator = self._controller.reader_indicator
+    with (
+      ui.row()
+      .classes(f"fixed bottom-2 left-4 z-20 items-center gap-2 text-base reader-{indicator}")
+      .mark("reader-indicator", f"reader-{indicator}")
+    ):
+      ui.icon("fingerprint").classes("text-4xl")
+      if indicator is ReaderIndicator.ASLEEP:
+        ui.label(text.READER_ASLEEP)
 
   async def _guarded(self, call: Callable[[], object]) -> None:
     # Every button, tap and key runs through here, so their exceptions reach on_error; NiceGUI's own errors (a send to a
