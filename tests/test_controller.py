@@ -125,6 +125,11 @@ def test_format_clock_time() -> None:
 
 def test_format_hours_and_db_status() -> None:
   assert text.format_hours(timedelta(hours=7, minutes=30)) == "7.50 h"
+  # Truncated, never rounded, and exact: 7 h 36 min is 7.6 h, which a float division puts just below 7.60.
+  assert text.format_hours(timedelta(hours=7, minutes=36)) == "7.60 h"
+  assert text.format_hours(timedelta(hours=7, minutes=7, seconds=30)) == "7.12 h"
+  assert text.format_hours(timedelta(hours=7, minutes=59, seconds=59)) == "7.99 h"
+  assert text.format_hours(timedelta(seconds=35)) == "0.00 h"
   assert text.format_db_status(DbStatus(connected=True, last_contact=START), NY) == "Database connected · last contact 8:02 AM"
   assert text.format_db_status(DbStatus(connected=False, last_contact=None), NY) == "Database offline · last contact never"
 
