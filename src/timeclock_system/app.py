@@ -40,6 +40,10 @@ _TICK_SECS = 0.5
 _GALLERY_TABLES: frozenset[ChangeTable] = frozenset({"employees", "fingerprints", "punches"})
 
 
+def _send_alert(reason: str, details: str) -> None:
+  alert(reason, details, in_except_block=False, wait=False)  # wait=False: the loop never waits on a send
+
+
 @contextlib.contextmanager
 def _no_signal_capture(_server: uvicorn.Server) -> Generator[None]:
   # R21: aeth_ext's signal handlers drive the shutdown; uvicorn's own capture would take the signals from them.
@@ -54,12 +58,7 @@ def serve(project_name: str) -> None:
   """
   settings = ClockSettings.get_settings()
   store = LocalStore(settings.store_path)
-  clock = Clock(
-    store,
-    instance_id=settings.instance_id or "",  # the validator guarantees it's set
-    tz=settings.tz,
-    alert=lambda r, d: alert(r, d, in_except_block=False, wait=False),  # wait=False: the loop never waits on a send
-  )
+  clock = Clock(store, instance_id=settings.instance_id or "", tz=settings.tz, alert=_send_alert)  # the validator sets the id
   reader = FprintReader()  # a missing reader raises ReaderGone here, uncaught: fatal at startup (R14.7)
 
   # asyncio holds tasks weakly, so every task and scanner-event future is kept here until it finishes, and one
@@ -84,7 +83,7 @@ def serve(project_name: str) -> None:
       loop.call_soon_threadsafe(lambda: keep("Scanner event", controller.on_scanner_event(ev)))
 
   scanner = Scanner(reader, post, lambda m: trigger_shutdown("Fingerprint reader lost", m))
-  sync = DatabaseSync(clock, store, settings.conninfo())
+  sync = DatabaseSync(clock, store, settings.conninfo(), alert=_send_alert)
   controller = KioskController(clock, scanner, tz=settings.tz)
 
   register_crash_alert_writer(

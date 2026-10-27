@@ -1,6 +1,7 @@
 """Mirror PostgreSQL into the local store and push this clock's records, through the backend's relay (spec §6.6).
 
-One task owns one connection. Any database or network error drops it and the loop starts over from connecting.
+One task owns one connection. Any database or network error drops it and the loop starts over from connecting, except
+the database refusing one pushed record: that record is alerted, kept and retried, and the push goes on (see _push).
 """
 
 # Standard library imports
@@ -92,7 +93,13 @@ class DatabaseSync:
   """Keeps the local store in step with PostgreSQL and pushes local records, forever."""
 
   def __init__(
-    self, clock: Clock, store: LocalStore, conninfo: str, *, now: Callable[[], datetime] = lambda: datetime.now(UTC)
+    self,
+    clock: Clock,
+    store: LocalStore,
+    conninfo: str,
+    *,
+    alert: Callable[[str, str], None],
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
   ) -> None:
     """Create the sync; `run` starts it.
 
@@ -100,9 +107,12 @@ class DatabaseSync:
       clock: Told which tables changed after every catch-up and notification.
       store: The local store it mirrors into and pushes from.
       conninfo: libpq connection string for the backend's relay, with its keepalives (`ClockSettings.conninfo`).
+      alert: Sends an alert (reason, details) without waiting; told once about each record the database refuses.
       now: The wall clock, injectable for tests.
     """
     self._clock = clock
+    self._alert = alert
+    self._refused: set[UUID] = set()  # records already alerted
     self._store = store
     self._conninfo = conninfo
     self._now = now
@@ -214,35 +224,54 @@ class DatabaseSync:
     self._since = since
     self._clock.notify_changed(_CHANGE_NAME.values())
 
+  def _refused_record(self, kind: str, record_id: UUID, summary: str, e: psycopg.Error) -> None:
+    # One alert per record: it stays unsynced and is retried on every push, so the owner can correct it at the clock
+    # (an employee is only ever disabled, so a refusal means a mistaken delete or a bug).
+    logger.warning("the database refused %s %s: %s", kind, record_id, e)
+    if record_id not in self._refused:
+      self._refused.add(record_id)
+      self._alert(f"Database refused a {kind}", f"{kind} {record_id} ({summary}) stays on this clock and is retried: {e}")
+
   async def _push(self, conn: AsyncConnection[DictRow]) -> None:
-    """Push unsynced records oldest first, one transaction per punch with its override (§6.6 step 4, R38)."""
+    """Push unsynced records oldest first, one transaction per punch with its override (§6.6 step 4, R38).
+
+    A record the database refuses doesn't hold back the ones after it: it's alerted, kept unsynced and retried next push.
+    """
     for punch, override in await asyncio.to_thread(self._store.unsynced_punches):
-      async with conn.transaction():
-        await conn.execute(
-          _INSERT_PUNCH,
-          {
-            "id": punch.id,
-            "employee_id": punch.employee_id,
-            "kind": punch.kind.value,
-            "at": punch.at,
-            "instance_id": punch.instance_id,
-          },
-        )
-        if override is not None:
-          params = override.model_dump(include={"id", "punch_id", "employee_id", "manager_id", "pin_only", "at", "instance_id"})
-          await conn.execute(_INSERT_OVERRIDE, {**params, "reason": override.reason.value})
+      try:
+        async with conn.transaction():
+          await conn.execute(
+            _INSERT_PUNCH,
+            {
+              "id": punch.id,
+              "employee_id": punch.employee_id,
+              "kind": punch.kind.value,
+              "at": punch.at,
+              "instance_id": punch.instance_id,
+            },
+          )
+          if override is not None:
+            params = override.model_dump(include={"id", "punch_id", "employee_id", "manager_id", "pin_only", "at", "instance_id"})
+            await conn.execute(_INSERT_OVERRIDE, {**params, "reason": override.reason.value})
+      except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as e:
+        self._refused_record("punch", punch.id, f"employee {punch.employee_id}, {punch.kind.value} at {punch.at}", e)
+        continue
       await asyncio.to_thread(self._store.mark_punch_synced, punch.id)
     for f in await asyncio.to_thread(self._store.unsynced_fingerprints):
-      await conn.execute(
-        _INSERT_FINGERPRINT,
-        {
-          "id": f.id,
-          "employee_id": f.employee_id,
-          "template": f.template.get_secret_value(),
-          "registered_at": f.registered_at,
-          "instance_id": f.instance_id,
-        },
-      )
+      try:
+        await conn.execute(
+          _INSERT_FINGERPRINT,
+          {
+            "id": f.id,
+            "employee_id": f.employee_id,
+            "template": f.template.get_secret_value(),
+            "registered_at": f.registered_at,
+            "instance_id": f.instance_id,
+          },
+        )
+      except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as e:
+        self._refused_record("fingerprint", f.id, f"employee {f.employee_id}", e)
+        continue
       await asyncio.to_thread(self._store.mark_fingerprint_synced, f.id)
 
   async def _apply(self, conn: AsyncConnection[DictRow], payload: str) -> None:

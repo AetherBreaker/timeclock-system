@@ -111,6 +111,7 @@ class Rig:
   clock: Clock
   sync: DatabaseSync
   statuses: list[bool]
+  alerts: list[tuple[str, str]]
 
 
 @pytest.fixture
@@ -125,12 +126,13 @@ async def rig(pg: Pg, tmp_path: Path) -> AsyncIterator[Callable[[], Awaitable[Ri
     stores.append(store)
     clock = Clock(store, instance_id="1", tz=ZoneInfo("America/New_York"), alert=lambda _s, _b: None)
     await clock.load()
-    sync = DatabaseSync(clock, store, pg.clock_dsn)
+    alerts: list[tuple[str, str]] = []
+    sync = DatabaseSync(clock, store, pg.clock_dsn, alert=lambda reason, details: alerts.append((reason, details)))
     statuses: list[bool] = []
     sync.add_status_listener(lambda s: statuses.append(s.connected))
     tasks.append(asyncio.create_task(sync.run()))
     await eventually(lambda: sync.status.connected, "the first connect")
-    return Rig(pg, path, store, clock, sync, statuses)
+    return Rig(pg, path, store, clock, sync, statuses, alerts)
 
   yield start
   for task in tasks:
@@ -204,6 +206,27 @@ async def test_push_is_idempotent(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> 
   r.sync.wake()
   await eventually(lambda: r.store.unsynced_punches() == [], "the re-push")
   assert await admin_execute(pg, "SELECT count(*) FROM punches") == [(1,)]
+
+
+async def test_a_refused_punch_doesnt_hold_back_later_ones(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
+  # An employee deleted on the server (by mistake: they're only ever disabled) while this clock held their punch.
+  ann = await seed_employee(pg)
+  r = await rig()
+  refused = local_punch(ann + 1000)
+  later = local_punch(ann)
+  r.store.insert_punch(refused, origin="local")
+  r.store.insert_punch(later, origin="local")
+  r.sync.wake()
+  await eventually(lambda: [p.id for p, _ in r.store.unsynced_punches()] == [refused.id], "the later punch's push")
+  last = local_punch(ann, PunchKind.CLOCK_OUT)
+  r.store.insert_punch(last, origin="local")
+  r.sync.wake()
+  await eventually(lambda: [p.id for p, _ in r.store.unsynced_punches()] == [refused.id], "the next push, retrying the refused")
+  assert await admin_execute(pg, "SELECT count(*) FROM punches") == [(2,)]
+  [(reason, details)] = r.alerts  # once, though the refused punch was retried
+  assert "refused" in reason
+  assert str(refused.id) in details
+  assert r.sync.status.connected
 
 
 async def test_reconnects_after_the_connection_is_killed(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
@@ -280,4 +303,6 @@ async def test_last_contact_survives_a_restart(pg: Pg, rig: Callable[[], Awaitab
   r = await rig()
   saved = r.sync.status.last_contact
   assert saved is not None
-  assert DatabaseSync(r.clock, r.store, pg.clock_dsn).status == DbStatus(connected=False, last_contact=saved)
+  assert DatabaseSync(r.clock, r.store, pg.clock_dsn, alert=lambda _r, _d: None).status == DbStatus(
+    connected=False, last_contact=saved
+  )
