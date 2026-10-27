@@ -389,7 +389,9 @@ class KioskController:
       if now - s.opened_at > RESCAN_AFTER_SECS:
         self._screen = Rescan(s.info.employee_id, kind, s.auth, touched_at=now)
       else:
-        self._screen = await self._record(s.info.employee_id, kind, s.auth)
+        screen = await self._record(s.info.employee_id, kind, s.auth)
+        # A refusal reopens the menu; only a new scan restarts R45.2's 30 s window, so it keeps this menu's.
+        self._screen = replace(screen, opened_at=s.opened_at) if isinstance(screen, Menu) else screen
 
   async def register(self) -> None:
     """Start enrolling the employee's finger (R23.4)."""

@@ -211,6 +211,20 @@ async def test_refused_punch_shows_notice_and_stores_nothing(kiosk: Kiosk) -> No
   assert kiosk.store.punches() == []
 
 
+async def test_a_refused_punch_keeps_the_scans_30s_window(kiosk: Kiosk) -> None:
+  # R45.2: only a new scan restarts the window; reopening the menu with a refusal doesn't.
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  scanned_at = kiosk.t.mono
+  kiosk.t.advance(20)
+  await kiosk.ctl.punch(PunchKind.CLOCK_OUT)  # refused: Ann is clocked out
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu)
+  assert screen.opened_at == scanned_at
+  kiosk.t.advance(11)
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  assert kiosk.ctl.screen == Rescan(ANN, PunchKind.CLOCK_IN, None, touched_at=kiosk.t.mono)
+  assert kiosk.store.punches() == []
+
 async def test_pin_login_without_print_prompts_registration(kiosk: Kiosk) -> None:
   await kiosk.pin_login(BOB)
   assert kiosk.ctl.screen == RegisterPrompt(BOB, touched_at=kiosk.t.mono)
