@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import bcrypt
 import pytest
 from pydantic import SecretBytes, SecretStr
-from timeclock_schema.enums import OverrideReason, PunchKind
+from timeclock_schema.enums import EmployeeRole, OverrideReason, PunchKind
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint
 
 # First party imports
@@ -95,7 +95,7 @@ async def kiosk(tmp_path: Path) -> AsyncIterator[Kiosk]:
     [
       Employee(id=ANN, name="Ann", pin_username=PINS[ANN], pin_hash=pin_hash, updated_at=START),
       Employee(id=BOB, name="Bob", pin_username=PINS[BOB], pin_hash=pin_hash, updated_at=START),
-      Employee(id=MIA, name="Mia", pin_username=PINS[MIA], pin_hash=pin_hash, is_manager=True, updated_at=START),
+      Employee(id=MIA, name="Mia", pin_username=PINS[MIA], pin_hash=pin_hash, role=EmployeeRole.MANAGER, updated_at=START),
     ],
   )
   store.replace_table("business_hours", [BusinessHours(id=d, weekday=d, opens=time(0, 0), closes=time(23, 59)) for d in range(1, 8)])

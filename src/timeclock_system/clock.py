@@ -15,7 +15,7 @@ from uuid import uuid4
 # Third party imports
 import bcrypt
 from pydantic import SecretBytes, SecretStr
-from timeclock_schema.enums import OverrideReason, PunchKind, RuleAction
+from timeclock_schema.enums import EmployeeRole, OverrideReason, PunchKind, RuleAction
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Override, Punch, RuleRow, Settings
 from timeclock_schema.rules import RuleContext, RuleValidationError, ValidatedRule, applicable_rules, evaluate, validate_rule
 from timeclock_schema.shifts import EmployeeState, apply_corrections, build_timeline, week_bounds, worked_time
@@ -200,7 +200,7 @@ class Clock:
 
   def override_manager(self, manager: Employee, employee_id: int) -> bool:
     """Whether `manager` may authorize a punch for `employee_id`; nobody overrides for themselves."""
-    return manager.active and manager.is_manager and manager.id != employee_id
+    return manager.active and manager.role in {EmployeeRole.MANAGER, EmployeeRole.ADMIN} and manager.id != employee_id
 
   # -- punches ------------------------------------------------------------------------------------------------------
 
@@ -228,7 +228,9 @@ class Clock:
     hours = worked_time(
       timeline, *week_bounds(now, self._tz), now=now, subtract_lunch=s.subtract_lunch, subtract_breaks=s.subtract_breaks
     )
-    return MenuInfo(employee_id, e.name, timeline.state, since, timeline.valid_next, hours)
+    # A switched-off lunch or break hides only its start: someone already on one can still end it.
+    off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
+    return MenuInfo(employee_id, e.name, timeline.state, since, tuple(k for k in timeline.valid_next if k not in off), hours)
 
   async def record_punch(self, employee_id: int, kind: PunchKind, *, override: OverrideGrant | None = None) -> PunchOutcome:
     """Validate and store a punch, with its override if one was granted.
@@ -243,7 +245,9 @@ class Clock:
       punches, corrections = await asyncio.to_thread(lambda: (self._store.punches(employee_id), self._store.corrections(employee_id)))
       timeline = build_timeline(punches, corrections)
       # The menu only offers valid punches (R26.3); re-checked here since state may have changed since it was drawn.
-      if kind not in timeline.valid_next:
+      s = self._settings
+      off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
+      if kind not in timeline.valid_next or kind in off:
         raise PunchRefused("That punch isn't available right now")
       now = self._now()
       rules = applicable_rules(self._rules, employee_id=employee_id, group_id=e.group_id)
