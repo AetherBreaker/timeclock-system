@@ -1,0 +1,39 @@
+#!/bin/sh
+# There's no logind in the container, so this stands in for loginctl and reports the one session that exists: cage's,
+# as root's active Wayland session on seat0. RustDesk's service looks for its session this way (/bin/loginctl first,
+# hence installed over systemd's); finding none, it kills its screen process every few seconds.
+props="Id=1
+Name=root
+User=0
+Seat=seat0
+TTY=tty7
+Display=
+Remote=no
+Service=cage
+Type=wayland
+Class=user
+Active=yes
+State=active
+LockedHint=no
+Leader=1"
+case " $* " in
+  *" show-session "* | *" show-user "*)
+    want="" value=0 prev=""
+    for a in "$@"; do
+      case "$a" in
+        --value) value=1 ;;
+        --property=*) want="$want ${a#--property=}" ;;
+        -p?*) want="$want ${a#-p}" ;;
+      esac
+      if [ "$prev" = "-p" ] || [ "$prev" = "--property" ]; then want="$want $a"; fi
+      prev="$a"
+    done
+    want=$(echo "$want" | tr ',' ' ')
+    echo "$props" | while IFS='=' read -r k v; do
+      if [ -z "$want" ] || echo " $want " | grep -q " $k "; then
+        if [ "$value" = 1 ]; then echo "$v"; else echo "$k=$v"; fi
+      fi
+    done
+    ;;
+  *) echo "      1    0 root seat0 tty7 active no" ;;
+esac

@@ -119,6 +119,7 @@ Once per clock, after the install. timeclock-dev's values are in parentheses.
 3. **Hub:** in wireguard-hub's `peers.toml`, a row `timeclock-system-<INSTANCE_ID>` (`timeclock-system-dev`) with the next free `/32` and `lan = "office"` (`lan = "dev"`); in `rules.v4`, forwards from that address to the log server (TCP 9020) and the backend (TCP 5432); then a hub release.
 4. **Database login,** in the SQL editor: `CREATE ROLE timeclock_clock_<INSTANCE_ID> LOGIN PASSWORD '<random>' IN ROLE timeclock_clocks;` (`timeclock_clock_dev` … `IN ROLE timeclock_test_clocks`).
 5. **On the device:** `sudo mkdir -p /data/timeclock_system_files/branding`, and copy `SFT-Logo-June-2022-color.svg` into `branding/`. Without it the screen shows no logo.
+   For remote access, also `sudo install -d -m 700 /data/timeclock_system_files/remote` and copy the Sweet Fire Support Desk client into it as `sweetfiresupportdesk.deb` (`sudo install -m 600 …`); it's kept out of git, since its password is baked in. The kiosk installs it at every start and keeps its settings, and so its ID, in `remote/config/`. Without it the kiosk runs without remote access.
 6. **Coolify application** (Docker Compose, this repository, `docker/compose.yaml`) with these variables, then deploy. Deploys stop the old containers first, which blanks the screen and stops punches, so deploy outside shift changes.
 
    | Variable | Value |
