@@ -1528,7 +1528,7 @@ wheels = [
 
 [[package]]
 name = "timeclock-backend"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "backend" }
 dependencies = [
     { name = "aeth-ext", extra = ["async"] },
@@ -1536,6 +1536,7 @@ dependencies = [
     { name = "devkit-container" },
     { name = "psycopg", extra = ["binary"] },
     { name = "timeclock-schema" },
+    { name = "tzdata" },
 ]
 
 [package.metadata]
@@ -1544,7 +1545,8 @@ requires-dist = [
     { name = "apscheduler", specifier = ">=3.11.2,<4" },
     { name = "devkit-container", specifier = ">=2.3.1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.10" },
-    { name = "timeclock-schema", specifier = ">=0.2.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "timeclock-schema", specifier = ">=0.3.1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "tzdata", specifier = ">=2026.5" },
 ]
 
 [package.metadata.requires-dev]
@@ -1565,14 +1567,14 @@ dev = [
 
 [[package]]
 name = "timeclock-schema"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/d97/7ea238e89c6f1/timeclock_schema-0.3.0.tar.gz", hash = "sha256:d977ea238e89c6f1e111f9d18a9d2f1edcd110f2285a2c395daadbebf47b54f4" }
+sdist = { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/62e/17850ceca41a1/timeclock_schema-0.3.1.tar.gz", hash = "sha256:62e17850ceca41a1ecaf8045c7da91fc6630a4fc9c075be5eb19e992085f7b15" }
 wheels = [
-    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/01c/49f387f1ad8c0/timeclock_schema-0.3.0-py3-none-any.whl", hash = "sha256:01c49f387f1ad8c08d5a07b65f32c28475b6d2290fd20613625ba2c2586d00f9" },
+    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/d39/7455616adfdca/timeclock_schema-0.3.1-py3-none-any.whl", hash = "sha256:d397455616adfdca4aaf5efef0c8064267e49d1c7d387f7e4c4b51150e3f696c" },
 ]
 
 [[package]]
