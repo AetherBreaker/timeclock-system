@@ -743,15 +743,15 @@ async def test_pin_scan_after_hours_opens_the_reader()
   - A status line bottom-right: a filled circle green or red and `format_db_status(status(), tz)`, refreshed by
     `ui.timer(1.0, …)`; `ui.timer(0.5, controller.tick)`; a tap anywhere on the Idle screen calls `controller.tap()`.
 
-- [ ] **Step 1: Failing tests** with `async with nicegui.testing.user_simulation(build_root(...)) as user:`,
+- [x] **Step 1: Failing tests** with `async with nicegui.testing.user_simulation(build_root(...)) as user:`,
   then `await user.open("/")`, `user.find("1").click()`, `await user.should_see(...)` (a `Clock` over a
   `tmp_path` store, a recording reader port, `status=lambda: DbStatus(False, None)`, `branding_dir=tmp_path`):
   `test_idle_shows_the_prompt_and_offline_status` (should_see `IDLE_READY` and "Database offline · last contact
   never"), `test_pin_pad_types_digits` (click 1, 2, ✓ → should_see `ENTER_PIN`), `test_menu_shows_valid_punch_buttons`
   (drive `controller.on_scanner_event(Matched(...))` → should_see "Clock in" and not "Clock out"),
   `test_missing_logo_still_renders`.
-- [ ] **Step 2: Run; they fail.** — **Step 3: Implement `ui/page.py`.** — **Step 4: Run; they pass** (+ ruff, pyright).
-- [ ] **Step 5: Commit** `feat(ui): add the kiosk page`.
+- [x] **Step 2: Run; they fail.** — **Step 3: Implement `ui/page.py`.** — **Step 4: Run; they pass** (+ ruff, pyright).
+- [x] **Step 5: Commit** `feat(ui): add the kiosk page`.
 
 ---
 
