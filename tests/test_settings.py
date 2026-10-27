@@ -11,11 +11,12 @@ from timeclock_system.settings import ClockSettings
 @pytest.fixture(autouse=True)
 def env(monkeypatch: pytest.MonkeyPatch) -> None:
   # Independent of the repo's .env: every variable a test depends on is set or removed here.
-  for name in ("INSTANCE_ID", "TIMECLOCK_DB_HOST", "TIMECLOCK_DB_PORT", "PERSISTED_DIR_LOC", "LOG_LOC_FOLDER"):
+  for name in ("INSTANCE_ID", "CLOCK_NUMBER", "TIMECLOCK_DB_HOST", "TIMECLOCK_DB_PORT", "PERSISTED_DIR_LOC", "LOG_LOC_FOLDER"):
     monkeypatch.delenv(name, raising=False)
   monkeypatch.setenv("TIMECLOCK_DB_NAME", "tc")
   monkeypatch.setenv("TIMECLOCK_DB_USER", "clock")
   monkeypatch.setenv("TIMECLOCK_DB_PASSWORD", "pw")
+  monkeypatch.setenv("CLOCK_NUMBER", "1")
 
 
 def test_requires_instance_id() -> None:

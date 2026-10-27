@@ -9,8 +9,8 @@ from uuid import UUID, uuid4
 # Third party imports
 import pytest
 from pydantic import SecretBytes
-from timeclock_schema.enums import CorrectionAction, OverrideReason, PunchKind
-from timeclock_schema.models import Employee, Fingerprint, Group, Override, Punch, PunchCorrection, Settings
+from timeclock_schema.enums import BypassReason, CorrectionAction, PunchKind
+from timeclock_schema.models import Employee, Fingerprint, FingerprintBypass, Group, Punch, PunchCorrection, Settings
 
 # First party imports
 from timeclock_system.store import LocalStore
@@ -49,13 +49,13 @@ def punch(at: datetime = T, employee_id: int = 1, pid: UUID | None = None) -> Pu
   return Punch(id=pid or uuid4(), employee_id=employee_id, kind=PunchKind.CLOCK_IN, at=at, instance_id="clock-a")
 
 
-def override(p: Punch) -> Override:
-  return Override(
+def override(p: Punch) -> FingerprintBypass:
+  return FingerprintBypass(
     id=uuid4(),
     punch_id=p.id,
     employee_id=p.employee_id,
     manager_id=2,
-    reason=OverrideReason.NO_FINGERPRINT,
+    reason=BypassReason.OVERRIDE_NO_FINGERPRINT,
     pin_only=True,
     at=p.at,
     instance_id="clock-a",
@@ -102,7 +102,7 @@ def test_insert_punch_ignores_duplicate_ids(store: LocalStore) -> None:
 def test_local_punch_and_override_are_unsynced_together(store: LocalStore) -> None:
   p = punch()
   o = override(p)
-  store.insert_punch(p, origin="local", override=o)
+  store.insert_punch(p, origin="local", bypass=o)
   assert store.unsynced_punches() == [(p, o)]
   store.mark_punch_synced(p.id)
   assert store.unsynced_punches() == []
@@ -172,10 +172,10 @@ def test_upsert_db_punch_updates_an_existing_local_row(store: LocalStore, db_pat
 
 def test_delete_punch_removes_its_override(store: LocalStore, db_path: Path) -> None:
   p = punch()
-  store.insert_punch(p, origin="local", override=override(p))
+  store.insert_punch(p, origin="local", bypass=override(p))
   store.delete_punch(p.id)
   assert store.punches() == []
-  assert query(db_path, "SELECT count(*) FROM overrides")[0][0] == 0
+  assert query(db_path, "SELECT count(*) FROM fingerprint_bypasses")[0][0] == 0
 
 
 def test_punches_filter_by_employee(store: LocalStore) -> None:
@@ -240,8 +240,8 @@ def test_fingerprint_replace_rule(store: LocalStore) -> None:
 
 def test_settings_default_when_missing(store: LocalStore) -> None:
   assert store.get_settings() == Settings()
-  store.set_settings(Settings(subtract_breaks=True))
-  assert store.get_settings() == Settings(subtract_breaks=True)
+  store.set_settings(Settings(breaks_enabled=False))
+  assert store.get_settings() == Settings(breaks_enabled=False)
 
 
 def test_meta_round_trip(store: LocalStore) -> None:
@@ -257,3 +257,85 @@ def test_naive_timestamps_never_stored(store: LocalStore, db_path: Path) -> None
   stored = [r[0] for r in query(db_path, "SELECT at FROM punches")]
   assert len(stored) == TWO
   assert all(a.endswith(("Z", "+00:00")) for a in stored)
+
+
+def employee(employee_id: int, pin_hash: str = "$2a$06$" + "a" * 53) -> Employee:
+  return Employee(id=employee_id, name=f"E{employee_id}", pin_username=str(employee_id), pin_hash=pin_hash, updated_at=T)  # pyright: ignore[reportArgumentType]
+
+
+def login_bypass(employee_id: int, at: datetime = T) -> FingerprintBypass:
+  return FingerprintBypass(id=uuid4(), employee_id=employee_id, reason=BypassReason.ADMIN_PIN_LOGIN, at=at, instance_id="clock-a")
+
+
+def test_pending_employee_is_accepted_into_the_mirror(store: LocalStore) -> None:
+  new = employee(10001)
+  store.insert_pending_employee(new)
+  assert store.pending_employees() == [new]
+  assert store.load("employees") == []
+  store.accept_employee(new)
+  assert store.pending_employees() == []
+  assert store.load("employees") == [new]
+
+
+def test_replace_employees_settles_only_a_matching_pending_row(store: LocalStore) -> None:
+  ours, theirs = employee(10001), employee(10002)
+  store.insert_pending_employee(ours)
+  store.insert_pending_employee(theirs)
+  # The mirror now holds 10001 with our hash (a lost acknowledgement) and someone else's 10002 (a refusal).
+  store.replace_employees([employee(10001), employee(10002, pin_hash="$2a$06$" + "b" * 53)])
+  assert store.pending_employees() == [theirs]
+  assert [e.model_dump()["id"] for e in store.load("employees")] == [10001, 10002]
+
+
+def test_a_pending_employees_records_are_held(store: LocalStore) -> None:
+  store.insert_pending_employee(employee(10001))
+  held, free = punch(employee_id=10001), punch(employee_id=1)
+  store.insert_punch(held, origin="local", bypass=override(held))
+  store.insert_punch(free, origin="local")
+  store.insert_fingerprint(fp().model_copy(update={"employee_id": 10001}), origin="local")
+  store.insert_bypass(login_bypass(10001))
+  assert [p.id for p, _ in store.unsynced_punches()] == [free.id]
+  assert store.unsynced_fingerprints() == []
+  assert store.unsynced_bypasses() == []
+  store.accept_employee(employee(10001))
+  assert {p.id for p, _ in store.unsynced_punches()} == {held.id, free.id}
+  assert len(store.unsynced_fingerprints()) == 1
+  assert len(store.unsynced_bypasses()) == 1
+
+
+def test_rows_of_a_pending_id_from_elsewhere_are_hidden(store: LocalStore) -> None:
+  # The database's employee 10001 is someone else: their punches and prints must not be filed under ours here.
+  store.insert_pending_employee(employee(10001))
+  ours, theirs = punch(employee_id=10001), punch(at=T + timedelta(minutes=1), employee_id=10001)
+  store.insert_punch(ours, origin="local")
+  store.upsert_db_punch(theirs)
+  their_print = fp(b"theirs").model_copy(update={"employee_id": 10001})
+  store.upsert_db_fingerprint(their_print)
+  store.upsert_correction(PunchCorrection(id=uuid4(), punch_id=theirs.id, action=CorrectionAction.VOID, recorded_at=T))
+  assert [p.id for p in store.punches(10001)] == [ours.id]
+  assert [p.id for p in store.punches()] == [ours.id]
+  assert store.corrections(10001) == []
+  assert store.fingerprints() == []
+  store.accept_employee(employee(10001))  # accepted: then it is the database's 10001, and everything shows
+  assert {p.id for p in store.punches(10001)} == {ours.id, theirs.id}
+  assert store.fingerprints() == [their_print]
+
+
+def test_login_bypass_queue_and_prune(store: LocalStore) -> None:
+  old, recent = login_bypass(1, T - timedelta(days=10)), login_bypass(1)
+  store.insert_bypass(old)
+  store.insert_bypass(recent)
+  assert store.unsynced_bypasses() == [old, recent]
+  store.mark_bypass_synced(old.id)
+  assert store.unsynced_bypasses() == [recent]
+  store.prune(T - timedelta(days=7), {})
+  store.mark_bypass_synced(recent.id)
+  assert store.unsynced_bypasses() == []
+  assert store.prune(T - timedelta(days=7), {}) == 0  # nothing old left; the recent one stays
+
+
+def test_a_punch_and_its_bypass_sync_together(store: LocalStore, db_path: Path) -> None:
+  p = punch()
+  store.insert_punch(p, origin="local", bypass=override(p))
+  store.mark_punch_synced(p.id)
+  assert query(db_path, "SELECT synced FROM fingerprint_bypasses") == [(1,)]

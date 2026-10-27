@@ -1,6 +1,7 @@
 """Tests for the Clock service."""
 
 # Standard library imports
+import dataclasses
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -11,12 +12,21 @@ import bcrypt
 import pytest
 from pydantic import BaseModel, SecretBytes, SecretStr
 from timeclock_schema import rules as schema_rules
-from timeclock_schema.enums import CorrectionAction, EmployeeRole, OverrideReason, PunchKind, RuleAction
+from timeclock_schema.alerts import WEEKLY_HOURS
+from timeclock_schema.enums import BypassReason, CorrectionAction, EmployeeRole, PunchKind, RuleAction
 from timeclock_schema.models import Employee, Fingerprint, Punch, PunchCorrection, RuleRow, Settings
 from timeclock_schema.shifts import EmployeeState
 
 # First party imports
-from timeclock_system.clock import Clock, OverrideGrant, PunchRefused
+from timeclock_system.clock import (
+  Clock,
+  EmployeeBlockFull,
+  NewEmployee,
+  OverrideGrant,
+  PunchRefused,
+  check_new_pin,
+  normalize_phone,
+)
 from timeclock_system.scanner import GalleryPrint
 from timeclock_system.store import LocalStore
 
@@ -57,7 +67,9 @@ class Env:
     self.store = store
     self.now = T
     self.alerts: list[tuple[str, str]] = []
-    self.clock = Clock(store, instance_id="dev", tz=NY, alert=lambda s, b: self.alerts.append((s, b)), now=lambda: self.now)
+    self.clock = Clock(
+      store, instance_id="dev", clock_number=1, tz=NY, alert=lambda s, b: self.alerts.append((s, b)), now=lambda: self.now
+    )
 
 
 @pytest.fixture
@@ -161,12 +173,12 @@ async def test_record_punch_refuses_unknown_and_inactive(env: Env) -> None:
 
 
 async def test_override_is_stored_with_its_punch(env: Env) -> None:
-  grant = OverrideGrant(manager_id=2, reason=OverrideReason.FINGERPRINT_SKIPPED, pin_only=True)
+  grant = OverrideGrant(manager_id=2, reason=BypassReason.OVERRIDE_FINGERPRINT_SKIPPED, pin_only=True)
   await env.clock.record_punch(1, PunchKind.CLOCK_IN, override=grant)
   stored = env.store.unsynced_punches()[0][1]
   assert stored is not None
   assert stored.pin_only is True
-  assert stored.reason is OverrideReason.FINGERPRINT_SKIPPED
+  assert stored.reason is BypassReason.OVERRIDE_FINGERPRINT_SKIPPED
   assert stored.manager_id == MANAGER_ID
 
 
@@ -216,7 +228,7 @@ async def test_bad_rule_row_alerts_once(env: Env) -> None:
   assert len(env.alerts) == 2  # noqa: PLR2004
 
 
-async def test_hours_this_week_subtracts_lunch_by_default(env: Env) -> None:
+async def test_hours_this_week_leaves_out_lunch(env: Env) -> None:
   start = datetime(2026, 10, 27, 12, tzinfo=UTC)
   for kind, minutes in (
     (PunchKind.CLOCK_IN, 0),
@@ -337,7 +349,7 @@ async def test_notify_changed_reloads_caches(env: Env) -> None:
 
 async def test_business_hours_and_settings_come_from_the_cache(env: Env) -> None:
   assert env.clock.business_hours() == ()
-  assert env.clock.settings().subtract_lunch is True
+  assert env.clock.settings().lunches_enabled is True
 
 
 async def _amended_open_shift(env: Env) -> tuple[datetime, Punch]:
@@ -367,3 +379,147 @@ async def test_catch_up_since_uses_the_stored_time_of_an_amended_clock_in(env: E
 
 def test_gallery_print_repr_hides_the_template() -> None:
   assert "SECRETBYTES" not in repr(GalleryPrint(uuid4(), 1, b"SECRETBYTES"))
+
+
+NEW = NewEmployee("New Hire", "+15551234567", "new@example.com", EmployeeRole.EMPLOYEE, 1)
+
+
+@pytest.mark.parametrize(
+  ("raw", "stored"),
+  [
+    ("(555) 123-4567", "+15551234567"),
+    ("555-123-4567", "+15551234567"),
+    ("555.123.4567", "+15551234567"),
+    ("5551234567", "+15551234567"),
+    ("1 555 123 4567", "+15551234567"),
+    ("+1 555 123 4567", "+15551234567"),
+    (" +1 (555) 123-4567 ", "+15551234567"),
+  ],
+)
+def test_normalize_phone_accepts_common_us_formats(raw: str, stored: str) -> None:
+  assert normalize_phone(raw) == stored
+
+
+@pytest.mark.parametrize("raw", ["555-1234", "+44 20 7946 0958", "555-123-45678", "555-CALL-NOW", "", "\uff15\uff15\uff15\uff11\uff12\uff13\uff14\uff15\uff16\uff17"])
+def test_normalize_phone_refuses_anything_else(raw: str) -> None:
+  with pytest.raises(ValueError, match="phone"):
+    normalize_phone(raw)
+
+
+def test_check_new_pin() -> None:
+  assert check_new_pin(SecretStr("0042"))
+  assert check_new_pin(SecretStr("1"))
+  assert not check_new_pin(SecretStr(""))
+  assert not check_new_pin(SecretStr("12a4"))
+  assert not check_new_pin(SecretStr("\uff11\uff12"))  # full-width digits are decimal, but not ASCII
+
+
+async def test_add_employee_numbers_from_the_clocks_block(env: Env) -> None:
+  first = await env.clock.add_employee(NEW, SecretStr("2468"))
+  assert (first.id, first.pin_username, first.role, first.phone) == (10001, "10001", EmployeeRole.EMPLOYEE, "+15551234567")
+  second = await env.clock.add_employee(NEW, SecretStr("2468"))
+  assert second.id == 10002  # noqa: PLR2004  # after its own unsynced one
+  assert [e.id for e in env.store.pending_employees()] == [10001, 10002]
+  found = await env.clock.verify_pin("10001", SecretStr("2468"))
+  assert found is not None and found.id == 10001  # noqa: PLR2004  # can log in at once
+  assert found.pin_hash.get_secret_value().startswith("$2a$")
+  info = await env.clock.menu_info(first.id)
+  assert info.valid_next == (PunchKind.CLOCK_IN,)
+
+
+async def test_add_employee_skips_numbers_the_clock_knows(env: Env) -> None:
+  # 10005 is taken, 10006 is someone's username, and clock 2's numbers don't count toward clock 1's.
+  env.store.replace_table(
+    "employees", [make_employee(10005, username="10005"), make_employee(4, username="10006"), make_employee(20009, username="20009")]
+  )
+  await env.clock.load()
+  assert (await env.clock.add_employee(NEW, SecretStr("1"))).id == 10007  # noqa: PLR2004
+
+
+async def test_add_employee_refuses_a_full_block_admins_and_bad_pins(env: Env) -> None:
+  env.store.replace_table("employees", [make_employee(19999)])
+  await env.clock.load()
+  with pytest.raises(EmployeeBlockFull):
+    await env.clock.add_employee(NEW, SecretStr("1"))
+  with pytest.raises(ValueError, match="employees and managers"):
+    await env.clock.add_employee(dataclasses.replace(NEW, role=EmployeeRole.ADMIN), SecretStr("1"))
+  with pytest.raises(ValueError, match="PIN"):
+    await env.clock.add_employee(NEW, SecretStr("12x"))
+  assert env.store.pending_employees() == []
+
+
+async def test_add_employee_tells_the_record_listeners(env: Env) -> None:
+  heard: list[object] = []
+  env.clock.add_record_listener(heard.append)
+  e = await env.clock.add_employee(NEW, SecretStr("1"))
+  assert heard == [e]
+
+
+async def test_a_pending_employee_hides_the_mirror_row_sharing_its_number(env: Env) -> None:
+  env.store.insert_pending_employee(make_employee(10001, username="10001"))
+  env.store.replace_table("employees", [make_employee(1), make_employee(10001, username="555"), make_employee(7, username="10001")])
+  await env.clock.load()
+  held = env.clock.employee(10001)
+  assert held is not None and held.pin_username == "10001"
+  assert env.clock.employee(7) is None  # its username is the pending employee's
+  assert env.clock.employee(1) is not None
+
+
+async def test_a_pending_manager_cant_approve_overrides(env: Env) -> None:
+  manager = await env.clock.add_employee(dataclasses.replace(NEW, role=EmployeeRole.MANAGER), SecretStr("1"))
+  assert not env.clock.override_manager(manager, 1)
+  env.store.accept_employee(manager)
+  env.clock.notify_changed({"employees"})
+  assert env.clock.override_manager(manager, 1)
+
+
+async def test_pin_only_login_is_admins_and_exempt_employees(env: Env) -> None:
+  assert env.clock.pin_only_login(make_employee(9, role=EmployeeRole.ADMIN))
+  assert env.clock.pin_only_login(make_employee(9).model_copy(update={"fingerprint_exempt": True}))
+  assert not env.clock.pin_only_login(make_employee(9, role=EmployeeRole.MANAGER))
+
+
+async def test_pin_logins_are_recorded_as_bypasses(env: Env) -> None:
+  admin = make_employee(9, role=EmployeeRole.ADMIN)
+  exempt = make_employee(1).model_copy(update={"fingerprint_exempt": True})
+  env.store.replace_table("employees", [admin, exempt])
+  await env.clock.load()
+  await env.clock.record_pin_login(admin)
+  [login] = env.store.unsynced_bypasses()
+  assert (login.employee_id, login.reason, login.punch_id, login.manager_id) == (9, BypassReason.ADMIN_PIN_LOGIN, None, None)
+  outcome = await env.clock.record_punch(1, PunchKind.CLOCK_IN, pin_login=True)  # a 30 s rescan by PIN
+  [(stored, bypass)] = env.store.unsynced_punches()
+  assert stored == outcome.punch
+  assert bypass is not None and (bypass.reason, bypass.punch_id) == (BypassReason.EXEMPT_PIN_LOGIN, outcome.punch.id)
+
+
+async def test_menu_shows_is_admin(env: Env) -> None:
+  env.store.replace_table("employees", [make_employee(1), make_employee(9, role=EmployeeRole.ADMIN)])
+  await env.clock.load()
+  assert (await env.clock.menu_info(9)).is_admin
+  assert not (await env.clock.menu_info(1)).is_admin
+
+
+async def test_hours_this_week_count_paid_breaks(env: Env) -> None:
+  start = datetime(2026, 10, 27, 12, tzinfo=UTC)
+  for kind, minutes in ((PunchKind.CLOCK_IN, 0), (PunchKind.BREAK_START, 60), (PunchKind.BREAK_END, 100)):
+    env.store.insert_punch(punch_at(1, kind, start + timedelta(minutes=minutes)), origin="db")
+  env.now = start + timedelta(hours=4)
+  # 4 h on the clock with a 40-minute break: 3 h 20 worked, 30 minutes paid, 10 unpaid.
+  assert (await env.clock.menu_info(1)).hours_this_week == timedelta(hours=3, minutes=50)
+  outcome = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
+  assert outcome.hours_this_week == timedelta(hours=3, minutes=50)
+
+
+async def test_a_punch_reaching_the_weekly_threshold_fires_the_hook(env: Env) -> None:
+  monday = datetime(2026, 10, 26, 8, tzinfo=NY)
+  for day in range(4):
+    env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, monday + timedelta(days=day)), origin="db")
+    env.store.insert_punch(punch_at(1, PunchKind.CLOCK_OUT, monday + timedelta(days=day, hours=9.5)), origin="db")
+  env.now = monday + timedelta(days=4)
+  under = await env.clock.record_punch(1, PunchKind.CLOCK_IN)  # 38 h
+  assert under.firings == ()
+  env.now += timedelta(hours=3)
+  over = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
+  assert over.hours_this_week == timedelta(hours=41)
+  assert [(f.hook.alert, f.limit) for f in over.firings] == [(WEEKLY_HOURS, timedelta(hours=40))]

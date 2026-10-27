@@ -58,7 +58,9 @@ def serve(project_name: str) -> None:
   """
   settings = ClockSettings.get_settings()
   store = LocalStore(settings.store_path)
-  clock = Clock(store, instance_id=settings.instance_id or "", tz=settings.tz, alert=_send_alert)  # the validator sets the id
+  clock = Clock(  # the validator sets the id
+    store, instance_id=settings.instance_id or "", clock_number=settings.clock_number, tz=settings.tz, alert=_send_alert
+  )
   reader = FprintReader()  # a missing reader raises ReaderGone here, uncaught: fatal at startup (R14.7)
 
   # asyncio holds tasks weakly, so every task and scanner-event future is kept here until it finishes, and one

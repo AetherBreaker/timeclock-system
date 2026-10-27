@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 # Third party imports
 from pydantic import SecretStr
-from timeclock_schema.enums import OverrideReason
+from timeclock_schema.enums import BypassReason
 
 # First party imports
 from timeclock_system.clock import MenuInfo, OverrideGrant, PunchRefused
@@ -108,7 +108,7 @@ class OverrideRequest:
   """What a manager override is for: an employee, the reason, and a punch to record at once, if any."""
 
   employee_id: int
-  reason: OverrideReason
+  reason: BypassReason
   pending_kind: PunchKind | None
 
 
@@ -293,7 +293,7 @@ class KioskController:
 
   async def _override_request(self, employee_id: int, pending_kind: PunchKind | None) -> OverrideRequest:
     has_print = await self._clock.has_fingerprint(employee_id)
-    reason = OverrideReason.FINGERPRINT_SKIPPED if has_print else OverrideReason.NO_FINGERPRINT
+    reason = BypassReason.OVERRIDE_FINGERPRINT_SKIPPED if has_print else BypassReason.OVERRIDE_NO_FINGERPRINT
     return OverrideRequest(employee_id, reason, pending_kind)
 
   # -- entry points ---------------------------------------------------------------------------------------------
@@ -454,7 +454,7 @@ class KioskController:
       elif isinstance(s, PinScan):
         self._screen = OverridePrompt(await self._override_request(s.employee_id, None), touched_at=now)
       elif isinstance(s, RegisterPrompt):
-        self._screen = OverridePrompt(OverrideRequest(s.employee_id, OverrideReason.NO_FINGERPRINT, None), touched_at=now)
+        self._screen = OverridePrompt(OverrideRequest(s.employee_id, BypassReason.OVERRIDE_NO_FINGERPRINT, None), touched_at=now)
 
   async def cancel(self) -> None:
     """Back to idle from any screen."""
