@@ -1,10 +1,24 @@
 [project]
   name            = "timeclock-system"
   version         = "0.1.0"
-  description     = "Add your description here"
+  description     = "Fingerprint time clock: the clock app and its kiosk"
   readme          = "README.md"
   requires-python = ">=3.14"
-  dependencies    = []
+  dependencies    = [
+    "PyGObject>=3.58.1; sys_platform == 'linux'",                          # built in the image (builder-setup window); not on Windows
+    "aeth-ext>=10.0.0",
+    "bcrypt>=5.0",
+    "devkit-container>=2.3.0",
+    "nicegui>=3.18,<4",
+    "psycopg[binary]>=3.3.6",
+    "timeclock-schema>=0.2.0",
+    "uvicorn>=0.54,<0.55",                                                 # pinned: app.py replaces Server.capture_signals (R21)
+    "uvloop>=0.23; sys_platform == 'linux'",
+  ]
+
+  [project.scripts]
+    run-app-timeclock-system = "timeclock_system.__main__:run_app"
+    timeclock-reader-access  = "timeclock_system.reader_access:main"
 
 [dependency-groups]
   dev = [
@@ -20,6 +34,10 @@
     "ruff>=0.15",
     "tombi>=1.5",
   ]                                # setup-project added: "devkit-claude-hooks", "devkit-poe-complete", "poethepoet>=0.46.0", "pyright>=1.1.411", "pytest>=8.0", "pytest-asyncio>=0.24", "pytest-cov>=5.0", "ruff>=0.15", "tombi>=1.5"
+
+[build-system]
+  requires      = ["uv_build>=0.11.2,<0.12.0"]
+  build-backend = "uv_build"
 
 [tool.coverage]
   [tool.coverage.run]
@@ -38,11 +56,20 @@
   [tool.coverage.lcov]
     output = ".cache/coverage.lcov"
 
+[tool.docker]
+  services                = ["timeclock-system"]
+  required_persisted_dirs = ["persisted_data"]
+  wireguard               = true
+  startup_scripts         = ["timeclock-reader-access"]
+
 [tool.poe]
   include_script = [{ script = "aeth_devkit:tasks", executor = { type = "uv", frozen = true } }]
 
 [tool.pyright]
   typeCheckingMode = "standard"
+
+  pythonPlatform = "Linux"                                    # the app only runs on Linux; Windows dev runs see Linux stubs (e.g. os.chown)
+  ignore         = ["src/timeclock_system/fprint_reader.py"]  # needs PyGObject and libfprint, which only exist in the image
 
   verboseOutput          = true
   useLibraryCodeForTypes = true
@@ -180,6 +207,7 @@
     [tool.ruff.lint.isort]
       combine-as-imports = true
       known-first-party  = ["timeclock_system"]
+      known-third-party  = ["aeth_ext", "timeclock_schema"]
 
       [tool.ruff.lint.isort.import-heading]
         first-party      = "First party imports"
@@ -229,6 +257,8 @@
     explicit    = true
 
   [tool.uv.sources]
+    aeth-ext            = [{ index = "SFTPyPI" }]
+    timeclock-schema    = [{ index = "SFTPyPI" }]
     aeth-devkit         = [{ index = "SFTPyPI" }]
     devkit-templates    = [{ index = "SFTPyPI" }]
     devkit-container    = [{ index = "SFTPyPI" }]
