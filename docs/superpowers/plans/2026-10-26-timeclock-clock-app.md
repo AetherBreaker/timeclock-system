@@ -836,7 +836,7 @@ async def test_pin_scan_after_hours_opens_the_reader()
 - Produces: an image whose venv imports `gi` and finds `FPrint-2.0` from `/opt/libfprint`; Debian's
   `libfprint-2-2` and `gir1.2-fprint-2.0` are not in it (R40.4).
 
-- [ ] **Step 1: The patch**, exactly (verified to apply to v1.94.100 with `git apply --check`):
+- [x] **Step 1: The patch**, exactly (verified to apply to v1.94.100 with `git apply --check`):
 
 ```diff
 --- a/libfprint/drivers/uru4000.c
@@ -854,7 +854,7 @@ async def test_pin_scan_after_hours_opens_the_reader()
    img_class->img_close = dev_deinit;
 ```
 
-- [ ] **Step 2: The `builder-cached` and `builder-setup` windows.** devkit-container 2.3.0's template has a
+- [x] **Step 2: The `builder-cached` and `builder-setup` windows.** devkit-container 2.3.0's template has a
   `builder-cached` window above the `GIT_TAG`/`GIT_REPO` build arguments, so its layers stay cached across
   releases (an `ARG` declared above a `RUN` changes that `RUN`'s cache key on every new tag); libfprint's
   build goes there so a deploy recompiles it only when the window changes. `builder-setup` keeps one `RUN`
@@ -873,17 +873,17 @@ async def test_pin_scan_after_hours_opens_the_reader()
   each `RUN` says why. If apt names a missing package or meson a missing dependency, find the trixie package in a
   throwaway `docker run --rm debian:trixie bash -c "apt-get update && apt-cache search <name>"` and adjust; say so
   in the commit body.
-- [ ] **Step 3: The `final` window.** One `RUN` installing `libgirepository-2.0-0 libcairo2 libgusb2
+- [x] **Step 3: The `final` window.** One `RUN` installing `libgirepository-2.0-0 libcairo2 libgusb2
   gir1.2-gusb-1.0 gir1.2-glib-2.0`; `COPY --from=builder /opt/libfprint /opt/libfprint`;
   `RUN echo /opt/libfprint/lib > /etc/ld.so.conf.d/libfprint.conf && ldconfig`;
   `ENV GI_TYPELIB_PATH=/opt/libfprint/lib/girepository-1.0`.
-- [ ] **Step 4: Build on the workstation** (Docker Desktop; push the branch first, since the template clones
+- [x] **Step 4: Build on the workstation** (Docker Desktop; push the branch first, since the template clones
   `GIT_TAG`): `git push -u origin feat/clock-app`, then
   `docker build -f docker/Dockerfile --build-arg GIT_REPO=https://github.com/AetherBreaker/timeclock-system.git --build-arg GIT_TAG=feat/clock-app -t timeclock-system:dev .`
   Expected: success. Then
   `docker run --rm --entrypoint /app/.venv/bin/python timeclock-system:dev -c "import gi; gi.require_version('FPrint', '2.0'); from gi.repository import FPrint; print(FPrint.Context.new())"`
   prints a Context; and `docker run --rm --entrypoint sh timeclock-system:dev -c "dpkg -l | grep -c libfprint-2-2"` prints `0`.
-- [ ] **Step 5: Commit** `feat(docker): build the patched libfprint into the image`.
+- [x] **Step 5: Commit** `feat(docker): build the patched libfprint into the image`.
 - [ ] **Step 6: On timeclock-dev, the reader checks.** Say first that you're loading the `timeclock-system:dev`
   image onto timeclock-dev (no packages installed). `docker save timeclock-system:dev | ssh timeclock-dev sudo docker load`.
   The spike's `kiosk-test` container doesn't touch the reader; leave it until Task 15. Then, each with

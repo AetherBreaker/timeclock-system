@@ -8,6 +8,24 @@ WORKDIR /app
 # Sees neither git ARG, so its layers stay cached across releases: heavy, tag-independent steps
 # (e.g. compiling a C library) go here; COPY any repo file they need from the build context.
 # !window builder-cached:
+# libfprint's build needs (uru4000 only, which needs OpenSSL); this window sits above the template's own compiler and
+# git installs, and curl fetches the release tarball.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gcc git pkg-config meson ninja-build \
+  libglib2.0-dev libgusb-dev libssl-dev libgirepository1.0-dev gobject-introspection \
+  && rm -rf /var/lib/apt/lists/*
+COPY docker/libfprint/uru4000-no-heat-model.patch /tmp/libfprint.patch
+# The pinned 1.94.100 release (spec §7), patched so an always-waiting reader never trips the heat model; a changed
+# tarball or a patch that doesn't apply fails the build.
+RUN mkdir /tmp/libfprint \
+  && curl -fsSL -o /tmp/libfprint.tar.gz \
+  https://gitlab.freedesktop.org/libfprint/libfprint/-/archive/v1.94.100/libfprint-v1.94.100.tar.gz \
+  && echo "edc90e02f330a7595ceaf37f2c6ec32ed43541347fe936d3273b0bb2524fd19c  /tmp/libfprint.tar.gz" | sha256sum -c - \
+  && tar -xzf /tmp/libfprint.tar.gz -C /tmp/libfprint --strip-components=1 \
+  && git -C /tmp/libfprint apply /tmp/libfprint.patch \
+  && meson setup /tmp/libfprint/build /tmp/libfprint --prefix=/opt/libfprint --libdir=lib -Ddrivers=uru4000 \
+  -Dintrospection=true -Ddoc=false -Dgtk-examples=false -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled \
+  && meson install -C /tmp/libfprint/build \
+  && rm -rf /tmp/libfprint /tmp/libfprint.tar.gz /tmp/libfprint.patch
 # !end builder-cached
 
 ARG GIT_TAG
@@ -25,6 +43,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 
 # System packages that deps need to compile; the repo isn't cloned yet, so COPY a needed file from the build context.
 # !window builder-setup:
+# PyGObject and pycairo build from source: PyPI has no Linux wheels for either (spec R11.2).
+RUN apt-get update && apt-get install -y --no-install-recommends gcc pkg-config libgirepository-2.0-dev libcairo2-dev \
+  && rm -rf /var/lib/apt/lists/*
 # !end builder-setup
 
 # Clone only the dependency manifest files first so the dep install layer
@@ -82,6 +103,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends wireguard-tools
 
 # Project additions to the final stage; setup-project renders the template around this window.
 # !window final:
+# Runtime libraries for PyGObject, pycairo and the libfprint build; Debian's libfprint-2-2 stays out (spec §7).
+RUN apt-get update && apt-get install -y --no-install-recommends libgirepository-2.0-0 libcairo2 libgusb2 \
+  gir1.2-gusb-1.0 gir1.2-glib-2.0 \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /opt/libfprint /opt/libfprint
+# The linker and PyGObject find the patched library and its FPrint-2.0 typelib.
+RUN echo /opt/libfprint/lib > /etc/ld.so.conf.d/libfprint.conf && ldconfig
+ENV GI_TYPELIB_PATH=/opt/libfprint/lib/girepository-1.0
 # !end final
 
 WORKDIR /app
