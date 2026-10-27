@@ -183,8 +183,10 @@ class _KioskPage:
     ui.button(label, on_click=lambda: self._guarded(on_click)).classes(f"sft-button {kind}").props("unelevated no-caps")
 
   def _idle(self, s: Idle) -> None:
-    # A tap anywhere on the idle screen wakes the reader after hours (R40.2).
-    with ui.column().classes("w-full items-center gap-6").on("click", lambda: self._guarded(self._controller.tap)):
+    # A tap anywhere on the idle screen wakes the reader after hours (R40.2): a transparent layer over the whole
+    # viewport holds the content, above the clock and status line, which still show through it.
+    idle = ui.column().classes("fixed inset-0 z-10 items-center gap-6 pt-8").mark("idle-tap")
+    with idle.on("click", lambda: self._guarded(self._controller.tap)):
       if (self._branding_dir / LOGO_FILE).exists():
         ui.image(f"/branding/{LOGO_FILE}").classes("w-96")
       ui.label(s.message or (text.IDLE_READY if self._controller.reader_awake else text.IDLE_ASLEEP)).classes("sft-title")
