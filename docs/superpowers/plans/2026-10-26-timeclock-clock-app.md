@@ -567,7 +567,7 @@ def test_finger_down_is_posted()
 - `def add_status_listener(self, cb: Callable[[DbStatus], None]) -> None`: called whenever `connected` flips.
   (The page polls `status` too; the listener is for anything that wants the edge.)
 
-- [ ] **Step 1: Failing tests.** Fixtures, as the schema plan's `tests/test_sql.py` does: an autocommit admin
+- [x] **Step 1: Failing tests.** Fixtures, as the schema plan's `tests/test_sql.py` does: an autocommit admin
   connection creates `tcc_<uuid4 hex>`, applies every `load_migrations()` file in its own transaction, creates
   `CREATE ROLE tcc_clock_<hex> LOGIN PASSWORD 'pw' IN ROLE timeclock_clock_access`, yields the clock's DSN, and
   drops both (`DROP DATABASE … WITH (FORCE)`, then the role). A seeding helper inserts employee "Ann"
@@ -585,10 +585,10 @@ async def test_owner_update_of_settings_refetches(): UPDATE config.settings SET 
 async def test_last_contact_survives_a_restart(): new DatabaseSync over the same store reports the saved last_contact
 ```
 
-- [ ] **Step 2: Run; they fail** (container up, variable set). `uv run pytest tests/test_sync.py -v`
-- [ ] **Step 3: Implement `sync.py`.**
-- [ ] **Step 4: Run; they pass**; without the variable they skip (+ ruff, pyright).
-- [ ] **Step 5: Commit** `feat(sync): mirror and push through the backend's relay`.
+- [x] **Step 2: Run; they fail** (container up, variable set). `uv run pytest tests/test_sync.py -v`
+- [x] **Step 3: Implement `sync.py`.**
+- [x] **Step 4: Run; they pass**; without the variable they skip (+ ruff, pyright).
+- [x] **Step 5: Commit** `feat(sync): mirror and push through the backend's relay`.
 
 ---
 
