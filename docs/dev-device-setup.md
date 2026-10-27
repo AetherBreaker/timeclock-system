@@ -110,6 +110,28 @@ Coolify renames the container (`coolify-tunnel-<id>`) but keeps `coolify-tunnel`
 - To run Docker as `tcadmin` once Coolify has installed it: `sudo usermod -aG docker tcadmin`, then log in again.
 - Before the time clock app is deployed here, make sure nothing is using the reader: fprintd only claims it while a command like `fprintd-verify` is running.
 
+## Deploying the clock
+
+Once per clock, after the install. timeclock-dev's values are in parentheses.
+
+1. **Tunnel:** `sudo coolify-tunnel-setup <port>` with the next free port (timeclock-dev has 22001, so clocks start at 22002), add its line to coolify-tunnel's `docker/authorized_keys`, and redeploy coolify-tunnel (5b).
+2. **Coolify server:** at `coolify-tunnel:<port>`, with Coolify's key in root's `authorized_keys` and the proxy set to **None** (5c).
+3. **Hub:** in wireguard-hub's `peers.toml`, a row `timeclock-system-<INSTANCE_ID>` (`timeclock-system-dev`) with the next free `/32` and `lan = "office"` (`lan = "dev"`); in `rules.v4`, forwards from that address to the log server (TCP 9020) and the backend (TCP 5432); then a hub release.
+4. **Database login,** in the SQL editor: `CREATE ROLE timeclock_clock_<INSTANCE_ID> LOGIN PASSWORD '<random>' IN ROLE timeclock_clocks;` (`timeclock_clock_dev` … `IN ROLE timeclock_test_clocks`).
+5. **On the device:** `sudo mkdir -p /data/timeclock_system_files/branding`, and copy `SFT-Logo-June-2022-color.svg` into `branding/`. Without it the screen shows no logo.
+6. **Coolify application** (Docker Compose, this repository, `docker/compose.yaml`) with these variables, then deploy. Deploys stop the old containers first, which blanks the screen and stops punches, so deploy outside shift changes.
+
+   | Variable | Value |
+   | --- | --- |
+   | `INSTANCE_ID` | the clock's number, from 1 (`dev`) |
+   | `ALERTS_EMAIL_PWD`, `PINGKEY` | as on other projects |
+   | `WG_PRIVATE_KEY` | the contents of `timeclock-system-<INSTANCE_ID>.key` in the wireguard-hub checkout (gitignored) |
+   | `WG_HUB_URL`, `WG_HUB_REPO`, `WG_HUB_TOKEN` | the hub's fetched-mode values |
+   | `TIMECLOCK_DB_NAME` | `timeclock` (`timeclock_test`) |
+   | `TIMECLOCK_DB_USER`, `TIMECLOCK_DB_PASSWORD` | the login from step 4 |
+
+   The compose file sets the rest: time zone, log server and database addresses, and alert addresses. The screen stays blank until the app's health check passes; then the kiosk opens the clock.
+
 ## Rebuilding the image
 
 The image is built from [`image/dev-device/`](../image/dev-device/) in a `debian:trixie` container (Docker Desktop):
