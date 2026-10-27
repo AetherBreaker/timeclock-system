@@ -1150,21 +1150,20 @@ end (`AGENTS.md`).
      here as a submodule at `schema/` (now at 0.3.1, with §8.4's runs table);
    - wireguard-hub: rows for the backend, the log server and the first clock, and their forward rules (§12);
      the log server's spoke switch (§10.7) once its row exists.
-2. **timeclock-backend** (§8): built and released as v0.2.0, not yet deployed. Deployment waits for step 4's
-   schema release, 0.4.0 (owner). Then deploy on the VPS; with the database up, install DBeaver Community on
+2. **timeclock-backend** (§8): released as v0.3.0 on schema 0.4.0, not yet deployed. Deploy on the VPS; with the database up, install DBeaver Community on
    the owner's workstation and set up its SSH connection to the VPS (R30.2).
 3. **The clock app and kiosk** on timeclock-dev (§5–§7, §9.1, without `discovery`), against the test
-   database (R26.6): nearly done; it closes when the current clock PR is merged and released. The kiosk
-   files start from Appendix A. Once they're committed here, clean up the test leftovers: the `kiosk-test`
-   container, the stopped `tc-app`, the `kiosk-test` and `apptest` images, the `tc-net` network,
-   `/root/fp-test-template.bin` and `/tmp/fpdata/`.
+   database (R26.6): built and released as 0.1.0, test leftovers cleaned up (2026-10-27). What's left is the
+   Coolify deploy on timeclock-dev and its hardware checks below.
 4. **Admin menu, adding employees and hours**, planned and built from this spec, in timeclock-schema
    (0001 revised in place, release 0.4.0), the backend where it's touched, and the clock: the admin menu,
    adding employees, contact fields and PIN-only login (§4.2, §4.4, §6.4–§6.6, §9.1); the hours function,
-   break allowance and settings (§4.3, §4.5); the alert system with the weekly-hours alert (§6.11).
+   break allowance and settings (§4.3, §4.5); the alert system with the weekly-hours alert (§6.11). Built and
+   merged (clock PR #2, schema 0.4.0); the USB keyboard hotplug check on the kiosk is still open.
 5. **LAN sharing:** devkit-container §11.3 with `discover`, the hub's `lan` field (§12), the `discovery`
    service and clock-to-clock sharing (§6.7), sharing new employees included. The clocks already work
-   through the hub without it.
+   through the hub without it. **Deferred** until a second clock is close to being built; early on there is
+   only one (owner, 2026-10-27).
 6. **Follow-ups** (§14).
 
 Verify on the hardware, at the step that makes each possible (not in long VM runs; say what's being
