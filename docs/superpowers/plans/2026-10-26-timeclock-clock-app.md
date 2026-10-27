@@ -680,7 +680,7 @@ async def test_last_contact_survives_a_restart(): new DatabaseSync over the same
   `reader.set_mode` only when the mode changes. `reader_awake` = mode isn't CLOSED (the page shows
   `IDLE_ASLEEP` when it's false).
 
-- [ ] **Step 1: Failing tests.** A real `Clock` over a `tmp_path` store (seeded: employee 1 Ann with a print,
+- [x] **Step 1: Failing tests.** A real `Clock` over a `tmp_path` store (seeded: employee 1 Ann with a print,
   employee 2 Bob without one, employee 3 Mia a manager with a print; business hours Mon–Sun 00:00–23:59 unless a
   test clears them), a `FakeReaderPort` recording `set_mode` calls, and fake clocks (`monotonic`, `wall_now`)
   the test advances:
@@ -708,10 +708,10 @@ async def test_reader_closes_only_when_idle_after_hours(): hours end while a Men
 async def test_pin_scan_after_hours_opens_the_reader()
 ```
 
-- [ ] **Step 2: Run; they fail.** `uv run pytest tests/test_controller.py -v`
-- [ ] **Step 3: Implement `ui/text.py` and `ui/controller.py`.**
-- [ ] **Step 4: Run; they pass** (+ ruff, pyright).
-- [ ] **Step 5: Commit** `feat(ui): add the kiosk controller and screen text`.
+- [x] **Step 2: Run; they fail.** `uv run pytest tests/test_controller.py -v`
+- [x] **Step 3: Implement `ui/text.py` and `ui/controller.py`.**
+- [x] **Step 4: Run; they pass** (+ ruff, pyright).
+- [x] **Step 5: Commit** `feat(ui): add the kiosk controller and screen text`.
 
 ---
 
