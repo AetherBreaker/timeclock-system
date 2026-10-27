@@ -703,4 +703,10 @@ class KioskController:
         if s.until is not None and now >= s.until:
           self._screen = Idle()
       elif now - s.touched_at >= IDLE_CLOSE_SECS:
-        self._screen = Idle()
+        # The new employee is already saved, so a timeout on their optional fingerprint step still shows their number.
+        if isinstance(s, NewFingerprint):
+          self._screen = EmployeeAdded(s.employee.name, s.employee.id, touched_at=now)
+        elif isinstance(s, Registering) and s.added is not None:
+          self._screen = EmployeeAdded(s.added.name, s.added.id, touched_at=now)
+        else:
+          self._screen = Idle()
