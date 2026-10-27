@@ -282,7 +282,11 @@ def test_busy_seconds_reports_a_running_call(make: Callable[..., Harness]) -> No
 def test_enroll_posts_stages_then_enrolled_and_returns_to_ready(make: Callable[..., Harness]) -> None:
   h = make(FakeReader(enroll_result=b"new-template"), mode=ReaderMode.ENROLL)
   assert [h.event() for _ in range(6)] == [*(EnrollStage(done, 5) for done in range(1, 6)), Enrolled(b"new-template")]
-  h.reader.next_call("identify")
+  order: list[str] = []
+  while "identify" not in order:
+    order.append(h.reader.calls.get(timeout=WAIT)[0])
+  # The last stage's finger must lift before identify, or it's matched as the employee just enrolled.
+  assert [name for name in order if name in {"enroll", "finger_off", "identify"}] == ["enroll", "finger_off", "identify"]
   assert h.scanner.mode is ReaderMode.READY
 
 

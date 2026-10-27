@@ -250,8 +250,6 @@ class Scanner:
     except ReaderGone as e:
       self._opened = False
       self._on_fatal(str(e))
-    except Exception as e:  # noqa: BLE001  # a dead thread behind a ready-looking screen is the anti-goal (§6.2)
-      self._on_fatal(f"scanner thread crashed: {e!r}")
     else:
       if self._opened:
         try:
@@ -367,5 +365,10 @@ class Scanner:
       superseded = self._stopping or self._mode_changes != mode_changes
       if not superseded:
         self._mode = ReaderMode.READY
-    if outcome is not None and not superseded:
+    if superseded:
+      return
+    if outcome is not None:
       self._post(outcome)
+    # Posted first so the UI shows the result at once; then the finger from the last stage must lift before READY's
+    # identify, or it is captured and matched as the employee who just enrolled (§6.2, Review Focus 1).
+    self._blocking(self._reader.wait_finger_off, self._timings.finger_off_timeout)
