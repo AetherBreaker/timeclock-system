@@ -1,7 +1,7 @@
 # Standard library imports
 import asyncio
 from datetime import UTC, datetime, time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -11,8 +11,8 @@ import pytest
 from nicegui import ui
 from nicegui.testing import user_simulation
 from pydantic import SecretBytes, SecretStr
-from timeclock_schema.enums import PunchKind
-from timeclock_schema.models import BusinessHours, Employee, Fingerprint
+from timeclock_schema.enums import EmployeeRole, PunchKind
+from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group
 
 # First party imports
 from timeclock_system.clock import Clock
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 NY = ZoneInfo("America/New_York")
 NOW = datetime(2026, 10, 27, 12, 2, tzinfo=UTC)
-ANN_PRINT = uuid4()
+ANN_PRINT, ADA_PRINT = uuid4(), uuid4()
 
 
 class RecordingReader:
@@ -45,11 +45,19 @@ class RecordingReader:
 async def controller(tmp_path: Path) -> AsyncIterator[KioskController]:
   store = LocalStore(tmp_path / "clock.sqlite3")
   pin_hash = SecretStr(bcrypt.hashpw(b"1234", bcrypt.gensalt(rounds=4)).decode())
-  store.replace_table("employees", [Employee(id=1, name="Ann", pin_username="12", pin_hash=pin_hash, updated_at=NOW)])
-  store.replace_table("business_hours", [BusinessHours(id=d, weekday=d, opens=time(0, 0), closes=time(23, 59)) for d in range(1, 8)])
-  store.insert_fingerprint(
-    Fingerprint(id=ANN_PRINT, employee_id=1, template=SecretBytes(b"t"), registered_at=NOW, instance_id="1"), origin="db"
+  store.replace_table(
+    "employees",
+    [
+      Employee(id=1, name="Ann", pin_username="12", pin_hash=pin_hash, updated_at=NOW),
+      Employee(id=2, name="Ada", pin_username="34", pin_hash=pin_hash, role=EmployeeRole.ADMIN, updated_at=NOW),
+    ],
   )
+  store.replace_table("groups", [Group(id=1, name="default")])
+  store.replace_table("business_hours", [BusinessHours(id=d, weekday=d, opens=time(0, 0), closes=time(23, 59)) for d in range(1, 8)])
+  for print_id, employee_id in ((ANN_PRINT, 1), (ADA_PRINT, 2)):
+    store.insert_fingerprint(
+      Fingerprint(id=print_id, employee_id=employee_id, template=SecretBytes(b"t"), registered_at=NOW, instance_id="1"), origin="db"
+    )
   clock = Clock(store, instance_id="1", clock_number=1, tz=NY, alert=lambda _s, _b: None)
   await clock.load()
   yield KioskController(clock, RecordingReader(), tz=NY)
@@ -179,3 +187,45 @@ async def test_the_reader_indicator_says_how_to_wake_a_sleeping_reader(tmp_path:
     await user.should_see(marker="reader-asleep")
     await user.should_see(text.READER_ASLEEP)
   store.close()
+
+
+async def test_the_admin_button_is_only_on_an_admins_menu(controller: KioskController, tmp_path: Path) -> None:
+  ctl = controller
+  async with user_simulation(build_root(ctl, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await ctl.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("Ann")
+    await user.should_not_see(text.ADMIN)
+    await ctl.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
+    await user.should_see("Ada")
+    user.find(kind=ui.button, content=text.ADMIN).click()
+    await user.should_see(text.ADMIN_RECONFIRM)
+    await ctl.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
+    await user.should_see(text.ADMIN_MENU)
+    user.find(kind=ui.button, content=text.ADD_EMPLOYEE).click()
+    await user.should_see(marker="field-name")
+
+
+async def test_typed_form_text_survives_a_finger_touch_and_errors(controller: KioskController, tmp_path: Path) -> None:
+  ctl = controller
+  async with user_simulation(build_root(ctl, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await ctl.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
+    await ctl.admin()
+    await ctl.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
+    await ctl.add_employee()
+    await user.should_see(marker="field-name")
+    user.find(marker="field-phone").type("555-12")
+    for _ in range(50):
+      if getattr(ctl.screen, "phone", "") == "555-12":
+        break
+      await asyncio.sleep(0.02)
+    phone = next(iter(user.find(marker="field-phone").elements))
+    await ctl.on_scanner_event(FingerDown())  # the indicator changes; the form must not be redrawn
+    await user.should_see(marker="reader-scanning")
+    assert next(iter(user.find(marker="field-phone").elements)) is phone
+    user.find(kind=ui.button, content=text.NEXT).click()
+    await user.should_see(text.NAME_REQUIRED)
+    await user.should_see(text.PHONE_INVALID)
+    redrawn = next(iter(user.find(marker="field-phone").elements))
+    assert cast("ui.input", redrawn).value == "555-12"  # the redraw keeps what was typed

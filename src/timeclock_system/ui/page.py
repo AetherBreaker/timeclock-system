@@ -15,9 +15,15 @@ from nicegui import app, ui
 # First party imports
 from timeclock_system.ui import text
 from timeclock_system.ui.controller import (
+  AddEmployeeDetails,
+  AdminMenu,
+  AdminReconfirm,
   Confirmation,
+  EmployeeAdded,
   Idle,
   Menu,
+  NewFingerprint,
+  NewPin,
   OverridePrompt,
   PinEntry,
   PinScan,
@@ -34,11 +40,11 @@ if TYPE_CHECKING:
   from zoneinfo import ZoneInfo
 
   # Third party imports
-  from nicegui.events import KeyEventArguments
+  from nicegui.events import KeyEventArguments, ValueChangeEventArguments
 
   # First party imports
   from timeclock_system.sync import DbStatus
-  from timeclock_system.ui.controller import KioskController
+  from timeclock_system.ui.controller import DetailsField, KioskController, Screen
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +109,15 @@ class _KioskPage:
     self._tz = tz
     self._branding_dir = branding_dir
     self._logo_checked = False
-    controller.add_listener(self.screen.refresh)
+    self._shown: Screen | None = None  # what `screen` last drew; one page instance serves every client
+    controller.add_listener(self._on_change)
+
+  def _on_change(self) -> None:
+    # The indicator always; the screen only when it compares unequal to what's drawn, so the add-employee form's typing
+    # (left out of its equality) never redraws it and drops the input's focus.
+    self.indicator.refresh()
+    if self._controller.screen != self._shown:
+      self.screen.refresh()
 
   def root(self) -> None:
     if not self._logo_checked:
@@ -120,6 +134,7 @@ class _KioskPage:
     ui.keyboard(on_key=self._on_key)
 
     clock_label = ui.label().classes("fixed top-2 right-4 text-xl")
+    self.indicator()
     self.screen()
     with ui.row().classes("fixed bottom-2 right-4 items-center gap-2 text-base"):
       dot = ui.icon("circle").classes("text-sm")
@@ -148,18 +163,16 @@ class _KioskPage:
 
   @ui.refreshable_method
   def screen(self) -> None:
-    s = self._controller.screen
-    self._reader_indicator()
+    s = self._shown = self._controller.screen
     with ui.column().classes("w-full items-center gap-6 pt-8"):
       match s:
         case Idle():
           self._idle(s)
         case Menu():
           self._menu(s)
-        case Rescan():
-          self._finger_prompt(text.RESCAN, s.message)
-        case PinScan():
-          self._finger_prompt(text.SCAN_YOUR_FINGER, s.message)
+        case Rescan() | PinScan():
+          rescan = isinstance(s, Rescan)
+          self._finger_prompt(text.RESCAN if rescan else text.SCAN_YOUR_FINGER, s.message, pin_ok=rescan and s.pin_ok)
         case OverridePrompt():
           self._override_prompt(s)
         case RegisterPrompt():
@@ -169,17 +182,21 @@ class _KioskPage:
             self._button(text.MANAGER_OVERRIDE, self._controller.request_override)
             self._button(text.CANCEL, self._controller.cancel)
         case PinEntry():
-          self._pin_pad(s)
+          title = text.ENTER_USERNAME if s.field == "username" else text.ENTER_PIN
+          self._pin_pad(title, s.username if s.field == "username" else "•" * len(s.pin.get_secret_value()), s.error)
         case Registering():
           ui.label(text.REGISTERING.format(done=s.done, total=s.total)).classes("sft-title")
           self._button(text.CANCEL, self._controller.cancel)
         case Confirmation():
           self._confirmation(s)
+        case AdminReconfirm() | AdminMenu() | AddEmployeeDetails() | NewPin() | NewFingerprint() | EmployeeAdded():
+          self._admin_screen(s)
 
   # The per-screen renderers below are split out of `screen` for C901/PLR0912.
 
-  def _reader_indicator(self) -> None:
-    # The reader icon, on every screen; redrawn with the screen, since the controller reports its changes too.
+  @ui.refreshable_method
+  def indicator(self) -> None:
+    # The reader icon, on every screen, redrawn on its own so a change doesn't redraw the screen under it.
     indicator = self._controller.reader_indicator
     with (
       ui.row()
@@ -225,13 +242,86 @@ class _KioskPage:
     if s.notice:
       ui.label(s.notice).classes("sft-error")
     self._button(text.CANCEL, self._controller.cancel)
+    if info.is_admin:
+      # Near the bottom, well away from the punch buttons (owner, 2026-10-27).
+      with ui.row().classes("fixed bottom-14 left-0 right-0 justify-center"):
+        self._button(text.ADMIN, self._controller.admin)
 
-  def _finger_prompt(self, title: str, message: str | None) -> None:
+  def _finger_prompt(self, title: str, message: str | None, *, pin_ok: bool = False) -> None:
     ui.label(title).classes("sft-title")
     if message:
       ui.label(message)
     with ui.row():
-      self._button(text.MANAGER_OVERRIDE, self._controller.request_override)
+      # An admin or exempt employee answers a rescan with their PIN and needs no override (§6.4).
+      if pin_ok:
+        self._button(text.USE_PIN, self._controller.use_pin)
+      else:
+        self._button(text.MANAGER_OVERRIDE, self._controller.request_override)
+      self._button(text.CANCEL, self._controller.cancel)
+
+  def _admin_screen(self, s: AdminReconfirm | AdminMenu | AddEmployeeDetails | NewPin | NewFingerprint | EmployeeAdded) -> None:
+    match s:
+      case AdminReconfirm():
+        ui.label(text.ADMIN_RECONFIRM).classes("sft-title")
+        if s.message:
+          ui.label(s.message).classes("sft-error")
+        with ui.row():
+          self._button(text.USE_PIN, self._controller.use_pin)
+          self._button(text.CANCEL, self._controller.cancel)
+      case AdminMenu():
+        ui.label(text.ADMIN_MENU).classes("sft-title")
+        if s.message:
+          ui.label(s.message).classes("sft-error")
+        with ui.column().classes("items-center gap-4"):
+          self._button(text.ADD_EMPLOYEE, self._controller.add_employee, "sft-punch")
+          self._button(text.BACK, self._controller.cancel)
+      case AddEmployeeDetails():
+        self._details_form(s)
+      case NewPin():
+        title = text.NEW_PIN.format(name=s.details.name) if s.field == "first" else text.CONFIRM_NEW_PIN
+        self._pin_pad(title, "•" * len(s.pin.get_secret_value()), s.error)
+      case NewFingerprint():
+        ui.label(text.NEW_FINGERPRINT.format(name=s.employee.name)).classes("sft-title")
+        if s.message:
+          ui.label(s.message).classes("sft-error")
+        with ui.row():
+          self._button(text.REGISTER, self._controller.register, "sft-punch")
+          self._button(text.SKIP, self._controller.skip_fingerprint)
+      case EmployeeAdded():
+        ui.label(text.EMPLOYEE_ADDED.format(name=s.name)).classes("sft-title")
+        ui.label(text.EMPLOYEE_NUMBER.format(number=s.number)).classes("text-3xl").mark("employee-number")
+        self._button(text.OK, self._controller.cancel, "sft-punch")
+
+  def _details_form(self, s: AddEmployeeDetails) -> None:
+    # Typed on a plugged-in keyboard (§6.4). Every change goes to the controller, which keeps it without a redraw.
+    errors = dict(s.errors)
+
+    def edited(name: DetailsField) -> Callable[[ValueChangeEventArguments], object]:
+      return lambda e: self._guarded(lambda: self._controller.edit_details(name, str(e.value)))
+
+    ui.label(text.ADD_EMPLOYEE).classes("sft-title")
+    with ui.column().classes("w-[32rem] max-w-full gap-1"):
+      texts: tuple[tuple[DetailsField, str, str], ...] = (
+        ("name", text.FIELD_NAME, s.name),
+        ("phone", text.FIELD_PHONE, s.phone),
+        ("email", text.FIELD_EMAIL, s.email),
+      )
+      for name, label, value in texts:
+        ui.input(label, value=value, on_change=edited(name)).classes("w-full text-2xl").props("dark outlined").mark(f"field-{name}")
+        if name in errors:
+          ui.label(errors[name]).classes("sft-error text-base").mark(f"error-{name}")
+      ui.select(dict(text.ROLE_LABELS), label=text.FIELD_ROLE, value=s.role, on_change=edited("role")).classes("w-full").props(
+        "dark outlined"
+      ).mark("field-role")
+      ui.select(dict(s.groups), label=text.FIELD_GROUP, value=s.group_id, on_change=edited("group_id")).classes("w-full").props(
+        "dark outlined"
+      ).mark("field-group_id")
+      choices: tuple[DetailsField, ...] = ("role", "group_id")
+      for name in choices:
+        if name in errors:
+          ui.label(errors[name]).classes("sft-error text-base").mark(f"error-{name}")
+    with ui.row():
+      self._button(text.NEXT, self._controller.submit_details, "sft-punch")
       self._button(text.CANCEL, self._controller.cancel)
 
   def _override_prompt(self, s: OverridePrompt) -> None:
@@ -250,12 +340,14 @@ class _KioskPage:
       ui.label(s.hours)
       for warning in s.warnings:
         ui.label(warning).classes("sft-error")
+      for notice in s.notices:
+        ui.label(notice).classes("text-3xl").style("color: var(--sft-yellow)").mark("alert-notice")
 
-  def _pin_pad(self, s: PinEntry) -> None:
-    ui.label(text.ENTER_USERNAME if s.field == "username" else text.ENTER_PIN).classes("sft-title")
-    ui.label(s.username if s.field == "username" else "•" * len(s.pin.get_secret_value())).classes("text-4xl h-12")
-    if s.error:
-      ui.label(s.error).classes("sft-error")
+  def _pin_pad(self, title: str, shown: str, error: str | None) -> None:
+    ui.label(title).classes("sft-title")
+    ui.label(shown).classes("text-4xl h-12")
+    if error:
+      ui.label(error).classes("sft-error")
     with ui.grid(columns=3).classes("gap-2"):
       for key in _PAD:
         match key:

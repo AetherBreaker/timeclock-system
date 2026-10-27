@@ -1,7 +1,8 @@
 # Standard library imports
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
-from typing import TYPE_CHECKING
+from decimal import Decimal
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -9,23 +10,31 @@ from zoneinfo import ZoneInfo
 import bcrypt
 import pytest
 from pydantic import SecretBytes, SecretStr
+from timeclock_schema.alerts import CONFIRMATION_NOTICE, WEEKLY_HOURS, Firing, Hook
 from timeclock_schema.enums import BypassReason, EmployeeRole, PunchKind
-from timeclock_schema.models import BusinessHours, Employee, Fingerprint
+from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Punch, Settings
 
 # First party imports
-from timeclock_system.clock import Clock, OverrideGrant
+from timeclock_system.clock import Clock, NewEmployee, OverrideGrant
 from timeclock_system.scanner import Enrolled, EnrollFailed, EnrollStage, FingerDown, Matched, NoMatch, ReaderMode, ReaderPaused
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
 from timeclock_system.ui import text
 from timeclock_system.ui.controller import (
+  AddEmployeeDetails,
+  AdminMenu,
+  AdminReconfirm,
   Confirmation,
+  EmployeeAdded,
   Idle,
   KioskController,
   Menu,
+  NewFingerprint,
+  NewPin,
   OverridePrompt,
   OverrideRequest,
   PinEntry,
+  PinRecheck,
   PinScan,
   ReaderIndicator,
   Registering,
@@ -38,11 +47,14 @@ if TYPE_CHECKING:
   from collections.abc import AsyncIterator
   from pathlib import Path
 
+  # First party imports
+  from timeclock_system.ui.controller import DetailsField
+
 NY = ZoneInfo("America/New_York")
 START = datetime(2026, 10, 27, 12, 2, tzinfo=UTC)  # Tuesday 8:02 AM EDT
-ANN, BOB, MIA = 1, 2, 3
+ANN, BOB, MIA, ADA, EVE = 1, 2, 3, 4, 5
 ANN_PRINT, MIA_PRINT = uuid4(), uuid4()
-PINS = {ANN: "1001", BOB: "1002", MIA: "1003"}
+PINS = {ANN: "1001", BOB: "1002", MIA: "1003", ADA: "1004", EVE: "1005"}
 
 
 class FakeTime:
@@ -97,8 +109,11 @@ async def kiosk(tmp_path: Path) -> AsyncIterator[Kiosk]:
       Employee(id=ANN, name="Ann", pin_username=PINS[ANN], pin_hash=pin_hash, updated_at=START),
       Employee(id=BOB, name="Bob", pin_username=PINS[BOB], pin_hash=pin_hash, updated_at=START),
       Employee(id=MIA, name="Mia", pin_username=PINS[MIA], pin_hash=pin_hash, role=EmployeeRole.MANAGER, updated_at=START),
+      Employee(id=ADA, name="Ada", pin_username=PINS[ADA], pin_hash=pin_hash, role=EmployeeRole.ADMIN, updated_at=START),
+      Employee(id=EVE, name="Eve", pin_username=PINS[EVE], pin_hash=pin_hash, fingerprint_exempt=True, updated_at=START),
     ],
   )
+  store.replace_table("groups", [Group(id=1, name="default")])
   store.replace_table("business_hours", [BusinessHours(id=d, weekday=d, opens=time(0, 0), closes=time(23, 59)) for d in range(1, 8)])
   for print_id, employee_id in ((ANN_PRINT, ANN), (MIA_PRINT, MIA)):
     store.insert_fingerprint(
@@ -462,3 +477,203 @@ async def test_the_indicator_shows_the_reader_asleep_after_hours(kiosk: Kiosk) -
   assert kiosk.ctl.reader_indicator is ReaderIndicator.ASLEEP
   await kiosk.ctl.tap()
   assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+
+
+# -- admins, exempt employees and adding employees (§6.4) -------------------------------------------------------------
+
+
+async def test_an_admin_pin_login_skips_the_fingerprint_and_is_recorded(kiosk: Kiosk) -> None:
+  await kiosk.pin_login(ADA)
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu) and screen.info.is_admin and screen.auth is None
+  [bypass] = kiosk.store.unsynced_bypasses()
+  assert (bypass.employee_id, bypass.reason) == (ADA, BypassReason.ADMIN_PIN_LOGIN)
+
+
+async def test_an_exempt_pin_login_skips_the_fingerprint_and_is_recorded(kiosk: Kiosk) -> None:
+  await kiosk.pin_login(EVE)
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu) and not screen.info.is_admin
+  assert [b.reason for b in kiosk.store.unsynced_bypasses()] == [BypassReason.EXEMPT_PIN_LOGIN]
+
+
+async def test_only_an_admins_menu_opens_the_admin_reconfirm(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(matched(MIA))  # a manager
+  await kiosk.ctl.admin()
+  assert isinstance(kiosk.ctl.screen, Menu)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  await kiosk.ctl.admin()
+  assert kiosk.ctl.screen == AdminReconfirm(ADA, touched_at=kiosk.t.mono)
+
+
+async def test_admin_reconfirm_by_finger(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  await kiosk.ctl.admin()
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  assert kiosk.ctl.screen == AdminMenu(ADA, touched_at=kiosk.t.mono)
+  assert kiosk.store.unsynced_bypasses() == []  # a fingerprint bypasses nothing
+
+
+async def test_someone_elses_finger_on_the_reconfirm_opens_their_menu(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  await kiosk.ctl.admin()
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu) and screen.info.employee_id == ANN
+
+
+async def test_admin_reconfirm_by_pin_is_recorded_and_must_be_their_own(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  await kiosk.ctl.admin()
+  await kiosk.ctl.use_pin()
+  await kiosk.type_and_enter(PINS[MIA])
+  await kiosk.type_and_enter("1234")
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, PinEntry) and screen.error == text.NOT_YOUR_PIN and screen.purpose == PinRecheck(ADA, None)
+  await kiosk.type_and_enter(PINS[ADA])
+  await kiosk.type_and_enter("1234")
+  assert kiosk.ctl.screen == AdminMenu(ADA, touched_at=kiosk.t.mono)
+  assert [b.reason for b in kiosk.store.unsynced_bypasses()] == [BypassReason.ADMIN_PIN_LOGIN]
+
+
+async def test_an_admins_rescan_takes_their_pin(kiosk: Kiosk) -> None:
+  await kiosk.pin_login(ADA)
+  kiosk.t.advance(31)
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  rescan = kiosk.ctl.screen
+  assert isinstance(rescan, Rescan) and rescan.pin_ok
+  await kiosk.ctl.use_pin()
+  await kiosk.type_and_enter(PINS[ADA])
+  await kiosk.type_and_enter("1234")
+  assert isinstance(kiosk.ctl.screen, Confirmation)
+  [(punch, bypass)] = kiosk.store.unsynced_punches()
+  assert bypass is not None and (bypass.reason, bypass.punch_id) == (BypassReason.ADMIN_PIN_LOGIN, punch.id)
+
+
+async def test_a_fingerprint_employees_rescan_offers_no_pin(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  kiosk.t.advance(31)
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  rescan = kiosk.ctl.screen
+  assert isinstance(rescan, Rescan) and not rescan.pin_ok
+  await kiosk.ctl.use_pin()
+  assert kiosk.ctl.screen is rescan
+
+
+async def admin_menu(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  await kiosk.ctl.admin()
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  await kiosk.ctl.add_employee()
+
+
+async def test_the_details_form_shows_each_error_beside_its_field(kiosk: Kiosk) -> None:
+  await admin_menu(kiosk)
+  form = kiosk.ctl.screen
+  assert isinstance(form, AddEmployeeDetails) and form.groups == ((1, "default"),)
+  await kiosk.ctl.submit_details()
+  assert dict(cast("AddEmployeeDetails", kiosk.ctl.screen).errors) == {"name": text.NAME_REQUIRED}
+  for name, value in (("name", "  "), ("phone", "555-1234"), ("email", "zed@example"), ("role", "admin"), ("group_id", "9")):
+    await kiosk.ctl.edit_details(cast("DetailsField", name), value)
+  await kiosk.ctl.submit_details()
+  assert dict(cast("AddEmployeeDetails", kiosk.ctl.screen).errors) == {
+    "name": text.NAME_REQUIRED,
+    "phone": text.PHONE_INVALID,
+    "email": text.EMAIL_INVALID,
+    "role": text.ROLE_INVALID,
+    "group_id": text.GROUP_INVALID,
+  }
+
+
+async def test_typing_in_the_form_doesnt_count_as_a_screen_change(kiosk: Kiosk) -> None:
+  await admin_menu(kiosk)
+  changes: list[None] = []
+  kiosk.ctl.add_listener(lambda: changes.append(None))
+  before = kiosk.ctl.screen
+  kiosk.t.advance(100)
+  await kiosk.ctl.edit_details("name", "Zed")
+  assert kiosk.ctl.screen == before and changes == []
+  form = kiosk.ctl.screen
+  assert isinstance(form, AddEmployeeDetails) and form.name == "Zed"
+  kiosk.t.advance(100)  # typing keeps the form open past two minutes from its start
+  await kiosk.ctl.tick()
+  assert isinstance(kiosk.ctl.screen, AddEmployeeDetails)
+
+
+async def fill_details(kiosk: Kiosk, *, role: str = "manager") -> None:
+  await admin_menu(kiosk)
+  for name, value in (("name", " Zed New "), ("phone", "(555) 123-4567"), ("email", "zed@example.com"), ("role", role)):
+    await kiosk.ctl.edit_details(cast("DetailsField", name), value)
+  await kiosk.ctl.submit_details()
+
+
+async def test_add_an_employee_end_to_end(kiosk: Kiosk) -> None:
+  await fill_details(kiosk)
+  pin = kiosk.ctl.screen
+  assert isinstance(pin, NewPin) and pin.details == NewEmployee("Zed New", "+15551234567", "zed@example.com", EmployeeRole.MANAGER, 1)
+  assert kiosk.store.pending_employees() == []  # nothing is saved before the PIN
+  await kiosk.type_and_enter("2468")
+  await kiosk.type_and_enter("1357")
+  pin = kiosk.ctl.screen
+  assert isinstance(pin, NewPin) and pin.field == "first" and pin.error == text.PIN_MISMATCH
+  assert not pin.first.get_secret_value() and not pin.pin.get_secret_value()
+  await kiosk.type_and_enter("2468")
+  await kiosk.type_and_enter("2468")
+  step = kiosk.ctl.screen
+  assert isinstance(step, NewFingerprint) and step.employee.id == 10001  # noqa: PLR2004
+  assert [e.id for e in kiosk.store.pending_employees()] == [10001]
+  await kiosk.ctl.skip_fingerprint()
+  assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)
+  await kiosk.ctl.cancel()  # OK
+  assert kiosk.ctl.screen == Idle()
+  # They can log in at once; they have no print, so the usual register-or-override prompt follows.
+  await kiosk.ctl.use_pin()
+  await kiosk.type_and_enter("10001")
+  await kiosk.type_and_enter("2468")
+  assert isinstance(kiosk.ctl.screen, RegisterPrompt)
+
+
+async def test_the_new_employees_fingerprint_is_optional(kiosk: Kiosk) -> None:
+  await fill_details(kiosk, role="employee")
+  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("11")
+  await kiosk.ctl.register()
+  registering = kiosk.ctl.screen
+  assert isinstance(registering, Registering) and registering.added is not None
+  await kiosk.ctl.on_scanner_event(EnrollFailed(reason="timeout"))
+  retry = kiosk.ctl.screen
+  assert isinstance(retry, NewFingerprint) and retry.message == text.REGISTRATION_TIMED_OUT
+  await kiosk.ctl.register()
+  await kiosk.ctl.on_scanner_event(Enrolled(template=b"new"))
+  assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)
+  assert [f.employee_id for f in kiosk.store.unsynced_fingerprints()] == []  # held until the employee is accepted
+  assert any(f.employee_id == 10001 for f in kiosk.store.fingerprints())  # noqa: PLR2004
+
+
+async def test_cancel_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) -> None:
+  await fill_details(kiosk)
+  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("11")
+  await kiosk.ctl.cancel()
+  assert isinstance(kiosk.ctl.screen, EmployeeAdded)
+  assert [e.id for e in kiosk.store.pending_employees()] == [10001]
+
+
+async def test_the_weekly_hours_notice_shows_on_the_confirmation(kiosk: Kiosk) -> None:
+  kiosk.store.set_settings(Settings(weekly_hours_alert=Decimal(30)))
+  kiosk.clock.notify_changed({"settings"})
+  monday = datetime(2026, 10, 26, 0, 1, tzinfo=NY)
+  for kind, at in ((PunchKind.CLOCK_IN, monday), (PunchKind.CLOCK_OUT, monday + timedelta(hours=31))):
+    kiosk.store.insert_punch(Punch(id=uuid4(), employee_id=ANN, kind=kind, at=at, instance_id="1"), origin="db")
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Confirmation) and screen.notices == ("You've worked over 30 hours this week",)
+
+
+def test_alert_notice_wording() -> None:
+  limit = timedelta(hours=37, minutes=30)
+  at_limit = Firing(Hook(WEEKLY_HOURS, timedelta(), (CONFIRMATION_NOTICE,)), measure=limit, limit=limit)
+  assert text.alert_notice(at_limit) == "You've worked over 37.5 hours this week"
+  early = Firing(Hook(WEEKLY_HOURS, timedelta(hours=1), (CONFIRMATION_NOTICE,)), measure=limit, limit=timedelta(hours=40))
+  assert text.alert_notice(early) == "You're within 1 h of 40 hours this week"
