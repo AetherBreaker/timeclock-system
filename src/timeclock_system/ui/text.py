@@ -1,6 +1,8 @@
 """Every string the kiosk shows (spec §6.4), and the formats for times, hours and the database status."""
 
 # Standard library imports
+from datetime import timedelta
+from decimal import Decimal
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -11,7 +13,7 @@ from timeclock_schema.shifts import EmployeeState
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Mapping
-  from datetime import datetime, timedelta
+  from datetime import datetime
   from zoneinfo import ZoneInfo
 
   # First party imports
@@ -76,8 +78,8 @@ def format_clock_time(at: datetime, tz: ZoneInfo) -> str:
 
 
 def format_hours(td: timedelta) -> str:
-  """Hours worked as `"7.50 h"`."""
-  return f"{td.total_seconds() / 3600:.2f} h"
+  """Hours worked as `"7.50 h"`, truncated to the hundredth (owner's rule) and exact: integer hundredths, no float."""
+  return f"{Decimal(td // timedelta(seconds=36)).scaleb(-2):.2f} h"
 
 
 def format_db_status(status: DbStatus, tz: ZoneInfo) -> str:
