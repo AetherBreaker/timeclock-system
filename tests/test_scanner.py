@@ -39,6 +39,7 @@ if TYPE_CHECKING:
   from collections.abc import Callable, Iterator, Sequence
 
 WAIT = 2.0
+TICK = 0.02  # a wait on Windows can return up to a timer tick (~16 ms) early by time.monotonic()
 BLOCK = object()  # identify/enroll outcome: block until the token is cancelled, then raise ScanCancelled
 FINGER = object()  # identify script entry: call on_finger, then take the next entry
 
@@ -205,7 +206,7 @@ def test_retry_posts_retry_and_pauses(make: Callable[..., Harness]) -> None:
   first, _ = h.reader.next_call("identify")
   assert h.event() == Retry("Center your finger")
   second, _ = h.reader.next_call("identify")
-  assert second - first >= timings.retry_pause
+  assert second - first >= timings.retry_pause - TICK
 
 
 def test_failures_back_off_instead_of_spinning(make: Callable[..., Harness]) -> None:
@@ -248,7 +249,7 @@ def test_too_hot_posts_retry_and_pauses_long(make: Callable[..., Harness]) -> No
   first, _ = h.reader.next_call("identify")
   assert h.event() == Retry("The reader is warming down, try again in a minute")
   second, _ = h.reader.next_call("identify")
-  assert second - first >= timings.too_hot_pause
+  assert second - first >= timings.too_hot_pause - TICK
 
 
 def test_reader_gone_calls_on_fatal_and_stops(make: Callable[..., Harness]) -> None:
