@@ -176,7 +176,7 @@ class KioskController:
     self._wall = wall_now
     self._screen: Screen = Idle()
     self._lock = asyncio.Lock()
-    self._listeners: list[Callable[[], None]] = []
+    self._listeners: list[Callable[[], object]] = []
     self._wake_until = float("-inf")
     self._last_finger = float("-inf")
     self._mode: ReaderMode | None = None
@@ -192,7 +192,7 @@ class KioskController:
     """Whether the reader is open; the idle screen says "Tap to scan" when it isn't."""
     return self._mode is not ReaderMode.CLOSED
 
-  def add_listener(self, cb: Callable[[], None]) -> None:
+  def add_listener(self, cb: Callable[[], object]) -> None:
     """Call `cb` after any entry point that changed `screen` or `reader_awake`."""
     self._listeners.append(cb)
 
