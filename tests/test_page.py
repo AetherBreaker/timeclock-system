@@ -115,3 +115,25 @@ async def test_a_failing_button_reaches_on_error(controller: KioskController, tm
         break
       await asyncio.sleep(0.02)
   assert [str(e) for e in errors] == ["store failed"]
+
+
+async def test_the_whole_idle_screen_wakes_the_reader(
+  controller: KioskController, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  # R40.2: a tap anywhere, not only on the logo, prompt or button. The layer is fixed over the whole viewport.
+  taps: list[None] = []
+
+  async def tap() -> None:
+    taps.append(None)
+
+  monkeypatch.setattr(controller, "tap", tap)
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    [layer] = user.find(marker="idle-tap").elements
+    assert {"fixed", "inset-0"} <= set(layer.classes)
+    user.find(marker="idle-tap").click()
+    for _ in range(50):  # the click's handler runs as a NiceGUI background task
+      if taps:
+        break
+      await asyncio.sleep(0.02)
+  assert taps == [None]
