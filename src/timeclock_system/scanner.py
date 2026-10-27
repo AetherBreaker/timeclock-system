@@ -1,4 +1,4 @@
-"""The fingerprint scanner (spec Â§6.2); the matching loop lands in a later task."""
+"""The fingerprint scanner (spec §6.2); the matching loop lands in a later task."""
 
 # Standard library imports
 from dataclasses import dataclass, field
