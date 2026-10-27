@@ -4,6 +4,7 @@
 """
 
 # Standard library imports
+import inspect
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -58,7 +59,14 @@ _NO_CONTEXT_MENU = '<script>document.addEventListener("contextmenu", e => e.prev
 _PAD = ("1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "✓")
 
 
-def build_root(controller: KioskController, status: Callable[[], DbStatus], *, tz: ZoneInfo, branding_dir: Path) -> Callable[[], None]:
+def build_root(
+  controller: KioskController,
+  status: Callable[[], DbStatus],
+  *,
+  tz: ZoneInfo,
+  branding_dir: Path,
+  on_error: Callable[[Exception], None],
+) -> Callable[[], None]:
   """Return the page's root function for `ui.run(root=…)`.
 
   Args:
@@ -66,15 +74,24 @@ def build_root(controller: KioskController, status: Callable[[], DbStatus], *, t
     status: The database status for the status line.
     tz: The business's zone, for displayed times.
     branding_dir: Where the logo SVGs live on the device (R39.1).
+    on_error: Gets any exception from a button, tap or key; NiceGUI alone would only log it.
   """
-  return _KioskPage(controller, status, tz, branding_dir).root
+  return _KioskPage(controller, status, tz, branding_dir, on_error).root
 
 
 class _KioskPage:
   """One instance serves every client: its refreshable re-renders each client's copy and drops closed ones itself."""
 
-  def __init__(self, controller: KioskController, status: Callable[[], DbStatus], tz: ZoneInfo, branding_dir: Path) -> None:
+  def __init__(
+    self,
+    controller: KioskController,
+    status: Callable[[], DbStatus],
+    tz: ZoneInfo,
+    branding_dir: Path,
+    on_error: Callable[[Exception], None],
+  ) -> None:
     self._controller = controller
+    self._on_error = on_error
     self._status = status
     self._tz = tz
     self._branding_dir = branding_dir
@@ -115,11 +132,11 @@ class _KioskPage:
     if not e.action.keydown or e.action.repeat:
       return
     if e.key.number is not None:
-      await self._controller.digit(str(e.key.number))
+      await self._guarded(lambda: self._controller.digit(str(e.key.number)))
     elif e.key.name == "Backspace":
-      await self._controller.backspace()
+      await self._guarded(self._controller.backspace)
     elif e.key.name == "Enter":
-      await self._controller.enter()
+      await self._guarded(self._controller.enter)
 
   @ui.refreshable_method
   def screen(self) -> None:
@@ -152,12 +169,22 @@ class _KioskPage:
 
   # The per-screen renderers below are split out of `screen` for C901/PLR0912.
 
+  async def _guarded(self, call: Callable[[], object]) -> None:
+    # Every button, tap and key runs through here, so their exceptions reach on_error; NiceGUI's own errors (a send to a
+    # closed browser, say) stay with its logger.
+    try:
+      result = call()
+      if inspect.isawaitable(result):
+        await result
+    except Exception as e:  # noqa: BLE001  # handed on, not swallowed
+      self._on_error(e)
+
   def _button(self, label: str, on_click: Callable[[], object], kind: str = "sft-plain") -> None:
-    ui.button(label, on_click=on_click).classes(f"sft-button {kind}").props("unelevated no-caps")
+    ui.button(label, on_click=lambda: self._guarded(on_click)).classes(f"sft-button {kind}").props("unelevated no-caps")
 
   def _idle(self, s: Idle) -> None:
     # A tap anywhere on the idle screen wakes the reader after hours (R40.2).
-    with ui.column().classes("w-full items-center gap-6").on("click", self._controller.tap):
+    with ui.column().classes("w-full items-center gap-6").on("click", lambda: self._guarded(self._controller.tap)):
       if (self._branding_dir / LOGO_FILE).exists():
         ui.image(f"/branding/{LOGO_FILE}").classes("w-96")
       ui.label(s.message or (text.IDLE_READY if self._controller.reader_awake else text.IDLE_ASLEEP)).classes("sft-title")
@@ -212,5 +239,7 @@ class _KioskPage:
             on_click = self._controller.enter
           case _:
             on_click = lambda key=key: self._controller.digit(key)  # one binding per key
-        ui.button(key, on_click=on_click).classes("sft-key").props("unelevated")
+        # Typed as taking nothing: NiceGUI passes the click event only to a parameter without a default.
+        guarded: Callable[[], object] = lambda c=on_click: self._guarded(c)
+        ui.button(key, on_click=guarded).classes("sft-key").props("unelevated")
     self._button(text.CANCEL, self._controller.cancel)

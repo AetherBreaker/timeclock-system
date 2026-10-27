@@ -118,10 +118,17 @@ def serve(project_name: str) -> None:
     keep("Week rollover", clock.run_week_rollover())
     keep("Screen timer", tick_forever())
 
-  app.on_startup(startup)
+  # Through keep, like every task: NiceGUI would run the coroutine itself and only log its exception (§6.9).
+  app.on_startup(lambda: keep("Startup", startup()))
   uvicorn.Server.capture_signals = _no_signal_capture  # pyright: ignore[reportAttributeAccessIssue]  # uvicorn is pinned for this (R21)
   ui.run(
-    root=build_root(controller, lambda: sync.status, tz=settings.tz, branding_dir=settings.branding_dir),
+    root=build_root(
+      controller,
+      lambda: sync.status,
+      tz=settings.tz,
+      branding_dir=settings.branding_dir,
+      on_error=lambda e: trigger_shutdown("Screen action failed", "".join(traceback.format_exception(e))),
+    ),
     host="0.0.0.0",  # the kiosk container reaches it over the compose network
     port=8080,
     title="Time Clock",
