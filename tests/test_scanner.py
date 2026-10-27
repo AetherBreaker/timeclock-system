@@ -240,6 +240,15 @@ def test_reader_gone_calls_on_fatal_and_stops(make: Callable[..., Harness]) -> N
   assert h.reader.drain().count("identify") == 1
 
 
+def test_a_code_bug_reaches_threading_excepthook_not_on_fatal(make: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch) -> None:
+  # aeth_ext's threading.excepthook alerts with the traceback; on_fatal would report a lost reader without one.
+  hooked: queue.Queue[BaseException | None] = queue.Queue()
+  monkeypatch.setattr(threading, "excepthook", lambda args: hooked.put(args.exc_value))
+  h = make(FakeReader([RuntimeError("a bug")]))
+  assert isinstance(hooked.get(timeout=WAIT), RuntimeError)
+  assert h.fatal.empty()
+
+
 def test_closed_mode_closes_the_reader(make: Callable[..., Harness]) -> None:
   h = make(FakeReader())
   h.reader.next_call("identify")

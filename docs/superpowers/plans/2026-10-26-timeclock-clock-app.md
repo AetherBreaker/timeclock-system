@@ -123,9 +123,9 @@ timeclock-schema 0.2, Docker Compose on Coolify, cage + Firefox ESR.
   `SHUTDOWN_ON_LOG_REJECTION = False` (R16.5); `def run_app() -> None` (body in Task 11; until then
   `raise NotImplementedError("wired in Task 11")`).
 
-- [ ] **Step 1: Branch and plan commit** — `git switch -c feat/clock-app`, then
+- [x] **Step 1: Branch and plan commit** — `git switch -c feat/clock-app`, then
   `git add docs/superpowers/plans/2026-10-26-timeclock-clock-app.md && git commit -m "docs(plans): add the clock app plan"`.
-- [ ] **Step 2: Edit `pyproject.toml`** (keep everything not listed; tombi formatting as the file has it):
+- [x] **Step 2: Edit `pyproject.toml`** (keep everything not listed; tombi formatting as the file has it):
 
 ```toml
 [project]
@@ -163,20 +163,20 @@ Also: `[tool.uv.sources]` gains `aeth-ext = [{ index = "SFTPyPI" }]` and `timecl
 `ignore = ["src/timeclock_system/fprint_reader.py"]` with the comment `# needs PyGObject and libfprint, which only exist in the image`,
 and its `exclude` adds `"schema"` if the schema plan's submodule exists.
 
-- [ ] **Step 3: `__main__.py`** with the three constants and the placeholder `run_app` (module docstring:
+- [x] **Step 3: `__main__.py`** with the three constants and the placeholder `run_app` (module docstring:
   `"""Entry point; stays import-light so initialize() runs before anything else."""`).
-- [ ] **Step 4: Lock** — `uv lock && uv sync`. Expected: resolves aeth-ext 10.x, devkit-container 2.3.x and
+- [x] **Step 4: Lock** — `uv lock && uv sync`. Expected: resolves aeth-ext 10.x, devkit-container 2.3.x and
   timeclock-schema 0.2.x from SFTPyPI; PyGObject and uvloop are skipped on Windows.
-- [ ] **Step 5: Give compose a services key** — write `docker/compose.yaml` as the single line `services:`.
-- [ ] **Step 6: Commit** (setup-project refuses an uncommitted `[tool.docker]`):
+- [x] **Step 5: Give compose a services key** — write `docker/compose.yaml` as the single line `services:`.
+- [x] **Step 6: Commit** (setup-project refuses an uncommitted `[tool.docker]`):
   `git add pyproject.toml uv.lock docker/compose.yaml src/timeclock_system/__main__.py && git commit -m "chore(docker): configure the clock as a devkit WireGuard service"`.
-- [ ] **Step 7: Render** — `uv run poe setup-project --dry-run`, read it, then `uv run poe setup-project -y`.
+- [x] **Step 7: Render** — `uv run poe setup-project --dry-run`, read it, then `uv run poe setup-project -y`.
   Expected: it adds the `timeclock-system` service to compose (container name, build args with
   `GIT_REPO: https://github.com/AetherBreaker/timeclock-system.git`, the `/app/persisted_data` volume, the
   WireGuard env keys, `cap_add`, the two-file healthcheck) and replaces `docker/Dockerfile` with the 2.3.0
   template (trixie, three empty windows), and commits. If it leaves compose alone with "no top-level
   services", check Step 5's file and rerun.
-- [ ] **Step 8: Verify** — `grep -n "trixie\|!window" docker/Dockerfile` shows both trixie `FROM`s and the
+- [x] **Step 8: Verify** — `grep -n "trixie\|!window" docker/Dockerfile` shows both trixie `FROM`s and the
   `builder-setup`, `builder` and `final` windows; `uv run ruff check` and `uv run pyright` are clean.
 
 ---
@@ -206,7 +206,7 @@ and its `exclude` adds `"schema"` if the schema plan's submodule exists.
   `reader-access: fingerprint reader not found` to stderr and return 1). It runs as root before aeth_ext
   initializes, so plain `print` is right (devkit-container logs it). Port of Appendix A's shell script.
 
-- [ ] **Step 1: Failing tests.** `test_reader_access.py` builds a fake sysfs under `tmp_path` (dirs `1-1` with
+- [x] **Step 1: Failing tests.** `test_reader_access.py` builds a fake sysfs under `tmp_path` (dirs `1-1` with
   `idVendor=05ba`, `idProduct=000a`, `busnum=1`, `devnum=7`; `1-2` with `idVendor=046d`; `usb1` with no id
   files) and patches `os.chown` with `monkeypatch.setattr(os, "chown", fake, raising=False)` (Windows has none):
 
@@ -220,10 +220,10 @@ def test_main_without_reader_returns_1_and_says_so(capsys, ...): rc == 1 and "fi
 `test_requires_instance_id` (no `INSTANCE_ID` → `ValidationError`), `test_defaults_and_paths`
 (`db_host == "10.8.0.24"`, `store_path.name == "timeclock.sqlite3"`, `heartbeat_path.name == "heartbeat.txt"`),
 `test_conninfo_carries_keepalives` (`"keepalives_idle=30"` and `"application_name=timeclock-system-dev"` in it).
-- [ ] **Step 2: Run them; they fail.** `uv run pytest tests/test_settings.py tests/test_reader_access.py -v`
-- [ ] **Step 3: Implement both modules** per the Interfaces block (`main` reads the default paths).
-- [ ] **Step 4: Run them; they pass**, plus `ruff check` and `pyright`.
-- [ ] **Step 5: Commit** `feat(settings): add the clock settings and the reader-access startup script`.
+- [x] **Step 2: Run them; they fail.** `uv run pytest tests/test_settings.py tests/test_reader_access.py -v`
+- [x] **Step 3: Implement both modules** per the Interfaces block (`main` reads the default paths).
+- [x] **Step 4: Run them; they pass**, plus `ruff check` and `pyright`.
+- [x] **Step 5: Commit** `feat(settings): add the clock settings and the reader-access startup script`.
 
 ---
 
@@ -269,7 +269,7 @@ def test_main_without_reader_returns_1_and_says_so(capsys, ...): rc == 1 and "fi
   `fingerprints(id TEXT PK, employee_id INTEGER NOT NULL, origin TEXT NOT NULL, synced INTEGER NOT NULL, json)`,
   `meta(key TEXT PK, value TEXT)`. `at` is ISO 8601 UTC text, so it sorts.
 
-- [ ] **Step 1: Failing tests** (`T = datetime(2026, 10, 27, 12, tzinfo=UTC)`; small factories in the module):
+- [x] **Step 1: Failing tests** (`T = datetime(2026, 10, 27, 12, tzinfo=UTC)`; small factories in the module):
 
 ```python
 def test_round_trip_keeps_secrets(store): store.insert_fingerprint(fp(b"\x00tmpl"), origin="local") ; store.fingerprints()[0].template.get_secret_value() == b"\x00tmpl"
@@ -285,10 +285,10 @@ def test_meta_round_trip(store)
 def test_naive_timestamps_never_stored(store): every stored at ends with "Z" or "+00:00"
 ```
 
-- [ ] **Step 2: Run; they fail.** `uv run pytest tests/test_store.py -v`
-- [ ] **Step 3: Implement `store.py`** per the Interfaces block.
-- [ ] **Step 4: Run; they pass**, plus `ruff check` and `pyright`.
-- [ ] **Step 5: Commit** `feat(store): add the local SQLite store`.
+- [x] **Step 2: Run; they fail.** `uv run pytest tests/test_store.py -v`
+- [x] **Step 3: Implement `store.py`** per the Interfaces block.
+- [x] **Step 4: Run; they pass**, plus `ruff check` and `pyright`.
+- [x] **Step 5: Commit** `feat(store): add the local SQLite store`.
 
 ---
 
@@ -306,13 +306,13 @@ def test_naive_timestamps_never_stored(store): every stored at ends with "Z" or 
   true when some applicable row has `weekday == local.isoweekday()` and `opens <= local.time() < closes`;
   naive `at` → `ValueError`.
 
-- [ ] **Step 1: Failing tests:** `test_open_inside_a_window`, `test_closes_is_exclusive_and_opens_inclusive`,
+- [x] **Step 1: Failing tests:** `test_open_inside_a_window`, `test_closes_is_exclusive_and_opens_inclusive`,
   `test_weekday_is_iso_monday_one` (2026-10-26 is a Monday: a weekday-1 row opens it),
   `test_two_windows_in_a_day` (08–12 and 13–17: 12:30 closed), `test_no_rows_means_closed`,
   `test_uses_local_time_across_dst` (2026-11-01, America/New_York: 08:00 local is 13:00 UTC → open for an
   08–17 Sunday row), `test_naive_at_rejected`.
-- [ ] **Step 2: Run; they fail.** — **Step 3: Implement.** — **Step 4: Run; they pass** (+ ruff, pyright).
-- [ ] **Step 5: Commit** `feat(hours): add the business-hours lookup`.
+- [x] **Step 2: Run; they fail.** — **Step 3: Implement.** — **Step 4: Run; they pass** (+ ruff, pyright).
+- [x] **Step 5: Commit** `feat(hours): add the business-hours lookup`.
 
 ---
 
@@ -378,7 +378,7 @@ def test_naive_timestamps_never_stored(store): every stored at ends with "Z" or 
     (R36.4). `GalleryPrint(print_id=f.id, employee_id=f.employee_id, template=f.template.get_secret_value())`.
   - `prune_week`: `keep_from` = each employee's open shift's `clock_in.at` (R41); `before` = this week's start.
 
-- [ ] **Step 1: Failing tests** (store on `tmp_path`; employees seeded with
+- [x] **Step 1: Failing tests** (store on `tmp_path`; employees seeded with
   `bcrypt.hashpw(b"1234", bcrypt.gensalt(rounds=6, prefix=b"2a"))`, like pgcrypto's `$2a$06$`; a fixed `now`):
 
 ```python
@@ -399,10 +399,10 @@ async def test_prune_keeps_an_open_shift(): clock-in 2026-11-08 22:00 America/Ne
 async def test_catch_up_since_reaches_back_to_an_open_shift()
 ```
 
-- [ ] **Step 2: Run; they fail.** `uv run pytest tests/test_clock.py -v`
-- [ ] **Step 3: Implement `clock.py`** per the Interfaces block. Store calls go through `asyncio.to_thread`.
-- [ ] **Step 4: Run; they pass** (+ ruff, pyright).
-- [ ] **Step 5: Commit** `feat(clock): add the clock service`.
+- [x] **Step 2: Run; they fail.** `uv run pytest tests/test_clock.py -v`
+- [x] **Step 3: Implement `clock.py`** per the Interfaces block. Store calls go through `asyncio.to_thread`.
+- [x] **Step 4: Run; they pass** (+ ruff, pyright).
+- [x] **Step 5: Commit** `feat(clock): add the clock service`.
 
 ---
 
@@ -452,7 +452,7 @@ async def test_catch_up_since_reaches_back_to_an_open_shift()
   - `set_mode`/`set_gallery`/`stop` cancel the current call's token. Every blocking reader call records its
     start time for `busy_seconds()`. Pauses wait on an event that a mode change or `stop` sets, so they end early.
 
-- [ ] **Step 1: Failing tests.** `FakeReader` (test module): scripted outcomes per `identify` call (a deque of
+- [x] **Step 1: Failing tests.** `FakeReader` (test module): scripted outcomes per `identify` call (a deque of
   `UUID | None | Exception`); with the deque empty, `identify` blocks until its token is cancelled, then raises
   `ScanCancelled`; records `open`/`close`/`identify` calls and `wait_finger_off` timeouts; `enroll` reports
   stages from a script. Events are collected in a `queue.Queue`; helpers wait with a 2 s timeout.
@@ -475,10 +475,10 @@ def test_set_gallery_restarts_identify_with_the_new_gallery()
 def test_finger_down_is_posted()
 ```
 
-- [ ] **Step 2: Run; they fail.** `uv run pytest tests/test_scanner.py -v`
-- [ ] **Step 3: Implement `scanner.py`.**
-- [ ] **Step 4: Run; they pass** (+ ruff, pyright). Run it three times in a row; it must not flake.
-- [ ] **Step 5: Commit** `feat(scanner): add the scanner thread with backoff and watchdog`.
+- [x] **Step 2: Run; they fail.** `uv run pytest tests/test_scanner.py -v`
+- [x] **Step 3: Implement `scanner.py`.**
+- [x] **Step 4: Run; they pass** (+ ruff, pyright). Run it three times in a row; it must not flake.
+- [x] **Step 5: Commit** `feat(scanner): add the scanner thread with backoff and watchdog`.
 
 ---
 
