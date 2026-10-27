@@ -1,0 +1,11 @@
+{
+  "policies": {
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DontCheckDefaultBrowser": true,
+    "DisableAppUpdate": true,
+    "NoDefaultBookmarks": true,
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": ""
+  }
+}

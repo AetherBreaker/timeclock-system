@@ -914,7 +914,7 @@ async def test_pin_scan_after_hours_opens_the_reader()
 - Produces: services `timeclock-system` and `kiosk` (no `discovery` and no published port: those come with LAN
   sharing in step 4).
 
-- [ ] **Step 1: Kiosk files.** `kiosk.sh` is Appendix A's script verbatim. `Dockerfile` is Appendix A's with
+- [x] **Step 1: Kiosk files.** `kiosk.sh` is Appendix A's script verbatim. `Dockerfile` is Appendix A's with
   paths from the repo root (`COPY docker/kiosk/kiosk.sh /kiosk.sh`) plus
   `COPY docker/kiosk/policies.json /usr/lib/firefox-esr/distribution/policies.json`,
   `COPY docker/kiosk/autoconfig.js /usr/lib/firefox-esr/defaults/pref/autoconfig.js`,
@@ -925,7 +925,7 @@ async def test_pin_scan_after_hours_opens_the_reader()
   `browser.gesture.pinch.in` "", `browser.gesture.pinch.out` "", `browser.gesture.swipe.left` "",
   `browser.gesture.swipe.right` "", `widget.disable-swipe-tracker` true,
   `browser.sessionstore.resume_from_crash` false (R13.2; autoconfig because policies can't set every pref).
-- [ ] **Step 2: Compose.** Keep every line setup-project wrote for `timeclock-system` and add, by hand:
+- [x] **Step 2: Compose.** Keep every line setup-project wrote for `timeclock-system` and add, by hand:
   `hostname: timeclock-system-${INSTANCE_ID:?}`, `restart: unless-stopped`, a second bind
   `/dev/bus/usb` → `/dev/bus/usb`, `device_cgroup_rules: ["c 189:* rmw"]` (R14.7), and these environment entries
   (list form, next to the template's):
@@ -955,10 +955,10 @@ async def test_pin_scan_after_hours_opens_the_reader()
       - coolify
 ```
 
-- [ ] **Step 3: Verify.** `docker compose -f docker/compose.yaml config -q` with dummy values exported for the
+- [x] **Step 3: Verify.** `docker compose -f docker/compose.yaml config -q` with dummy values exported for the
   `:?` variables → exit 0. `docker build -f docker/kiosk/Dockerfile -t timeclock-kiosk:dev .` → success.
   `uv run poe setup-project --dry-run` proposes no change to the hand-added keys.
-- [ ] **Step 4: Commit** `feat(kiosk): add the kiosk image and the app and kiosk compose services`. Appendix A's
+- [x] **Step 4: Commit** `feat(kiosk): add the kiosk image and the app and kiosk compose services`. Appendix A's
   files are now in the repo, which unblocks the device cleanup in Task 15.
 
 ---
