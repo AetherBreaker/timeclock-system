@@ -6,9 +6,12 @@ devkit-container. Implementation plans are written straight from this document, 
 dependency repositories, which get no spec of their own.
 
 - **R*n*** cites item *n* of the Decided list in [the requirements doc](2026-10-23-timeclock-requirements.md),
-  each approved by the owner. Where this spec restates one, the requirements doc wins on any conflict.
-- **(spec call)** marks a decision made while writing this spec, not by the owner. A builder may revisit a
-  spec call when the code argues for it; anything else here is settled.
+  each approved by the owner. Where this spec restates one, the requirements doc wins on any conflict, except
+  where a decision marked (owner, 2026-10-27) supersedes it: R23.6, R30 and R30.1 (in part), R31.1 and R41.3.
+- **(owner, 2026-10-27)** marks a later owner decision. **(spec call)** marks a decision made while writing
+  this spec, and **(my call)** one made by the coordinating session on 2026-10-27; neither is the owner's,
+  and the owner reviews both. A builder may revisit either when the code argues for it; anything else here is
+  settled.
 - Plan docs, tests and the spec handoff are not sources of intent (`AGENTS.md`).
 
 ## 1. Intent
@@ -33,24 +36,41 @@ applies to everything not listed in §2.
 
 - Fingerprint punching: clock in/out, break start/end, lunch start/end (R35), with the screen offering only
   the punches valid from the employee's current state (R45).
-- PIN login with a manager override (R23), fingerprint registration from the clock (R23.2, R23.4).
-- The weekly-hours display after a punch (R31).
+- PIN login with a manager override (R23), fingerprint registration from the clock (R23.2, R23.4), and
+  PIN-only login for admins and fingerprint-exempt employees (§6.4; owner, 2026-10-27).
+- An admin menu on the clock, reached from an admin's own punch menu, whose one item adds an employee
+  (details, PIN, optional fingerprint), working offline (§6.4; owner, 2026-10-27).
+- Optional `phone` and `email` on every employee, for the later notification system (§4.2, §14).
+- One auditable hours function: worked time, paid break time and unpaid time, with a daily paid break
+  allowance (§4.5; owner, 2026-10-27).
+- The weekly-hours display after a punch (R31), with a notice once the week passes the weekly threshold,
+  through an alert system that later alert types extend (§6.4; owner, 2026-10-27).
 - Offline punching and registration with later sync (R27); clock-to-clock sharing on the LAN (R28).
-- The daily automatic clock-out of forgotten shifts (R41).
+- The daily automatic clock-out of forgotten shifts, recorded run by run (R41, §8.4).
 - Business hours, with the reader asleep outside them and tap-to-wake (R40).
 - The rules framework with no rule kinds yet (R34).
 - Deployment through Coolify, crash alerts, central logging, healthchecks.io monitoring.
 
 **Not in version 1:** reports and exports (payroll exports CSV by hand with SQL; Deferred 3), QuickBooks
-(Deferred 1), an employee phone page (Deferred 2), database backups (Deferred 4), an admin interface (the
-owner uses an SQL editor, R30), employee schedules (R45.1), per-clock business hours (R40.3), the parallel
-version 2 matcher (R36.2), any rule kind (R34), host settings configured from the database (R42).
+(Deferred 1), an employee phone page (Deferred 2), database backups (Deferred 4), an admin interface beyond
+adding employees at a clock (the owner edits everything else in an SQL editor, R30), employee schedules
+(R45.1), per-clock business hours (R40.3), the parallel version 2 matcher (R36.2), any rule kind (R34), host
+settings configured from the database (R42), the notification system (SMS and email, §14). Deferred with
+the admin menu (owner, 2026-10-27; `docs/todo.md`): per-clock settings (UI scaling first), an on-screen
+keyboard, sharing new employees over the LAN before LAN sharing (§13 step 5), toggling `fingerprint_exempt`
+from a clock, a resolution tool for an employee the database refused (§6.6), a PIN length rule, editing or
+deactivating employees from a clock, and warnings about possible duplicate people (names repeat; spouses can
+share a phone or email).
 
 **Anti-goals.** Version 1 fails, even if it works, if:
 
 - a punch is lost: to a restart, an outage, a crash, or a re-send that overwrites or resurrects a record;
+- a punch or fingerprint ends up filed under a different person, including a clock-created employee's (§6.6);
+- two clocks, or a clock and the database, hand out the same employee number (§6.4);
+- an admin is created from a clock (admins create employees and managers only; owner, 2026-10-27);
+- the weekly hours threshold blocks or restricts anyone (owner, 2026-10-27);
 - the clock depends on the tunnel, the VPS or the log server to start or keep running;
-- a fingerprint image or a plain PIN is ever stored, logged or alerted;
+- a fingerprint image or a plain PIN is ever stored, logged, alerted or shown;
 - anything retries a failed scan in a tight loop (the spike spun 3.3 million times, §6.2);
 - the reader silently stops working while the screen still looks ready (§6.2);
 - deploying or reinstalling a clock takes manual changes on the device beyond its one-time install (R10).
@@ -92,42 +112,62 @@ clock and the backend pin it by version from SFTPyPI; releases go through `poe r
 
 - `models`: a pydantic model per table row, per LAN message (§6.7) and for the notification payload (§4.4).
   Serialized fingerprint templates are `SecretBytes` everywhere (R15).
-- `shifts`: the read-side logic, pure functions over punches and corrections (§4.5). The clock uses it for
-  its menu, guard and totals; the backend uses it for the automatic clock-out. It exists once, in Python;
-  nothing reimplements it in SQL.
+- `shifts`: the read-side logic, pure functions over punches and corrections (§4.5), the hours function
+  among them. The clock uses it for its menu, guard and totals; the backend uses it for the automatic
+  clock-out. It exists once, in Python; nothing reimplements it in SQL.
 - `rules`: the rule-kind registry and the row model (§4.6).
-- `migrations/NNNN_<name>.sql`: package data, applied in order by the backend (§8.3). A released migration
-  file is never edited; changes go in a new file.
+- `migrations/NNNN_<name>.sql`: package data, applied in order by the backend (§8.3). While no real database
+  exists, `0001_initial.sql` is revised in place and there is no `0002` (owner, 2026-10-27); the backend's
+  deployment waits for the schema release that carries §4's admin and hours changes (0.4.0). Once a real
+  database exists, a released migration file is never edited and changes go in a new file.
 
 Timestamps are aware UTC `datetime`s in Python, `timestamptz` in Postgres and ISO 8601 UTC text in the
 clock's SQLite (R24). Times of day (business hours, auto clock-out) are `datetime.time` / Postgres `time`
-with no date and no zone (R41.3), interpreted in `settings.tz` (R41.4).
+with no date and no zone (R41.3), interpreted in `settings.tz` (R41.4). Zones and DST use the standard
+library's `zoneinfo`, whose tzdata matches PostgreSQL's; python-dateutil isn't used, unless calendar-month
+arithmetic is ever needed (its `relativedelta`; my call).
 
 ### 4.2 Tables (schema `public`)
 
-Data tables live in `public`, configuration in `config` (R41.3). Column lists are the minimum; the builder
-adds indexes as needed (at least `punches (employee_id, at)`).
+Data tables live in `public`, configuration in `config` (R41.3), and the backend's own records in `backend`
+(§4.3). Column lists are the minimum; the builder adds indexes as needed (at least `punches (employee_id,
+at)`).
 
 **`groups`** (edited in place): `id bigint identity PK`, `name text unique`. The first migration seeds one
 group, `default`, so employees can be added at once (spec call). An employee belongs to exactly one group
 (spec call; R34 doesn't say whether membership is single or multiple, and single keeps rule precedence
 trivial).
 
-**`employees`** (edited in place, R30.1): `id bigint identity PK`, `name text`, `pin_username text unique`
-(digits only, check constraint), `pin_hash text` (`crypt(pin, gen_salt('bf'))`, R23.1), `is_manager boolean
-default false` (R23.6), `active boolean default true`, `group_id bigint FK groups default <default group>`,
-`updated_at timestamptz` (set by trigger). Employees are referred to everywhere by `id`, never by name.
-An employee who leaves is set `active = false`, since their punches reference the row: inactive employees
-can't log in or punch, and their prints drop out of matching (spec call).
+**`employees`** (edited in place, R30.1): `id bigint generated by default as identity PK`, `name text`,
+`pin_username text unique` (digits only, check constraint), `pin_hash text` (`crypt(pin, gen_salt('bf'))`,
+R23.1; a check accepts only a bcrypt hash, so a plain PIN typed by hand is refused), `role employee_role
+default 'employee'`, `active boolean default true`, `group_id bigint FK groups default <default group>`, `phone text null`, `email text
+null`, `fingerprint_exempt boolean default false`, `updated_at timestamptz` (set by trigger). Employees are
+referred to everywhere by `id`, never by name. An employee who leaves is set `active = false`, since their
+punches reference the row: inactive employees can't log in or punch, and their prints drop out of matching
+(spec call).
+
+- **`role`** (owner, 2026-10-27; replaces R23.6's `is_manager`): enum `employee_role`, declared lowest to
+  highest, `employee` < `manager` < `admin`, so SQL can test `role >= 'manager'`. An admin may do everything
+  a manager may. Managers and admins approve overrides; nobody overrides for themselves (§6.4).
+- **`id`** is `BY DEFAULT`, not `ALWAYS`, so a clock can supply the number it chose (§6.4); hand-added rows
+  still take the next value from the sequence. The username stays unique; it and the primary key are the
+  only duplicates the database refuses (owner, 2026-10-27).
+- **`phone`**: `+1` followed by ten digits (owner: US numbers, one stored format); **`email`**: something,
+  `@`, something, a dot, something (owner: format checked; the pattern is my call). Check constraints enforce
+  both, so hand-typed rows follow them too (my call).
+- **`fingerprint_exempt`** (owner, 2026-10-27; the name is my call, so it isn't confused with
+  `fingerprint_bypasses.pin_only`): the employee logs in by PIN alone, with no fingerprint step and no override (§6.4).
+  Changed only in the database for now; a clock toggle comes later (`docs/todo.md`).
 
 **`fingerprints`** (plain rows; the owner deletes one to force re-registration, R27.3, R27.4): `id uuid PK`
 (made by the clock), `employee_id bigint FK employees ON DELETE CASCADE`, `template bytea` (libfprint's
 serialized `FpPrint`), `registered_at timestamptz`, `instance_id text`, `db_login text default
 session_user`. Several per employee are allowed; registration enrolls one (R27.3).
 
-**`db_login`** (on `fingerprints`, `punches` and `overrides`; R26.2): the database login that inserted the
-row, which identifies the clock without trusting its `INSTANCE_ID`. The clocks' column-level `INSERT`
-grants leave it out (§4.4), so a clock can't set it and the default always applies. A mismatch with
+**`db_login`** (on `fingerprints`, `punches` and `fingerprint_bypasses`; R26.2): the database
+login that inserted the row, which identifies the clock without trusting its `INSTANCE_ID`. The clocks'
+column-level `INSERT` grants leave it out (§4.4), so a clock can't set it and the default always applies. A mismatch with
 `instance_id` isn't rejected, since a misconfigured clock would then never sync; it's visible in
 `punch_log` instead (spec call).
 
@@ -148,17 +188,28 @@ null`, `note text`, `recorded_at timestamptz default now()`. A check constraint 
 can restore a voided punch. Only the owner writes corrections; to add a missed punch, the owner inserts a
 punch with `instance_id = 'admin'`.
 
-**`overrides`** (append-only, R23.5): `id uuid PK`, `punch_id uuid FK punches` (the single punch it
-authorized), `employee_id bigint FK`, `manager_id bigint FK`, `reason override_reason`
-(`no_fingerprint` | `fingerprint_skipped`), `pin_only boolean` (the manager authorized by PIN alone),
-`at timestamptz`, `instance_id text`, `received_at timestamptz default now()`, `db_login text default
-session_user`. Written with its punch, in
-the same local transaction and the same sync transaction. An override that's never used to punch isn't
-recorded (spec call).
+**`fingerprint_bypasses`** (append-only, R23.5; renamed from `overrides`, owner, 2026-10-27): one row per
+PIN login that bypassed a fingerprint, so daily reports can list them later. `id uuid PK` (made by the
+clock), `punch_id uuid FK punches null` (the punch it authorized; null for a login that punched nothing),
+`employee_id bigint FK`, `manager_id bigint FK null` (the approving manager or admin; null when nobody
+approved), `reason bypass_reason`, `pin_only boolean null` (an override's manager authorized by PIN alone;
+null otherwise), `at timestamptz`, `instance_id text`, `received_at timestamptz default now()`, `db_login
+text default session_user`. `reason` (owner, 2026-10-27):
+
+- `override_no_fingerprint`, `override_fingerprint_skipped`: a manager override (§6.4); `punch_id`,
+  `manager_id` and `pin_only` are set. Written with its punch, in the same local transaction and the same
+  sync transaction. An override that's never used to punch isn't recorded (spec call).
+- `admin_pin_login`: an admin logged in by PIN, including the Admin button's PIN reconfirm and a PIN 30 s
+  rescan (my call).
+- `exempt_pin_login`: a `fingerprint_exempt` employee logged in by PIN, including a PIN 30 s rescan.
+
+A check ties the nullable columns to `reason`. Inserted by the clock and synced like punches, so it works
+offline; clocks don't mirror it.
 
 **`rules`** (edited in place, R34): `id bigint identity PK`, `kind text`, `params jsonb default '{}'`,
 `group_id bigint FK null`, `employee_id bigint FK null` (check: exactly one is set), `on_violation
-rule_action` (`refuse` | `warn` | `accept`, R34.2).
+rule_action` (`refuse` | `warn` | `accept`, R34.2), `updated_at timestamptz` (set by trigger); `params`
+must be a JSON object.
 
 **`schema_migrations`**: `version int PK`, `name text`, `applied_at timestamptz` (§8.3).
 
@@ -166,19 +217,48 @@ rule_action` (`refuse` | `warn` | `accept`, R34.2).
 correction (action, new values) and its `db_login` beside it. It's what the owner reads and exports to CSV; it applies no
 shift logic.
 
-### 4.3 Tables (schema `config`, edited in place)
+### 4.3 Tables (schema `config`, edited in place; schema `backend`)
 
 **`config.business_hours`** (R40.3): `id bigint identity PK`, `weekday smallint` (ISO, 1 = Monday … 7 =
-Sunday), `opens time`, `closes time`, check `opens < closes`. Nothing is unique per weekday; a weekday with
+Sunday), `opens time`, `closes time`, checks `opens < closes` and `closes < '24:00'` (the settings' two times
+are checked `< '24:00'` too). Nothing is unique per weekday; a weekday with
 no rows is closed. Seeded empty, so a new install's reader sleeps until hours are added (tap-to-wake still
 works; spec call).
 
-**`config.settings`** (R41.3): one row (`id boolean PK default true check (id)`),
-`auto_clock_out_enabled boolean default true`, `auto_clock_out_run_time time`,
-`auto_clock_out_stamp_time time`, `subtract_lunch boolean default true`, `subtract_breaks boolean default
-false` (R31.1). Seeded with both times at 23:00:00 for the owner to change (spec call).
-A stamp time later than the run time fails validation in the pydantic model; the backend then skips the
-run and alerts (R41.3).
+**`config.settings`** (R41.3): one row (`id boolean PK default true check (id)`), seeded with the defaults:
+
+- `auto_clock_out_enabled boolean default true`; `auto_clock_out_run_time time` and
+  `auto_clock_out_stamp_time time`, both default 23:00 in the backend's local time (owner, 2026-10-27);
+  `auto_clock_out_frequency` (enum, `daily` its only value, room for later ones).
+- There is no rule that the stamp time be at or before the run time, anywhere (owner, 2026-10-27; supersedes
+  R41.3's validation): the owner may set a later stamp, and §8.4 says how it runs.
+- `lunches_enabled boolean default true`, `breaks_enabled boolean default true` (owner, 2026-10-27):
+  business-wide; off hides the start button, and the end button stays (§6.4). Per-group switches may come
+  before the first release (`docs/todo.md`), so nothing ties these to other columns.
+- The daily paid break allowance (default 30 minutes) and the weekly hours alert threshold (default 40 hours)
+  (owner, 2026-10-27; §4.5, §6.11). Column names and types are left to the builder.
+- `subtract_lunch` and `subtract_breaks` are removed (owner, 2026-10-27; supersedes R31.1): the hours
+  function's rules replace them (§4.5).
+
+**`backend.auto_clock_out_runs`** (§8.4; owner's design, 2026-10-27): one row per scheduled run,
+`id bigint identity PK`, `scheduled_for timestamptz` (the run's instant), `scheduled_tz text` (the zone it
+was projected in), `stamp timestamptz`, `ran_at timestamptz null` (set by the run's own transaction) and
+`closed int null` (its clock-out count; check: `ran_at` and `closed` are both null or both set). Run history
+is stored as UTC instants; the scheduled time keeps its zone (owner).
+
+- **Projection** (SQL, `backend.project_auto_clock_out_runs()`): with `daily` the only frequency, one row
+  per local day from today to today + 6 in the backend's zone, each from that day's run and stamp times
+  through PostgreSQL's own `AT TIME ZONE` (owner; no custom resolver). On a DST change a skipped 02:30 runs
+  at 03:30 and a repeated time at its second occurrence; the same holds for the stamp. A day that already
+  holds a row (run, or missed and awaiting catch-up) gets no new one; today's row is projected even when its
+  time has passed, so the backend runs it at once. Nothing is projected without a settings row or a zone, or
+  while disabled.
+- **Reprojection:** every `config.settings` change, and every new or changed zone, prunes the unrun future
+  rows and reprojects them in the same transaction (triggers). Rows whose time has passed are history and
+  never change. The backend also calls the projection at the start of every pass (§8.4), extending it as
+  the days pass. An advisory lock serializes projections; runs don't take it.
+- **`backend.environment`** (`id boolean PK`, `tz text`): one row, the backend's `TZ`, written at every
+  start (§8.4). Nothing is projected before the first.
 
 ### 4.4 Roles and notifications
 
@@ -189,10 +269,15 @@ Two databases in the one server, identical in layout (R26.6): `timeclock` (produ
   what the owner uses in the SQL editor (spec call).
 - **`timeclock_clock_access`** (no login; created by the first migration if absent, since roles are
   server-wide): `SELECT` on `employees`, `groups`, `fingerprints`, `punches`, `punch_corrections`, `rules`,
-  `config.business_hours`, `config.settings`; column-level `INSERT` on `punches`, `overrides` and
-  `fingerprints`, every column except `db_login`, `received_at` and `punches.automatic` (only the backend
-  makes automatic clock-outs); `USAGE` on schema `config`; nothing else (R26.2). Migrations grant to this
-  role, so the same plain SQL serves both databases.
+  `config.business_hours`, `config.settings`; column-level `INSERT` on `punches`,
+  `fingerprint_bypasses` and `fingerprints`, every column except `db_login`, `received_at` and
+  `punches.automatic` (only the backend makes automatic clock-outs); column-level `INSERT (id, name,
+  pin_username, pin_hash, role, group_id, phone, email)` on `employees`, so `fingerprint_exempt`, `active`
+  and `updated_at` take their defaults; `USAGE` on schema `config`; nothing on schema `backend`; nothing else
+  (R26.2). `SELECT (id)` on `fingerprint_bypasses` lets `ON CONFLICT (id) DO NOTHING` infer
+  its target. The database refuses a clock login inserting `role = 'admin'`, so a modified clock can't create an
+  admin either (my call; how, likely a trigger checking the inserting role, is left to the builder).
+  Migrations grant to this role, so the same plain SQL serves both databases.
 - **`timeclock_clocks`** and **`timeclock_test_clocks`** (no login, both members of
   `timeclock_clock_access`): `CONNECT` on `timeclock` goes only to the first and on `timeclock_test` only to
   the second, with `CONNECT` revoked from `PUBLIC` on both. The backend sets these up at every startup
@@ -233,10 +318,30 @@ Input: one employee's punches and their corrections. Steps:
 A `clock_out` from a break or lunch ends it implicitly (spec call: it lets the automatic clock-out close
 a shift left on break, and spares an employee a second tap).
 
-Outputs: current state, valid next punches, open shift (if any), and worked time over any local-time window,
-with a shift crossing Monday 00:00 split at midnight (R41.5). Lunch time is subtracted from worked time and
-break time isn't, by default; `config.settings` switches each separately (R31.1), so the functions take both
-switches as arguments.
+Outputs: current state, valid next punches and the open shift (if any). The clock passes only punches stamped
+at or before now when it works out state and which punches it offers (owner, 2026-10-27), since the
+automatic clock-out may be stamped after it runs (§8.4). With step 3's rule, a hand clock-out before a
+future-stamped automatic one wins, and the automatic one becomes the ignored repeat. Accepted: an employee
+who clocks out and back in before the stamp has that new shift ended at the stamp.
+
+**Hours** (owner, 2026-10-27). Every rule and formula for totalling hours lives in one Python function in
+this module, so it's easy to audit; nothing else totals hours.
+
+- **Input:** any number of one employee's punches with their corrections, the settings, the zone (local days
+  need it), the range to total, and `now`, until which an open shift, break or lunch runs. A shift crossing
+  the range's edge is split there, so a week splits a shift at Monday 00:00 (R41.5).
+- **Output**, three separate totals: worked time (shift time less every lunch and break), paid break time
+  (not included in worked time), and unpaid time (lunch, plus break time over the allowance).
+- **Rules:** a punch stamped after `now` doesn't count yet (owner, 2026-10-27; §8.4 may write one); the
+  function applies this itself, so the clock's state filter above and the totals can't disagree (my call).
+  Lunch is always unpaid. Breaks are paid up to the daily paid break allowance (§4.3); break time
+  over the day's allowance is treated as lunch, so unpaid. A day is the local calendar day, and a break
+  counts toward the day it started.
+- **Separate from alerts:** the function computes totals; the alert system (§6.11) and the screens read them.
+- **Non-goals:** delivering any total by SMS or email (§14), payroll exports (Deferred 3).
+- **Anti-goal:** a second implementation of any hours rule, in SQL or in the clock.
+- **Left to the builder:** the function's name, signature and return type; how a range edge clips a break
+  whose day lies partly outside the range; tests.
 
 ### 4.6 Rules (`timeclock_schema.rules`)
 
@@ -302,9 +407,12 @@ Modes:
 Rules every path follows:
 
 - **Never spin** (anti-goal): `FPrint.DeviceRetry` → wait 0.5 s, then re-arm. Any other error → back off
-  exponentially, 1 s up to 30 s, reset by a successful capture. `FP_DEVICE_ERROR_TOO_HOT` (shouldn't happen
-  with the patch) → 60 s. After any capture, re-arm only once `finger-status` shows no finger, or after 2 s,
-  so the tail of one press isn't read as the next (seen at 0.54 s in the spike).
+  exponentially, 1 s up to 30 s, reset by a successful capture. A reader failing continuously logs a warning
+  on the streak's first failure and is fatal, as a lost reader is, once the streak passes about 3 minutes
+  (owner, 2026-10-27). `FP_DEVICE_ERROR_TOO_HOT` (shouldn't happen
+  with the patch) → 60 s. After any capture, pause 2 s before re-arming, so the tail of one press isn't read
+  as the next (seen at 0.54 s in the spike). libfprint 1.94 resets `finger-status` when a capture completes, so
+  waiting for "no finger" never waits.
 - **Finger touch** (`notify::finger-status`) shows "Scanning…" at once; a resting thumb can take up to 16 s.
 - **Reader gone** (removed, or open fails) → fatal shutdown; Docker's restart and the startup script pick
   it up when it's back (R14.3, R14.7).
@@ -339,46 +447,87 @@ The UI is one NiceGUI page for the kiosk; it carries the company's colors (yello
 `#ED1A2C`, near-black `#161514`, white) and logo (R39). The logo SVGs are read at runtime from
 `persisted_data/branding/` on the device (R39.1; a missing file renders the page without it and logs a
 warning; spec call). Large touch targets, landscape layout from 1024×600 up; no particular screen model
-(R7.1). Typed input uses an on-page number pad that also accepts keyboard input (R25). The page turns off
-text selection and the long-press menu (R13.2).
+(R7.1). Typed input uses an on-page number pad that also accepts keyboard input (R25); text (the add-employee
+form) is typed on a plugged-in keyboard, which must work when plugged in at any time, with no restart of the
+app or the kiosk (owner, 2026-10-27; verified on the clock, and the kiosk image fixed if hotplugged input
+isn't picked up). The on-screen keyboard is deferred (`docs/todo.md`). The page turns off text selection and
+the long-press menu (R13.2) and hides the mouse cursor (owner, 2026-10-27). Every screen but idle returns to
+idle after 2 minutes without a touch or keystroke, discarding anything unsaved (R45.4). Hours are shown
+exact, truncated (never rounded) to two decimal places (owner, 2026-10-27). "Hours this week" is worked plus
+paid break time (owner, 2026-10-27; §4.5).
 
 - **Idle.** Logo, date and time, "Place your finger on the reader" (or "Tap to scan" after hours), a "Use
   PIN" button, and a database status icon: green while connected, red while not, with a small timestamp of
   the last contact with the database. No match:
   "Not recognized: try again or use your PIN", 3 s. Retry: "Couldn't read that, try again".
 - **Action menu** (R45). The employee's name, current state ("Clocked in since 8:02 AM"), hours this week,
-  and one button per valid punch (§4.5). Clock-in always takes a tap (R45.1); the layout leaves room for a
-  scheduled time later. A punch button tapped more than 30 s after the scan asks for a new scan that must
-  match the same employee; a scan matching someone else opens their menu instead, with no punch (R45.2).
-  A new scan while the menu is open switches to that person's menu; untouched, it closes after 2 minutes
-  (R45.4). A `refuse` rule shows its message here and records nothing.
-- **Confirmation** (R31). "Clocked out at 5:01 PM", hours this week, any `warn` rule messages; back to idle
-  after 5 s. Hours this week use the local copy, so offline they miss other clocks' unsynced punches
-  (R27.1).
+  and one button per valid punch (§4.5), less a lunch or break start while `lunches_enabled` or
+  `breaks_enabled` is off; an end button always shows (owner, 2026-10-27). Clock-in always takes a tap
+  (R45.1); the layout leaves room for a scheduled time later. A punch button tapped more than 30 s after the
+  scan asks for a new scan that must match the same employee; a scan matching someone else opens their menu
+  instead, with no punch (R45.2). A new scan while the menu is open switches to that person's menu. A
+  `refuse` rule shows its message here and records nothing.
+  - **Admin button** (owner, 2026-10-27): on the menu of an employee whose role is `admin`, near the bottom,
+    well away from the punch buttons. Other roles never see it. Tapping it asks the admin to reconfirm by
+    their own fingerprint or PIN before the admin menu opens; otherwise it follows the menu's normal rules.
+- **Confirmation** (R31). "Clocked out at 5:01 PM", hours this week, any `warn` rule messages, any alert
+  notice (§6.11); back to idle after 5 s, or at once on a double tap anywhere (owner, 2026-10-27). Hours this
+  week use the local copy, so offline they miss other clocks' unsynced punches (R27.1).
 - **PIN login** (R23). Username, then password, on the number pad; verified against the local `pin_hash`
-  with `bcrypt` off the event loop (spec call: the `bcrypt` package checks pgcrypto's `$2a$` hashes). No
-  lockout after wrong PINs: punching still needs a fingerprint or an override. Then:
+  with `bcrypt` off the event loop (spec call: the `bcrypt` package checks pgcrypto's `$2a$` hashes). A typed
+  PIN is a `SecretStr` until it's hashed or checked; usernames are plain (owner, 2026-10-27). No lockout
+  after wrong PINs, though for admins and `fingerprint_exempt` employees a guessed PIN alone is enough to
+  punch (§14 lists the lockout as a follow-up). Then:
+  - admin, or `fingerprint_exempt` → straight to the action menu, with no fingerprint step, no "register
+    your fingerprint" prompt and no override (owner, 2026-10-27). Each such login is recorded in
+    `fingerprint_bypasses` (§4.2). An exempt employee's 30 s rescan asks for the PIN again, and they may
+    still enrol a print (both my call). An admin's 30 s rescan takes their fingerprint or their PIN (my
+    call); a PIN rescan is recorded like the login;
   - no registered print → "Register your fingerprint" or "Manager override" (R23.2);
   - registered print → "Scan your finger" (confirm mode; must match this employee) or "Manager override"
     (R23.3).
 - **Registration** (R23.4, R27.2). Five presses with progress, 30 s without a press cancels. The new print
   is stored locally with a UUID, sent to the other clocks (§6.7), queued for sync, and added to the gallery;
   then the employee's action menu opens (spec call: they've just proven the finger).
-- **Manager override** (R23.5). A manager (active, `is_manager`) scans, or enters their PIN login, which
-  doesn't also need their fingerprint. The override can't come from the employee themselves (spec call: a
-  manager without a print registers one instead). It authorizes exactly one punch; every further punch, and
-  the 30 s re-authentication, needs a fresh override unless the employee gives a fingerprint (R45.3). The
-  override row is written with that punch, `pin_only` set when the manager used a PIN.
+- **Manager override** (R23.5). An active manager or admin scans, or enters their PIN login, which doesn't
+  also need their fingerprint. Nobody overrides for themselves (owner, 2026-10-27; a manager without a print
+  registers one instead). A manager added on a clock can't approve overrides until the database has
+  accepted them (owner, 2026-10-27). It authorizes exactly one punch; every further punch, and the 30 s
+  re-authentication, needs a fresh override unless the employee gives a fingerprint (R45.3). The bypass row
+  is written with that punch, `pin_only` set when the manager used a PIN.
+- **Admin menu** (owner, 2026-10-27): one item, "Add employee", and a way back, built so more items
+  (per-clock settings) slot in later.
+- **Add employee** (owner, 2026-10-27), working online or offline. A clock that has never synced knows no
+  admin, so it can't reach this; no extra rule is needed.
+  1. *Details:* name (required); phone (optional; any common US format, such as `(555) 123-4567`,
+     `555-123-4567`, `5551234567` or `+1 555…`, stored as `+15551234567`); email (optional, format checked,
+     §4.2); role, Employee or Manager; group, from the clock's mirrored groups. Errors show beside their field
+     on submit; cancel discards the form.
+  2. *PIN* (required): typed, then typed again to confirm (my call); digits only, any length. A mismatch
+     clears both and asks again. One validation point checks the PIN, so a length rule is easy to add later.
+     The employee is saved locally when the PIN is accepted, and nothing before (my call).
+  3. *Fingerprint* (optional, no override): the registration flow with a "Skip" button; skipping needs no
+     approval, since the admin is logged in. Leaving the screen by cancel or timeout counts as a skip (my
+     call). Skipping doesn't set `fingerprint_exempt`; the employee enrols later through the normal flow.
+  4. *Done:* the new employee's name and number (their username), then idle.
+
+  The new employee can log in and punch on this clock as soon as the PIN step finishes. **Employee numbers:**
+  clock *n* (`CLOCK_NUMBER`, §9.1) hands out *n*×10000 + 1 to *n*×10000 + 9999 (clock 1: 10001–19999): one
+  more than the highest number in its block among the employees it knows, mirrored and its own unsynced
+  ones; a full block refuses with a message. The username is the number written as digits, so usernames
+  can't collide between clocks either. Hand-added employees take the sequence, normally 1–9999; nothing stops
+  one landing inside a clock's block, and the database then refuses whichever row arrives second (§6.6).
 
 ### 6.5 Local store
 
 SQLite in WAL mode at `persisted_data/timeclock.sqlite3`, written only by the app. It mirrors the tables a
-clock reads (§4.4) plus sync bookkeeping: a `synced` flag on punches, overrides and fingerprints recorded at
-this clock. Kept (R26.4, R41):
+clock reads (§4.4) plus sync bookkeeping: a `synced` flag on punches, fingerprint bypasses, fingerprints and
+employees recorded at this clock. Kept (R26.4, R41):
 
 - punches and corrections for the current week (Monday 00:00 local, R33),
 - every punch of a shift still open at the rollover, back to its clock-in, until its closing punch arrives,
-- every unsynced record, whatever its age,
+- every unsynced record, whatever its age, including an employee added here, which survives the mirror
+  refresh that otherwise replaces `employees` wholesale,
 - employees, groups, fingerprints, rules and config in full.
 
 At Monday 00:00 local the clock prunes synced punches and corrections from before the new week, except
@@ -399,13 +548,37 @@ tunnel in about a minute (spec call). Loop:
    disconnected (§6.4); the last-contact time is the last successful exchange with the database.
 2. `LISTEN timeclock`.
 3. Catch up (R26.4, R41): fetch the current week's punches and corrections plus everything since the oldest
-   open shift held locally; all employees, groups, fingerprints, rules and config. Replace the local copies.
-4. Push unsynced records oldest first, one transaction per punch with its override: `INSERT ... ON CONFLICT
-   (id) DO NOTHING` (R38), then mark them synced.
+   open shift held locally, and every open shift the clock doesn't have, however old (owner, 2026-10-27: a
+   clock offline across Monday 00:00 must still offer a clock-out for a shift begun elsewhere); all
+   employees, groups, fingerprints, rules and config. Replace the local copies, keeping unsynced records.
+4. Push unsynced records oldest first, employees before everything else; one transaction per punch with its
+   bypass row, if any. Every insert is `INSERT ... ON CONFLICT (id) DO NOTHING` (R38) except an employee's, since a
+   taken id there is a refusal (below). Then mark them synced.
 5. Wait for notifications (§4.4) and new local records; apply or push each as it arrives.
 
-Any error drops the connection and returns to step 1. A notification for a punch older than the local
+Any error drops the connection and returns to step 1, except the database refusing one pushed record: that
+record stays on the clock, is alerted once, and is retried on every push without blocking later records;
+the owner corrects it at the clock (owner, 2026-10-27). A notification for a punch older than the local
 window that touches no open shift is ignored.
+
+**Clock-created employees** (owner, 2026-10-27, except where marked):
+
+- A punch, fingerprint bypass or fingerprint for an employee still unsynced is held: stored, unsynced
+  and not sent, until the first push after its employee is accepted. The employee doesn't notice.
+- Accepted, the employee is marked synced; the mirror then holds the database's copy, and the database's
+  notifications tell the other clocks. A lost acknowledgement (inserted, but the clock never heard back) is
+  recognised when the row returns through the mirror with the same `id` and a matching `pin_hash` (my call).
+- **Refused** (the number or username is taken): the refused-record rule above. The employee and everything
+  held for them stay usable on that clock, which keeps the number until a resolution tool exists
+  (`docs/todo.md`); the database's employee with that number can use every other clock (my call). Holding
+  the dependants is what keeps the refused employee's hours from being filed under the database's owner of
+  that number.
+
+**Left to the builder** (admin menu and adding employees): layouts, wording and component structure within
+the existing UI's style; the exact phone parsing and email pattern within §4.2's rules; how the local store
+marks unsynced employees and keeps them through mirror refreshes; how the database refuses a clock-inserted
+admin; whether `CLOCK_NUMBER` is validated in `ClockSettings` or at startup (the clock doesn't start without
+a valid one either way); test strategy.
 
 ### 6.7 LAN sharing (R28)
 
@@ -416,7 +589,9 @@ fingerprint, with the sender's `INSTANCE_ID`). The sender opens a connection to 
 with a 2 s timeout and doesn't retry (no catch-up between clocks). A receiver inserts into SQLite ignoring
 duplicate UUIDs, marks it synced-elsewhere (only the recording clock syncs to PostgreSQL), and updates
 state and gallery. WireGuard authenticates the sender; the server also drops connections from addresses
-outside the clocks' tunnel addresses. Overrides aren't shared; they change no state.
+outside the clocks' tunnel addresses. Fingerprint bypasses aren't shared; they change no state.
+New employees aren't shared before LAN sharing exists; sharing them comes with it (§13 step 5) and needs
+its own design (owner, 2026-10-27; `docs/todo.md`).
 
 The other clocks and their tunnel addresses come from devkit-container's cached peer table
 (`persisted_data/wireguard/peers.toml`): every row sharing this clock's `lan` value, the clock finding its
@@ -452,6 +627,8 @@ No aeth_ext change is needed. Replaced later by aeth_ext's hold-and-resend (TODO
   uvicorn server's `should_exit`; cancel the scanner's `Gio.Cancellable` (non-required); the crash-alert
   writer (§6.8). Nothing in the INTERRUPT phase.
 - **Loop handler.** NiceGUI's `app.on_startup` calls `install_loop_exception_handler()` (§10.6).
+- **Page handlers.** NiceGUI only logs an exception from a button, tap or key handler, so the page routes
+  each one to a fatal shutdown with an alert (owner, 2026-10-27).
 - **Not wrapped:** the code that calls `ui.run` is never wrapped in `handle_fatal_exc_sync`, since aeth_ext's
   exit nudge (`KeyboardInterrupt`) would count as fatal (TODO #15). Work in `asyncio.to_thread` and
   executors handles its own exceptions; the global hooks don't see exceptions held in futures.
@@ -475,6 +652,43 @@ No aeth_ext change is needed. Replaced later by aeth_ext's hold-and-resend (TODO
   libfprint's build (§7). Final window: libfprint's runtime dependencies, the built library and
   `FPrint-2.0` typelib (§7), `libgirepository-2.0-0`, `libcairo2`. PyGObject comes from PyPI (R11.2).
 
+### 6.11 Alerts (owner, 2026-10-27; the shape is my call)
+
+Other kinds of alert are coming, so the system extends at three points, registered in code; adding to one
+changes neither the others nor the mechanism. It reads totals from the hours function (§4.5) and computes
+none itself.
+
+1. **Alert types**, any condition. A *threshold* type has a measure and a limit, and supports lead-time
+   hooks. An *event* type fires when something happens. A *scheduled* type runs on a timetable (later, e.g.
+   a daily report of `fingerprint_bypasses` with reason `admin_pin_login`). Adding a type registers it.
+2. **Actions**, the delivery channels. Adding one changes no alert type.
+3. **Hooks** bind an alert type, plus a lead time before the limit for a threshold type (0 = at the limit;
+   e.g. 30 minutes, 1 hour, 5 hours before), to one or more actions.
+
+Alerts are evaluated in two places, sharing the same types and hooks:
+
+- **On the clock, at each punch:** for actions shown on the clock itself. The clock fires each threshold hook
+  whose threshold (limit less lead time) the employee's measure has reached.
+- **In the backend, through its scheduler** (§8.4; owner, 2026-10-27): the alert system is part of the
+  scheduler, not beside it. A threshold usually comes due mid-shift, not at a punch. So for every employee
+  on the clock, the backend works out when each threshold hook will be reached and schedules a job for that
+  moment, re-planning when a punch for them arrives. Scheduled types are scheduler jobs on their timetable.
+  These fire the backend's actions (SMS and email, once the notification system exists, §14).
+
+Version 1 registers one type, one action and one hook, all on the clock:
+
+- **Weekly hours** (threshold type): the measure is this week's worked plus paid break time (Monday–Sunday
+  local, R33), the limit the weekly hours alert threshold (§4.3).
+- **Confirmation notice** (action): a line on the confirmation screen (§6.4), e.g. "You've worked over 40
+  hours this week".
+- **Hook:** weekly hours, lead time 0, the confirmation notice.
+
+Not in version 1: event and scheduled types, the backend's scheduled evaluation, and SMS and email actions,
+all of which come with the notification system (§14); version 1's design leaves room for them. The
+threshold never blocks or restricts anyone (§2). Left to the builder: the code structure (no classes are
+prescribed), where the shared type and hook definitions live (timeclock-schema is the natural home, since
+both the clock and the backend use them), the notice's wording and placement, tests.
+
 ## 7. Patched libfprint (R40, R40.4)
 
 - The patch, `docker/libfprint/uru4000-no-heat-model.patch`, adds `dev_class->temp_hot_seconds = -1;` to
@@ -497,10 +711,7 @@ No aeth_ext change is needed. Replaced later by aeth_ext's hold-and-resend (TODO
 
 ## 8. timeclock-backend
 
-Today it's a heartbeat-only skeleton (`src/timeclock_backend/__main__.py:22-37`, which never calls
-`initialize()`), depending on `aeth-ext>=9.0.2` and `devkit-container>=2.2.0`, with `[tool.docker]`
-`wireguard = false`, `supervise = false`. Its `v0.1.0` tag has no GitHub release and isn't on SFTPyPI, so
-`poe docker-pin` can't pin it until the first real `poe release`.
+Built and released as v0.2.0 (on schema 0.3.1), not yet deployed (§13).
 
 - **Dependencies:** `aeth-ext[async]>=10` (`initialize(asyncio=True)` imports uvloop), `apscheduler>=3.11,<4`,
   the same Postgres driver as the clock (§6.6), `timeclock-schema`.
@@ -519,7 +730,7 @@ Today it's a heartbeat-only skeleton (`src/timeclock_backend/__main__.py:22-37`,
   a deferred import, `asyncio.run(main())`, `KeyboardInterrupt` swallowed, exit code from `SHUTDOWN.kind`.
 - **`main()`**, in order: the heartbeat task (`run_heartbeat_async`, as aeth_ext's log server does,
   `central_log_server/startup.py:120-128`); connect to Postgres, retrying while the sidecar starts; run
-  migrations and set the clock role's password (§8.3); start the relay (§8.1); start the scheduler and the
+  migrations (§8.3); start the relay (§8.1); start the scheduler and the
   `LISTEN` task (§8.4); `await SHUTDOWN`; close the relay, `scheduler.shutdown(wait=False)` from the loop
   (never from a THREADED callback); `await SHUTDOWN_COMPLETE`. One THREADED callback, a closure, pauses the
   scheduler (ScheduledInvoiceProcessor's `freeze_scheduler`, `shutdown_hooks.py:60-112`).
@@ -529,15 +740,16 @@ Today it's a heartbeat-only skeleton (`src/timeclock_backend/__main__.py:22-37`,
 An asyncio server on `0.0.0.0:5432` inside the backend container. It accepts a connection only from a source
 address inside the hub's network (`RELAY_ALLOWED_CIDR`, default `10.8.0.0/24`; spec call), since the
 container also sits on the VPS's shared `coolify` network. For each connection it opens one to
-`postgres:5432` and copies bytes both ways until either side closes, then closes both; TCP keepalives on
+`timeclock-postgres:5432` (`POSTGRES_HOST`) and copies bytes both ways until either side closes, then closes both; TCP keepalives on
 both sockets; no protocol parsing. Connection errors are normal, handled per connection, and logged at
 warning, never fatal. Postgres's own password authentication still applies, so the relay only adds reach.
 
 ### 8.2 PostgreSQL sidecar (R26.5)
 
-An unlisted service in the backend's compose (setup-project leaves unlisted services alone):
+An unlisted service in the backend's compose (setup-project leaves unlisted services alone), named
+`timeclock-postgres`, since Coolify's own database already uses `postgres` on the shared network:
 
-- `image: postgres:18` (pin the minor in the tag), `restart: unless-stopped`.
+- `image: postgres:18.6`, `restart: unless-stopped`.
 - `POSTGRES_DB=timeclock`, `POSTGRES_PASSWORD` from a Coolify secret. The image creates `timeclock` on
   first start; the backend creates `timeclock_test` at startup if it's missing (`CREATE DATABASE` can't run
   inside a transaction).
@@ -558,9 +770,9 @@ and apply the per-database `CONNECT` grants and the revoke from `PUBLIC`. The cl
 the owner's, by hand. A failed migration is fatal: alert and exit; Docker restarts it and the clocks keep
 buffering.
 
-`0001_initial.sql` creates `pgcrypto`, the enums, every table, view, trigger and seed row of §4, the schema
-`config`, the role `timeclock_clock_access` if absent, and its grants. Being plain SQL, it runs unchanged
-in both databases.
+`0001_initial.sql` creates `pgcrypto`, the enums, every table, view, function, trigger and seed row of §4,
+the schemas `config` and `backend`, the role `timeclock_clock_access` if absent, and its grants. Being plain
+SQL, it runs unchanged in both databases. It's revised in place until a real database exists (§4.1).
 
 ### 8.4 Scheduler and the automatic clock-out (R37, R41)
 
@@ -569,24 +781,43 @@ in both databases.
   so a `docker stop` mid-job isn't reported as fatal. Drop RA's invoice-specific quiet-job patterns.
   `MemoryJobStore`, `job_defaults = {"misfire_grace_time": 60, "coalesce": True}`,
   `timezone=SETTINGS.tz`.
-- **Time zone:** pass `timezone=SETTINGS.tz` to every `CronTrigger` explicitly; the scheduler's zone doesn't
-  reach trigger objects, and a bare trigger falls back to the container's zone, UTC (R41.4).
-- **Errors:** any exception escaping a job is fatal to the whole process, relay included. The job catches
-  what it expects: invalid settings (alert, skip the run, R41.3) and database errors (alert, skip; the next
-  run retries). Only bugs escape.
-- **Both databases:** everything below runs once per database, each with its own `config.settings`, its own
-  `LISTEN` connection and its own job (R26.6).
-- **Schedule from the database:** the backend holds its own `LISTEN timeclock` connection. On a
-  `config.settings` notification it re-reads the row and reschedules the job with a new
-  `CronTrigger(hour, minute, second, timezone)`; `auto_clock_out_enabled = false` pauses it.
-- **Catch-up** (spec call): at startup and after every reschedule, if today's run time has already passed,
-  the job runs once for today. The job is idempotent, and without this a restart across the run time
-  silently skips that day, since jobs live in memory with a 60 s grace.
-- **The job** (R41.1): stamp = today's date in `SETTINGS.tz` at `auto_clock_out_stamp_time`, as UTC. It
-  loads the last 14 days of punches and corrections (spec call), works out each employee's state with
-  `timeclock_schema.shifts`, and for every employee not `off` whose last punch is before the stamp, inserts
-  a `clock_out` at the stamp with `automatic = true`, `instance_id = 'backend'` and a new UUID, all in one
-  transaction. The clocks receive them like any punch and prune those open shifts (R41).
+- **Schedule from the database** (owner's design, 2026-10-27): the times live in
+  `backend.auto_clock_out_runs` (§4.3), projected 7 days ahead by SQL, DST included, so the table answers
+  "was a run missed?" and the backend computes no times itself.
+- **Zone** (owner, 2026-10-27): the backend accepts any `TZ` zoneinfo accepts and, at every start after the
+  migrations, writes to `backend.environment` an equivalent name PostgreSQL knows (the name itself, its
+  canonical zone, or another link to that zone; tzdata's link data). A zone with none is fatal at startup.
+  An unchanged zone writes nothing, so it fires no reprojection. Compose sets `TZ=America/New_York`, Eastern
+  with DST, not a fixed EST (owner).
+- **Both databases:** everything below runs once per database, each with its own `config.settings`, runs
+  table, `LISTEN` connection and job (R26.6).
+- **A pass**, in order: extend the projection; run the due rows oldest first; schedule the next pass. Due
+  means time passed, no `ran_at`, `scheduled_for` within 14 days of now, and only while
+  `auto_clock_out_enabled`; one `now()` per pass splits due rows from upcoming ones. Passes run at startup,
+  on each `config.settings` notification and on each reconnect of the backend's own `LISTEN timeclock`
+  connection, and as the job; a lock per database serializes them.
+- **The job:** one one-shot `DateTrigger` per database at the next unrun row, with no misfire grace (a
+  dropped one-shot job would never reschedule itself). Its wait is measured from the database's clock
+  (`min(scheduled_for) - now()`), with a 1 s floor, so a backend clock ahead of the server's can't fire it
+  early. No row ahead removes the job.
+- **A run** (R41.1): under the run advisory lock it locks its row, loads the 14 days of punches and
+  corrections before the row's stamp, works out each employee's state with `timeclock_schema.shifts`, and
+  for every employee not `off` whose last punch is before the stamp, inserts a `clock_out` at the stamp with
+  `automatic = true`, `instance_id = 'backend'` and a new UUID. The clock-outs and the row's
+  `ran_at`/`closed` commit in one transaction. A stamp later than the run time lands on the run's own day,
+  and is written at run time even though it's still in the future (owner, 2026-10-27); the clocks count it
+  only once its time comes (§4.5). The clocks receive them like any punch and prune those open shifts (R41).
+- **Off and on** (owner, 2026-10-27): while off, nothing is projected, owed or run, and windows missed while
+  off are never run later, however long it was off. Re-enabled after today's run time, today's row still
+  runs. Rows missed while it was on are caught up within 14 days on re-enable, each with its own stamp.
+  Nobody is ever credited an extra day; real late work is fixed by payroll amending punches.
+- **Errors:** every lock wait is bounded at 1 minute (`lock_timeout`), so an owner's SQL-editor transaction
+  left open, or a second backend, alerts instead of stalling. A database error stops the pass at that run
+  (a newer run closing a shift first would leave the older run nothing to close), alerts, and retries in 10
+  minutes. Any other exception is fatal to the whole process, relay included (project policy: only bugs
+  escape).
+- **Alerts** (§6.11; owner, 2026-10-27): the same scheduler runs the alert system's backend half, with
+  threshold-hook jobs per employee on the clock and scheduled alert types as timetabled jobs. Not in version 1.
 
 ## 9. Configuration and deployment
 
@@ -622,7 +853,8 @@ The clock's environment, set per clock in its Coolify application:
 
 | Variable | Value |
 | --- | --- |
-| `INSTANCE_ID` | the clock's number, from 1; `dev` on timeclock-dev (R16.2, R3.3) |
+| `INSTANCE_ID` | names the clock and its location in alerts, logs and the database; `dev` on timeclock-dev (R16.2, R3.3) |
+| `CLOCK_NUMBER` | a whole number from 1 to 99, unique per clock, picking its employee-number block (§6.4); separate from `INSTANCE_ID`, which names the clock's location (owner, 2026-10-27). The clock refuses to start if it's missing or out of range |
 | `HEARTBEAT_SLUG` | `timeclock-system-${INSTANCE_ID:?}` (R14.6) |
 | `TZ` | `America/New_York` (R41.4) |
 | `LOG_HISTORY_RETENTION_DAYS` | `14` (R44) |
@@ -642,8 +874,8 @@ stops punches: deploy outside shift changes. The owner puts the logo files in
 
 ### 9.2 The backend's compose
 
-The listed `timeclock-backend` service on networks `coolify` and `timeclock-db`, plus the `postgres` sidecar
-(§8.2). Environment: `HEARTBEAT_SLUG=timeclock-backend`, the alert variables, the four fetched-mode `WG_*`
+The listed `timeclock-backend` service on networks `coolify` and `timeclock-db`, plus the `timeclock-postgres`
+sidecar (§8.2). Environment: `HEARTBEAT_SLUG=timeclock-backend`, the alert variables, the four fetched-mode `WG_*`
 variables, `WG_DISCONNECTED_LIMIT_SECS=1` (no tolerate, §8), `TZ=America/New_York`, `POSTGRES_PASSWORD`,
 and `LOG_CONN_HOST=central-log-server` (on the VPS it reaches the log server
 over the `coolify` network, not the tunnel).
@@ -660,7 +892,8 @@ One-time, per device:
 3. In Coolify: the server at `coolify-tunnel:<port>`, Coolify's key in root's `authorized_keys`, Proxy None.
 4. Enroll the clock in the hub (§12): its row with `lan`, its forward rules, a hub release.
 5. Create the clock's database login in the SQL editor with a random password (§4.4).
-6. Create the clock's Coolify application with its environment (§9.1), that password included; deploy.
+6. Create the clock's Coolify application with its environment (§9.1), that password and an unused
+   `CLOCK_NUMBER` included; deploy.
 
 ## 10. aeth_ext changes (R16)
 
@@ -897,34 +1130,42 @@ spoke talks only to the hub and only the hub publishes ports; this design supers
 
 ## 13. Build order and verification
 
-Approved order. Plans for the dependency repositories are short and written for subagents, unless a change
-is small enough that subagents would cost more than they save. Each repository's own `AGENTS.md` and
+Approved order; steps 3–6 as the owner set them on 2026-10-27. Plans for the dependency repositories are
+short and written for subagents, unless a change is small enough that subagents would cost more than they
+save. Each repository's own `AGENTS.md` and
 `.claude/CLAUDE.md` apply there; on a branch, run targeted tests while working and the full suite once at the
 end (`AGENTS.md`).
 
-1. **In parallel:**
+1. **Done. In parallel:**
    - devkit-container §11.1 and §11.2, released together (the clock image needs 11.1);
    - aeth_ext §10, released as 10.0.0;
    - timeclock-schema (§4): create the GitHub remote, then the repo with `uv init --no-workspace` and
      setup-project, the models, shift logic, rules registry and `0001_initial.sql`, release 0.1.0; add it
-     here as a submodule at `schema/`;
+     here as a submodule at `schema/` (now at 0.3.1, with §8.4's runs table);
    - wireguard-hub: rows for the backend, the log server and the first clock, and their forward rules (§12);
      the log server's spoke switch (§10.7) once its row exists.
-2. **timeclock-backend** (§8), deployed on the VPS. With the database up, install DBeaver Community on the
-   owner's workstation and set up its SSH connection to the VPS (R30.2).
+2. **timeclock-backend** (§8): built and released as v0.2.0, not yet deployed. Deployment waits for step 4's
+   schema release, 0.4.0 (owner). Then deploy on the VPS; with the database up, install DBeaver Community on
+   the owner's workstation and set up its SSH connection to the VPS (R30.2).
 3. **The clock app and kiosk** on timeclock-dev (§5–§7, §9.1, without `discovery`), against the test
-   database (R26.6). The kiosk files start
-   from Appendix A. Once they're committed here, clean up the test leftovers: the `kiosk-test` container,
-   the stopped `tc-app`, the `kiosk-test` and `apptest` images, the `tc-net` network,
+   database (R26.6): nearly done; it closes when the current clock PR is merged and released. The kiosk
+   files start from Appendix A. Once they're committed here, clean up the test leftovers: the `kiosk-test`
+   container, the stopped `tc-app`, the `kiosk-test` and `apptest` images, the `tc-net` network,
    `/root/fp-test-template.bin` and `/tmp/fpdata/`.
-4. **LAN sharing:** devkit-container §11.3 with `discover`, the hub's `lan` field (§12), the `discovery`
-   service and clock-to-clock sharing (§6.7). The clocks already work through the hub without it.
+4. **Admin menu, adding employees and hours**, planned and built from this spec, in timeclock-schema
+   (0001 revised in place, release 0.4.0), the backend where it's touched, and the clock: the admin menu,
+   adding employees, contact fields and PIN-only login (§4.2, §4.4, §6.4–§6.6, §9.1); the hours function,
+   break allowance and settings (§4.3, §4.5); the alert system with the weekly-hours alert (§6.11).
+5. **LAN sharing:** devkit-container §11.3 with `discover`, the hub's `lan` field (§12), the `discovery`
+   service and clock-to-clock sharing (§6.7), sharing new employees included. The clocks already work
+   through the hub without it.
+6. **Follow-ups** (§14).
 
 Verify on the hardware, at the step that makes each possible (not in long VM runs; say what's being
 installed before installing it):
 
-- the patched 1.94.100 build enrolls and identifies on the 4500, and a reader left waiting for over 10 minutes
-  never reports `TOO_HOT` (step 3);
+- the patched 1.94.100 build enrolls and identifies on the 4500 (step 3); the soak test (a reader left
+  waiting for over 10 minutes never reports `TOO_HOT`) is skipped (owner, 2026-10-27);
 - the reader autosuspends once the app closes it (`power/runtime_status` reads `suspended`) while the process
   keeps its `FPrint.Context` (step 3);
 - `LISTEN`/`NOTIFY` works through the relay over WireGuard (steps 2–3);
@@ -932,11 +1173,17 @@ installed before installing it):
   touchscreen (step 3);
 - with the uplink unplugged: punches are recorded, the kiosk stays up, and everything syncs on reconnect
   (step 3);
-- two clocks share punches and registrations with the hub unreachable (step 4; needs a second device, e.g.
+- a keyboard plugged into the running clock works in the add-employee form, with no restart (step 4);
+- two clocks share punches and registrations with the hub unreachable (step 5; needs a second device, e.g.
   the EliteDesk 800 G1).
 
 ## 14. Follow-ups and known issues
 
+Deferred features, each needing its own design before it's built, are listed in `docs/todo.md`.
+
+- **Notification system** (owner, 2026-10-27): the backend will need one for email and SMS, using the
+  employees' optional `phone` and `email` (§4.2). Its first users are the weekly-hours alert and its early
+  warnings, as new actions on §6.11's alert system.
 - libfprint fork with prebuilt binaries, if a fresh compile is still too slow despite the cached window
   (R40.4).
 - Once the project is stable, revisit blocking updates and deletes on punches and corrections for every
