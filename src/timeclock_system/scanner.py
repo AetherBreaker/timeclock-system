@@ -1,0 +1,14 @@
+"""The fingerprint scanner (spec §6.2); the matching loop lands in a later task."""
+
+# Standard library imports
+from dataclasses import dataclass
+from uuid import UUID  # noqa: TC003  # the dataclass annotation is evaluated at runtime
+
+
+@dataclass(frozen=True)
+class GalleryPrint:
+  """One enrolled print as the matcher consumes it."""
+
+  print_id: UUID
+  employee_id: int
+  template: bytes
