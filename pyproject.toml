@@ -8,7 +8,7 @@
     "PyGObject>=3.58.1; sys_platform == 'linux'",                          # built in the image (builder-setup window); not on Windows
     "aeth-ext>=10.0.0",
     "bcrypt>=5.0",
-    "devkit-container>=2.3.0",
+    "devkit-container>=2.3.1",
     "nicegui>=3.18,<4",
     "psycopg[binary]>=3.3.6",
     "timeclock-schema>=0.2.0",
@@ -61,6 +61,10 @@
   required_persisted_dirs = ["persisted_data"]
   wireguard               = true
   startup_scripts         = ["timeclock-reader-access"]
+  # The two devkit-container run modes, each added only when missing so a project's own
+  # value stands (a plain template scalar would replace it).
+  # Spawn and supervise the app instead of exec'ing it.
+  supervise               = true
 
 [tool.poe]
   include_script = [{ script = "aeth_devkit:tasks", executor = { type = "uv", frozen = true } }]

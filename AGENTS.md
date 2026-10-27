@@ -126,4 +126,31 @@ alone. A name with a colon must be quoted.
 
 `.env` contains live credentials — never print its contents back in full, commit it, or suggest
 committing it.
+
+## Pydantic Dataclass Conventions
+
+**All pydantic dataclasses in this project must inherit from `aeth_ext.types.IsPydantic`.**
+
+- `pyproject.toml` configures `[tool.ruff.lint.flake8-type-checking] runtime-evaluated-base-classes`
+  to include `aeth_ext.types.IsPydantic` (among others like `pydantic.main.BaseModel`).
+- `IsPydantic` is an empty marker class with `__slots__ = ()` that signals to Ruff that field-type
+  imports are evaluated at runtime (by pydantic's validator building) and must **NOT** be moved into a
+  `TYPE_CHECKING` block.
+- Moving type imports to `TYPE_CHECKING` causes a runtime error:
+  ```
+  PydanticUserError: '<Cls>' is not fully defined; you should define '<type>'...
+  ```
+  because pydantic needs the annotation resolved at validator build time, unlike plain
+  dataclasses/TypedDicts.
+- **Subclasses of an `IsPydantic`-inheriting base** do **not** need to repeat the inheritance — Ruff
+  and pydantic resolve it transitively through the MRO.
+
+```python
+from pydantic.dataclasses import dataclass
+from aeth_ext.types import IsPydantic
+
+@dataclass(config=...)
+class MyDataClass(IsPydantic):
+    field: SomeType  # Keep SomeType import outside TYPE_CHECKING
+```
 <!-- devkit:end -->
