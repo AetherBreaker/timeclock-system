@@ -214,8 +214,11 @@ class Clock:
     if e is None:
       raise PunchRefused(_UNKNOWN_EMPLOYEE)
     punches, corrections = await asyncio.to_thread(lambda: (self._store.punches(employee_id), self._store.corrections(employee_id)))
-    timeline = build_timeline(punches, corrections)
     now = self._now()
+    # A punch counts from its stamped time: the automatic clock-out may be stamped after its run, and until then the employee
+    # can still clock out by hand, which makes the automatic one the ignored repeat.
+    later = {p.id for p in apply_corrections(punches, corrections) if p.at > now}
+    timeline = build_timeline([p for p in punches if p.id not in later], corrections)
     # "Clocked in since" names the clock-in, not a lunch that followed it; a break or lunch shows its own start.
     open_shift = timeline.open_shift
     if open_shift is None:
@@ -243,13 +246,15 @@ class Clock:
       raise PunchRefused(_UNKNOWN_EMPLOYEE)
     async with self._punch_lock:
       punches, corrections = await asyncio.to_thread(lambda: (self._store.punches(employee_id), self._store.corrections(employee_id)))
+      now = self._now()
+      later = {p.id for p in apply_corrections(punches, corrections) if p.at > now}  # as in menu_info
+      punches = [p for p in punches if p.id not in later]
       timeline = build_timeline(punches, corrections)
       # The menu only offers valid punches (R26.3); re-checked here since state may have changed since it was drawn.
       s = self._settings
       off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
       if kind not in timeline.valid_next or kind in off:
         raise PunchRefused("That punch isn't available right now")
-      now = self._now()
       rules = applicable_rules(self._rules, employee_id=employee_id, group_id=e.group_id)
       violations = evaluate(rules, RuleContext(employee_id=employee_id, group_id=e.group_id, timeline=timeline, proposed=kind, at=now))
       refusals = [v.message for v in violations if v.action is RuleAction.REFUSE]

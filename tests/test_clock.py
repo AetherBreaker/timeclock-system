@@ -117,6 +117,25 @@ async def test_menu_info_since_is_the_last_event_at_lunch_and_none_when_off(env:
   assert info.since == T - timedelta(hours=1)
 
 
+async def test_a_punch_stamped_later_than_now_waits_for_its_time(env: Env) -> None:
+  # The backend's automatic clock-out can be stamped after its run; until then the employee can still clock out by hand.
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=8)), origin="db")
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_OUT, T + timedelta(hours=1), instance_id="backend"), origin="db")
+  info = await env.clock.menu_info(1)
+  assert info.state is EmployeeState.WORKING
+  assert PunchKind.CLOCK_OUT in info.valid_next
+  outcome = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
+  assert outcome.punch.at == T
+  assert outcome.hours_this_week == timedelta(hours=8)
+
+
+async def test_a_punch_stamped_later_counts_once_its_time_passes(env: Env) -> None:
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=8)), origin="db")
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_OUT, T + timedelta(hours=1), instance_id="backend"), origin="db")
+  env.now = T + timedelta(hours=1)
+  assert (await env.clock.menu_info(1)).state is EmployeeState.OFF
+
+
 async def test_record_punch_stores_unsynced_and_notifies(env: Env) -> None:
   heard: list[object] = []
   changed: list[frozenset[str]] = []
