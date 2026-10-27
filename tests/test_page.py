@@ -1,4 +1,5 @@
 # Standard library imports
+import asyncio
 from datetime import UTC, datetime, time
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -58,15 +59,19 @@ def offline() -> DbStatus:
   return DbStatus(connected=False, last_contact=None)
 
 
+def unexpected_error(e: Exception) -> None:
+  raise AssertionError(e)
+
+
 async def test_idle_shows_the_prompt_and_offline_status(controller: KioskController, tmp_path: Path) -> None:
-  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path)) as user:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")
     await user.should_see(text.IDLE_READY)
     await user.should_see("Database offline · last contact never")
 
 
 async def test_pin_pad_types_digits(controller: KioskController, tmp_path: Path) -> None:
-  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path)) as user:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")
     user.find(kind=ui.button, content=text.USE_PIN).click()
     await user.should_see(text.ENTER_USERNAME)
@@ -78,7 +83,7 @@ async def test_pin_pad_types_digits(controller: KioskController, tmp_path: Path)
 
 
 async def test_menu_shows_valid_punch_buttons(controller: KioskController, tmp_path: Path) -> None:
-  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path)) as user:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")
     await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
     await user.should_see("Ann")
@@ -87,7 +92,26 @@ async def test_menu_shows_valid_punch_buttons(controller: KioskController, tmp_p
 
 
 async def test_missing_logo_still_renders(controller: KioskController, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path / "missing")) as user:
+  async with user_simulation(
+    build_root(controller, offline, tz=NY, branding_dir=tmp_path / "missing", on_error=unexpected_error)
+  ) as user:
     await user.open("/")
     await user.should_see(text.IDLE_READY)
   assert any("logo" in r.getMessage() for r in caplog.records)
+
+
+async def test_a_failing_button_reaches_on_error(controller: KioskController, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The app wires on_error to a fatal shutdown; NiceGUI alone would only log the exception.
+  async def broken() -> None:
+    raise RuntimeError("store failed")
+
+  monkeypatch.setattr(controller, "use_pin", broken)
+  errors: list[Exception] = []
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=errors.append)) as user:
+    await user.open("/")
+    user.find(kind=ui.button, content=text.USE_PIN).click()
+    for _ in range(50):  # the click's handler runs as a NiceGUI background task
+      if errors:
+        break
+      await asyncio.sleep(0.02)
+  assert [str(e) for e in errors] == ["store failed"]
