@@ -1000,7 +1000,7 @@ APT::Periodic::Unattended-Upgrade "1";
   unattended through `-append "auto=true priority=critical partman/confirm=true …"`: add
   `netcfg/get_hostname=timeclock-test` to that string, and make its `hostname` check expect `timeclock-test`.
   The mechanism is unverified until the next rebuild; say so in the commit body.
-- [ ] **Step 3: Docs.** (done except the 'Deploying the clock' section) `docs/dev-device-setup.md`: under "What the image sets up", a bullet for security updates
+- [x] **Step 3: Docs.** (done except the 'Deploying the clock' section) `docs/dev-device-setup.md`: under "What the image sets up", a bullet for security updates
   (03:00 reboot) and change the hostname bullet to "asked during the install; `timeclock-dev` is the test
   device's"; in step 3 "Install", say the installer asks for the hostname. Add a short section "Deploying the
   clock" listing §9.3's steps 2–6 with this plan's compose variables.
