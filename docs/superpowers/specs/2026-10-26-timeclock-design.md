@@ -457,7 +457,9 @@ warning; spec call). Large touch targets, landscape layout from 1024×600 up; no
 form) is typed on a plugged-in keyboard, which must work when plugged in at any time, with no restart of the
 app or the kiosk (owner, 2026-10-27; verified on the clock, and the kiosk image fixed if hotplugged input
 isn't picked up). The on-screen keyboard is deferred (`docs/todo.md`). The page turns off text selection and
-the long-press menu (R13.2) and hides the mouse cursor (owner, 2026-10-27). Every screen but idle returns to
+the long-press menu (R13.2). On the kiosk only (`KIOSK_URL` carries `?kiosk`), it hides the mouse cursor until a
+mouse moves, and again on a touch or after a minute without mouse movement; touch never shows it. Other browsers,
+such as one through an SSH tunnel, always show it (owner, 2026-10-27). Every screen but idle returns to
 idle after 2 minutes without a touch or keystroke, discarding anything unsaved (R45.4). Hours are shown
 exact, truncated (never rounded) to two decimal places (owner, 2026-10-27). "Hours this week" is worked plus
 paid break time (owner, 2026-10-27; §4.5).
