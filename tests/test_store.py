@@ -334,6 +334,13 @@ def test_login_bypass_queue_and_prune(store: LocalStore) -> None:
   assert store.prune(T - timedelta(days=7), {}) == 0  # nothing old left; the recent one stays
 
 
+def test_prune_keeps_unsynced_login_bypasses_with_no_punches_stored(store: LocalStore) -> None:
+  pending = login_bypass(1, T - timedelta(days=10))
+  store.insert_bypass(pending)
+  store.prune(T - timedelta(days=7), {})  # `punches` is empty: NULL NOT IN (empty set) is true
+  assert store.unsynced_bypasses() == [pending]
+
+
 def test_a_punch_and_its_bypass_sync_together(store: LocalStore, db_path: Path) -> None:
   p = punch()
   store.insert_punch(p, origin="local", bypass=override(p))
