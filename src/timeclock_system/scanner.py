@@ -6,6 +6,7 @@ held across a blocking reader call or a `post`/`on_fatal` call. Every pause wait
 """
 
 # Standard library imports
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -16,6 +17,8 @@ from uuid import UUID  # noqa: TC003  # the dataclass annotation is evaluated at
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Callable, Sequence
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -145,6 +148,7 @@ class ScannerTimings:
   too_hot_pause: float = 60.0
   rearm_every: float = 60.0
   finger_off_pause: float = 2.0  # after a capture; see _ready_once
+  failure_limit: float = 180.0  # a ReaderFailure streak this long is fatal
   enroll_idle_timeout: float = 30.0
 
 
@@ -172,6 +176,7 @@ class Scanner:
     self._thread = threading.Thread(target=self._run, name="scanner", daemon=True)
     self._opened = False  # scanner thread only, like _backoff
     self._backoff = timings.backoff_start  # doubles per ReaderFailure, reset by a completed capture
+    self._failing_since: float | None = None  # start of the current ReaderFailure streak, reset with _backoff
     self._lock = threading.Lock()
     self._wake = threading.Event()
     # Guarded by _lock:
@@ -281,9 +286,21 @@ class Scanner:
       except ReaderTooHot:
         self._post(Retry(TOO_HOT_MESSAGE))
         self._wake.wait(self._timings.too_hot_pause)
-      except ReaderFailure:
-        self._wake.wait(self._backoff)
-        self._backoff = min(self._backoff * 2, self._timings.backoff_max)
+      except ReaderFailure as e:
+        self._on_failure(e)
+
+  def _on_failure(self, e: ReaderFailure) -> None:
+    # Split out of _loop only for C901. §2: a reader must never stop working silently while the screen looks ready. The
+    # first failure of a streak is logged; a streak past failure_limit ends as a lost reader does (fatal: an alert, and
+    # a restart reopens it).
+    now = self._monotonic()
+    if self._failing_since is None:
+      self._failing_since = now
+      LOGGER.warning("fingerprint reader failed, retrying with backoff: %s", e)
+    elif now - self._failing_since >= self._timings.failure_limit:
+      raise ReaderGone(f"the reader kept failing for {now - self._failing_since:.0f} s: {e}") from e
+    self._wake.wait(self._backoff)
+    self._backoff = min(self._backoff * 2, self._timings.backoff_max)
 
   def _ready_once(self) -> None:
     # Split out of _loop only for C901.
@@ -293,6 +310,7 @@ class Scanner:
       self._wake.wait(self._timings.retry_pause)
       return
     self._backoff = self._timings.backoff_start
+    self._failing_since = None
     # §6.2: no re-capture until the finger lifts or 2 s pass. libfprint resets the finger status to none as a capture
     # completes, so the lift can't be seen and the bound is a plain pause; it keeps a bounce or a resting finger from
     # being read as the next press.

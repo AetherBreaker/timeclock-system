@@ -1,6 +1,7 @@
 """Tests for the scanner thread, driven by a scripted FakeReader."""
 
 # Standard library imports
+import logging
 import queue
 import threading
 import time
@@ -213,6 +214,32 @@ def test_failures_back_off_instead_of_spinning(make: Callable[..., Harness]) -> 
   # 0.01 + 0.02 + 0.04 + 0.04 … fits about 14 attempts in 0.5 s; a spin would make thousands.
   assert 1 <= h.reader.drain().count("identify") < 20  # noqa: PLR2004
   h.no_event(0.0)
+
+
+def test_a_failure_streak_is_logged_once(make: Callable[..., Harness], caplog: pytest.LogCaptureFixture) -> None:
+  caplog.set_level(logging.WARNING, logger="timeclock_system.scanner")
+  h = make(FakeReader(default=ReaderFailure("usb error")), ScannerTimings(backoff_start=0.01, backoff_max=0.04))
+  time.sleep(0.3)
+  h.scanner.stop()
+  warnings = [r.getMessage() for r in caplog.records if r.name == "timeclock_system.scanner"]
+  assert len(warnings) == 1
+  assert "usb error" in warnings[0]
+
+
+def test_a_reader_failing_past_the_limit_is_fatal(make: Callable[..., Harness]) -> None:
+  # §2's anti-goal: a reader that silently stops working while the screen still looks ready.
+  h = make(FakeReader(default=ReaderFailure("usb error")), ScannerTimings(backoff_start=0.01, backoff_max=0.04, failure_limit=0.2))
+  assert "usb error" in h.fatal.get(timeout=WAIT)
+
+
+def test_a_capture_ends_the_failure_streak(make: Callable[..., Harness]) -> None:
+  failure = ReaderFailure("usb error")
+  timings = ScannerTimings(backoff_start=0.05, backoff_max=0.05, failure_limit=0.25, finger_off_pause=0.01)
+  h = make(FakeReader([failure] * 4 + [None] + [failure] * 4, default=BLOCK), timings)
+  assert h.event() == NoMatch()
+  # Each streak spans about 0.15 s, under the limit; counted as one streak, the failures would span about 0.4 s.
+  with pytest.raises(queue.Empty):
+    h.fatal.get(timeout=0.5)
 
 
 def test_too_hot_posts_retry_and_pauses_long(make: Callable[..., Harness]) -> None:
