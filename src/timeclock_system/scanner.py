@@ -1,7 +1,7 @@
-"""The fingerprint scanner (spec §6.2); the matching loop lands in a later task."""
+"""The fingerprint scanner (spec Â§6.2); the matching loop lands in a later task."""
 
 # Standard library imports
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID  # noqa: TC003  # the dataclass annotation is evaluated at runtime
 
 
@@ -11,4 +11,4 @@ class GalleryPrint:
 
   print_id: UUID
   employee_id: int
-  template: bytes
+  template: bytes = field(repr=False)  # R15: keep the template out of tracebacks and alerts
