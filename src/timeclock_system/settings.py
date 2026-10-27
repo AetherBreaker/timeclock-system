@@ -14,13 +14,16 @@ if TYPE_CHECKING:
 
 
 class ClockSettings(BaseSettings):
-  """Settings of one clock; ``INSTANCE_ID`` is mandatory (it names the clock in alerts, logs and the DB)."""
+  """Settings of one clock; ``INSTANCE_ID`` and ``CLOCK_NUMBER`` are mandatory, so a clock without them doesn't start."""
 
   db_host: Annotated[str, Field(alias="TIMECLOCK_DB_HOST")] = "10.8.0.24"
   db_port: Annotated[int, Field(alias="TIMECLOCK_DB_PORT")] = 5432
   db_name: Annotated[str, Field(alias="TIMECLOCK_DB_NAME")]
   db_user: Annotated[str, Field(alias="TIMECLOCK_DB_USER")]
   db_password: Annotated[SecretStr, Field(alias="TIMECLOCK_DB_PASSWORD")]
+  clock_number: Annotated[int, Field(alias="CLOCK_NUMBER", ge=1, le=99)]
+  """Picks this clock's block of employee numbers, n*10000+1 to n*10000+9999 (§6.4); unique per clock, separate from
+  `INSTANCE_ID`, which names the clock and its location."""
 
   @model_validator(mode="after")
   def _require_instance_id(self) -> Self:

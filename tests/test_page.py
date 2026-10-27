@@ -50,7 +50,7 @@ async def controller(tmp_path: Path) -> AsyncIterator[KioskController]:
   store.insert_fingerprint(
     Fingerprint(id=ANN_PRINT, employee_id=1, template=SecretBytes(b"t"), registered_at=NOW, instance_id="1"), origin="db"
   )
-  clock = Clock(store, instance_id="1", tz=NY, alert=lambda _s, _b: None)
+  clock = Clock(store, instance_id="1", clock_number=1, tz=NY, alert=lambda _s, _b: None)
   await clock.load()
   yield KioskController(clock, RecordingReader(), tz=NY)
   store.close()
@@ -171,7 +171,7 @@ async def test_the_reader_indicator_shows_on_every_screen_and_follows_the_scan(c
 
 async def test_the_reader_indicator_says_how_to_wake_a_sleeping_reader(tmp_path: Path) -> None:
   store = LocalStore(tmp_path / "clock.sqlite3")
-  clock = Clock(store, instance_id="1", tz=NY, alert=lambda _s, _b: None)
+  clock = Clock(store, instance_id="1", clock_number=1, tz=NY, alert=lambda _s, _b: None)
   await clock.load()  # no business hours: the reader sleeps
   controller = KioskController(clock, RecordingReader(), tz=NY)
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:

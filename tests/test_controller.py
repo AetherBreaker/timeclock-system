@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import bcrypt
 import pytest
 from pydantic import SecretBytes, SecretStr
-from timeclock_schema.enums import EmployeeRole, OverrideReason, PunchKind
+from timeclock_schema.enums import BypassReason, EmployeeRole, PunchKind
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint
 
 # First party imports
@@ -106,7 +106,7 @@ async def kiosk(tmp_path: Path) -> AsyncIterator[Kiosk]:
       origin="db",
     )
   t = FakeTime()
-  clock = Clock(store, instance_id="1", tz=NY, alert=lambda _s, _b: None, now=lambda: t.wall)
+  clock = Clock(store, instance_id="1", clock_number=1, tz=NY, alert=lambda _s, _b: None, now=lambda: t.wall)
   await clock.load()
   reader = FakeReaderPort()
   ctl = KioskController(clock, reader, tz=NY, monotonic=lambda: t.mono, wall_now=lambda: t.wall)
@@ -319,12 +319,12 @@ async def test_registration_timeout_shows_message(kiosk: Kiosk) -> None:
 async def test_override_by_manager_finger_allows_one_punch(kiosk: Kiosk) -> None:
   await kiosk.pin_login(BOB)
   await kiosk.ctl.request_override()
-  request = OverrideRequest(BOB, OverrideReason.NO_FINGERPRINT, None)
+  request = OverrideRequest(BOB, BypassReason.OVERRIDE_NO_FINGERPRINT, None)
   assert kiosk.ctl.screen == OverridePrompt(request, touched_at=kiosk.t.mono)
   await kiosk.ctl.on_scanner_event(matched(MIA))
   screen = kiosk.ctl.screen
   assert isinstance(screen, Menu)
-  assert screen.auth == OverrideGrant(MIA, OverrideReason.NO_FINGERPRINT, pin_only=False)
+  assert screen.auth == OverrideGrant(MIA, BypassReason.OVERRIDE_NO_FINGERPRINT, pin_only=False)
   await kiosk.ctl.punch(PunchKind.CLOCK_IN)
   assert isinstance(kiosk.ctl.screen, Confirmation)
   [(punch, override)] = kiosk.store.unsynced_punches()
@@ -340,13 +340,13 @@ async def test_override_by_manager_pin_sets_pin_only(kiosk: Kiosk) -> None:
   await kiosk.pin_login(BOB)
   await kiosk.ctl.request_override()
   await kiosk.ctl.use_pin()
-  request = OverrideRequest(BOB, OverrideReason.NO_FINGERPRINT, None)
+  request = OverrideRequest(BOB, BypassReason.OVERRIDE_NO_FINGERPRINT, None)
   assert kiosk.ctl.screen == PinEntry("username", "", SecretStr(""), request, touched_at=kiosk.t.mono)
   await kiosk.type_and_enter(PINS[MIA])
   await kiosk.type_and_enter("1234")
   screen = kiosk.ctl.screen
   assert isinstance(screen, Menu)
-  assert screen.auth == OverrideGrant(MIA, OverrideReason.NO_FINGERPRINT, pin_only=True)
+  assert screen.auth == OverrideGrant(MIA, BypassReason.OVERRIDE_NO_FINGERPRINT, pin_only=True)
   await kiosk.ctl.punch(PunchKind.CLOCK_IN)
   [(_, override)] = kiosk.store.unsynced_punches()
   assert override is not None
@@ -356,7 +356,7 @@ async def test_override_by_manager_pin_sets_pin_only(kiosk: Kiosk) -> None:
 async def test_employee_cannot_override_for_themselves(kiosk: Kiosk) -> None:
   await kiosk.pin_login(MIA)
   await kiosk.ctl.request_override()
-  request = OverrideRequest(MIA, OverrideReason.FINGERPRINT_SKIPPED, None)
+  request = OverrideRequest(MIA, BypassReason.OVERRIDE_FINGERPRINT_SKIPPED, None)
   assert kiosk.ctl.screen == OverridePrompt(request, touched_at=kiosk.t.mono)
   await kiosk.ctl.on_scanner_event(matched(MIA))
   assert kiosk.ctl.screen == OverridePrompt(request, touched_at=kiosk.t.mono, message=text.NOT_A_MANAGER)
@@ -368,14 +368,14 @@ async def test_rescan_with_override_records_the_pending_punch(kiosk: Kiosk) -> N
   await kiosk.ctl.punch(PunchKind.CLOCK_IN)
   await kiosk.ctl.request_override()
   assert kiosk.ctl.screen == OverridePrompt(
-    OverrideRequest(ANN, OverrideReason.FINGERPRINT_SKIPPED, PunchKind.CLOCK_IN), touched_at=kiosk.t.mono
+    OverrideRequest(ANN, BypassReason.OVERRIDE_FINGERPRINT_SKIPPED, PunchKind.CLOCK_IN), touched_at=kiosk.t.mono
   )
   await kiosk.ctl.on_scanner_event(matched(MIA))
   assert isinstance(kiosk.ctl.screen, Confirmation)
   [(punch, override)] = kiosk.store.unsynced_punches()
   assert (punch.employee_id, punch.kind) == (ANN, PunchKind.CLOCK_IN)
   assert override is not None
-  assert (override.manager_id, override.reason) == (MIA, OverrideReason.FINGERPRINT_SKIPPED)
+  assert (override.manager_id, override.reason) == (MIA, BypassReason.OVERRIDE_FINGERPRINT_SKIPPED)
 
 
 async def test_after_hours_idle_is_asleep_until_tapped(kiosk: Kiosk) -> None:

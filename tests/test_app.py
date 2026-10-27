@@ -46,6 +46,7 @@ def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str,
   settings = types.SimpleNamespace(
     store_path=tmp_path / "clock.sqlite3",
     instance_id="1",
+    clock_number=1,
     tz=NY,
     conninfo=lambda: "host=127.0.0.1",
     crash_alerts_dir=tmp_path / "crash",

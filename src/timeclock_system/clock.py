@@ -1,4 +1,6 @@
-"""The clock's domain rules (spec §4.5, §4.6, §6.4, §6.5): punches, PINs, overrides, registration, the gallery and the prune.
+"""The clock's domain rules (spec §4.5, §4.6, §6.4-§6.6, §6.11).
+
+Punches, PINs, fingerprint bypasses, registration, adding employees, the weekly alert, the gallery and the prune.
 
 Sync store calls run in `asyncio.to_thread`. The small mirrored tables are cached in memory and reloaded synchronously
 by `notify_changed`.
@@ -6,6 +8,7 @@ by `notify_changed`.
 
 # Standard library imports
 import asyncio
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -15,10 +18,11 @@ from uuid import uuid4
 # Third party imports
 import bcrypt
 from pydantic import SecretBytes, SecretStr
-from timeclock_schema.enums import EmployeeRole, OverrideReason, PunchKind, RuleAction
-from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Override, Punch, RuleRow, Settings
+from timeclock_schema.alerts import AlertContext, Firing, fired_hooks
+from timeclock_schema.enums import BypassReason, EmployeeRole, PunchKind, RuleAction
+from timeclock_schema.models import BusinessHours, Employee, Fingerprint, FingerprintBypass, Group, Punch, RuleRow, Settings
 from timeclock_schema.rules import RuleContext, RuleValidationError, ValidatedRule, applicable_rules, evaluate, validate_rule
-from timeclock_schema.shifts import EmployeeState, apply_corrections, build_timeline, week_bounds, worked_time
+from timeclock_schema.shifts import EmployeeState, apply_corrections, build_timeline, total_hours, week_bounds
 
 # First party imports
 from timeclock_system.hours import applicable_hours
@@ -27,6 +31,7 @@ from timeclock_system.scanner import GalleryPrint
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Callable, Iterable
+  from uuid import UUID
   from zoneinfo import ZoneInfo
 
   # First party imports
@@ -34,7 +39,35 @@ if TYPE_CHECKING:
 
 ChangeTable = Literal["employees", "groups", "fingerprints", "punches", "punch_corrections", "rules", "business_hours", "settings"]
 
+type Record = Punch | Fingerprint | Employee | FingerprintBypass
+"""What the record listeners hear about: everything this clock creates."""
+
 _UNKNOWN_EMPLOYEE = "Unknown employee"
+_BLOCK = 10000  # clock n hands out n*10000+1 .. n*10000+9999 (§6.4)
+_PHONE_PUNCTUATION = re.compile(r"[\s().-]")
+
+
+def normalize_phone(raw: str) -> str:
+  """Return a US phone number typed in any common format as `+1` and ten digits, the one stored format (§4.2).
+
+  Accepts e.g. `(555) 123-4567`, `555-123-4567`, `555.123.4567`, `5551234567`, `1 555 123 4567` and `+1 555 123 4567`.
+
+  Raises:
+    ValueError: It isn't a ten-digit US number.
+  """
+  digits = _PHONE_PUNCTUATION.sub("", raw)
+  digits = digits.removeprefix("+1") if digits.startswith("+") else digits
+  if len(digits) == 11 and digits.startswith("1"):  # noqa: PLR2004  # the country code without its plus
+    digits = digits[1:]
+  if not (len(digits) == 10 and digits.isascii() and digits.isdecimal()):  # noqa: PLR2004
+    raise ValueError("not a ten-digit US phone number")
+  return f"+1{digits}"
+
+
+def check_new_pin(pin: SecretStr) -> bool:
+  """Whether `pin` is acceptable for a new employee: digits only, any length. The one place a length rule would go."""
+  value = pin.get_secret_value()
+  return value.isascii() and value.isdecimal()
 
 
 @dataclass(frozen=True)
@@ -42,8 +75,19 @@ class OverrideGrant:
   """A manager's authorization to punch without a fingerprint match."""
 
   manager_id: int
-  reason: OverrideReason
+  reason: BypassReason
   pin_only: bool
+
+
+@dataclass(frozen=True)
+class NewEmployee:
+  """The add-employee form's details, already checked; `phone` is normalized."""
+
+  name: str
+  phone: str | None
+  email: str | None
+  role: EmployeeRole
+  group_id: int
 
 
 @dataclass(frozen=True)
@@ -57,15 +101,22 @@ class MenuInfo:
   """The open shift's clock-in while working; the last applied event on a break or lunch; None when off."""
   valid_next: tuple[PunchKind, ...]
   hours_this_week: timedelta
+  """Worked plus paid break time (§6.4)."""
+  is_admin: bool
 
 
 @dataclass(frozen=True)
 class PunchOutcome:
-  """A stored punch with the warnings its rules raised."""
+  """A stored punch with the warnings its rules raised and the alert hooks it reached (§6.11)."""
 
   punch: Punch
   warnings: tuple[str, ...]
   hours_this_week: timedelta
+  firings: tuple[Firing, ...]
+
+
+class EmployeeBlockFull(Exception):  # noqa: N818  # a domain signal shown to the admin, like PunchRefused
+  """This clock has handed out every number in its block."""
 
 
 class PunchRefused(Exception):  # noqa: N818  # a domain signal shown to the employee, not an error class
@@ -85,6 +136,7 @@ class Clock:
     store: LocalStore,
     *,
     instance_id: str,
+    clock_number: int,
     tz: ZoneInfo,
     alert: Callable[[str, str], None],
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -94,23 +146,27 @@ class Clock:
     Args:
       store: The local SQLite store.
       instance_id: This clock's id, stamped on its punches and registrations.
+      clock_number: `CLOCK_NUMBER`, which picks this clock's block of employee numbers.
       tz: The business's zone, for week boundaries.
       alert: Reports a problem to the owner as `(subject, body)`.
       now: The wall clock, injectable for tests.
     """
     self._store = store
     self.instance_id = instance_id
+    self._clock_number = clock_number
     self._tz = tz
     self._alert = alert
     self._now = now
     self._employees: dict[int, Employee] = {}
+    self._pending: frozenset[int] = frozenset()  # employees added here that the database hasn't accepted
+    self._known_numbers: frozenset[int] = frozenset()  # every id and numeric username known, mirror and pending
     self._rules: tuple[ValidatedRule, ...] = ()
     self._groups: dict[int, Group] = {}
     self._hours: tuple[BusinessHours, ...] = ()
     self._settings = Settings()
     self._alerted_rules: set[tuple[int, datetime]] = set()
     self._change_listeners: list[Callable[[frozenset[ChangeTable]], None]] = []
-    self._record_listeners: list[Callable[[Punch | Fingerprint], None]] = []
+    self._record_listeners: list[Callable[[Record], None]] = []
     # Serializes record_punch's guard-then-insert so two taps can't both pass the same state check.
     self._punch_lock = asyncio.Lock()
 
@@ -120,7 +176,14 @@ class Clock:
     tables = set(tables)
     # `load` is typed to the base model; each table's rows are its own model.
     if "employees" in tables:
-      self._employees = {e.id: e for e in cast("list[Employee]", self._store.load("employees"))}
+      mirror = cast("list[Employee]", self._store.load("employees"))
+      pending = self._store.pending_employees()
+      # A pending employee keeps its number and username on this clock (§6.6), so a mirror row sharing either is hidden.
+      taken = {e.id for e in pending} | {int(e.pin_username) for e in pending}
+      self._employees = {e.id: e for e in mirror if e.id not in taken and int(e.pin_username) not in taken}
+      self._employees.update({e.id: e for e in pending})
+      self._pending = frozenset(e.id for e in pending)
+      self._known_numbers = frozenset({e.id for e in [*mirror, *pending]} | {int(e.pin_username) for e in [*mirror, *pending]})
     if "groups" in tables:
       self._groups = {g.id: g for g in cast("list[Group]", self._store.load("groups"))}
     if "business_hours" in tables:
@@ -154,8 +217,8 @@ class Clock:
     """Call `cb` with the changed tables after each `notify_changed`."""
     self._change_listeners.append(cb)
 
-  def add_record_listener(self, cb: Callable[[Punch | Fingerprint], None]) -> None:
-    """LAN seam: call `cb` on the loop after every local punch or registration is stored."""
+  def add_record_listener(self, cb: Callable[[Record], None]) -> None:
+    """Call `cb` on the loop after every record this clock creates is stored (sync's wake-up; LAN sharing's seam)."""
     self._record_listeners.append(cb)
 
   async def insert_peer_record(self, record: Punch | Fingerprint) -> bool:
@@ -186,6 +249,14 @@ class Clock:
     """Return the cached settings."""
     return self._settings
 
+  def groups(self) -> tuple[Group, ...]:
+    """Return the mirrored groups, by id."""
+    return tuple(sorted(self._groups.values(), key=lambda g: g.id))
+
+  def pin_only_login(self, e: Employee) -> bool:
+    """Whether `e` logs in by PIN alone, with no fingerprint step and no override: admins and exempt employees (§6.4)."""
+    return e.role is EmployeeRole.ADMIN or e.fingerprint_exempt
+
   async def verify_pin(self, username: str, pin: SecretStr) -> Employee | None:
     """Return the active employee with this PIN username if the password matches its bcrypt hash."""
     for e in self._employees.values():
@@ -199,8 +270,29 @@ class Clock:
     return any(f.employee_id == employee_id for f in await asyncio.to_thread(self._store.fingerprints))
 
   def override_manager(self, manager: Employee, employee_id: int) -> bool:
-    """Whether `manager` may authorize a punch for `employee_id`; nobody overrides for themselves."""
-    return manager.active and manager.role in {EmployeeRole.MANAGER, EmployeeRole.ADMIN} and manager.id != employee_id
+    """Whether `manager` may authorize a punch for `employee_id`.
+
+    Nobody overrides for themselves, and a manager added here can't until the database has accepted them (§6.4).
+    """
+    return (
+      manager.active
+      and manager.role in {EmployeeRole.MANAGER, EmployeeRole.ADMIN}
+      and manager.id != employee_id
+      and manager.id not in self._pending
+    )
+
+  def _login_bypass(self, e: Employee, punch_id: UUID | None) -> FingerprintBypass:
+    reason = BypassReason.ADMIN_PIN_LOGIN if e.role is EmployeeRole.ADMIN else BypassReason.EXEMPT_PIN_LOGIN
+    return FingerprintBypass(
+      id=uuid4(), punch_id=punch_id, employee_id=e.id, reason=reason, at=self._now(), instance_id=self.instance_id
+    )
+
+  async def record_pin_login(self, e: Employee) -> None:
+    """Record a PIN-only login (an admin's or an exempt employee's) that punched nothing, for later reports (§4.2)."""
+    bypass = self._login_bypass(e, None)
+    await asyncio.to_thread(self._store.insert_bypass, bypass)
+    for cb in self._record_listeners:
+      cb(bypass)
 
   # -- punches ------------------------------------------------------------------------------------------------------
 
@@ -217,8 +309,7 @@ class Clock:
     now = self._now()
     # A punch counts from its stamped time: the automatic clock-out may be stamped after its run, and until then the employee
     # can still clock out by hand, which makes the automatic one the ignored repeat.
-    later = {p.id for p in apply_corrections(punches, corrections) if p.at > now}
-    timeline = build_timeline([p for p in punches if p.id not in later], corrections)
+    timeline = build_timeline(punches, corrections, as_of=now)
     # "Clocked in since" names the clock-in, not a lunch that followed it; a break or lunch shows its own start.
     open_shift = timeline.open_shift
     if open_shift is None:
@@ -228,15 +319,24 @@ class Clock:
     else:
       since = timeline.last_event_at
     s = self._settings
-    hours = worked_time(
-      timeline, *week_bounds(now, self._tz), now=now, subtract_lunch=s.subtract_lunch, subtract_breaks=s.subtract_breaks
-    )
+    start, end = week_bounds(now, self._tz)
+    totals = total_hours(punches, corrections, settings=s, tz=self._tz, start=start, end=end, now=now)
     # A switched-off lunch or break hides only its start: someone already on one can still end it.
     off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
-    return MenuInfo(employee_id, e.name, timeline.state, since, tuple(k for k in timeline.valid_next if k not in off), hours)
+    valid = tuple(k for k in timeline.valid_next if k not in off)
+    hours = totals.worked + totals.paid_break
+    return MenuInfo(employee_id, e.name, timeline.state, since, valid, hours, is_admin=e.role is EmployeeRole.ADMIN)
 
-  async def record_punch(self, employee_id: int, kind: PunchKind, *, override: OverrideGrant | None = None) -> PunchOutcome:
-    """Validate and store a punch, with its override if one was granted.
+  async def record_punch(
+    self, employee_id: int, kind: PunchKind, *, override: OverrideGrant | None = None, pin_login: bool = False
+  ) -> PunchOutcome:
+    """Validate and store a punch, with the bypass that authorized it if it wasn't a fingerprint.
+
+    Args:
+      employee_id: Who punches.
+      kind: The punch.
+      override: A manager's grant, stored as an override bypass.
+      pin_login: The employee's own PIN authorized it (an admin's or exempt employee's 30 s rescan), stored as a login bypass.
 
     Raises:
       PunchRefused: The employee is unknown or inactive, the punch isn't valid now, or a REFUSE rule fired.
@@ -247,9 +347,7 @@ class Clock:
     async with self._punch_lock:
       punches, corrections = await asyncio.to_thread(lambda: (self._store.punches(employee_id), self._store.corrections(employee_id)))
       now = self._now()
-      later = {p.id for p in apply_corrections(punches, corrections) if p.at > now}  # as in menu_info
-      punches = [p for p in punches if p.id not in later]
-      timeline = build_timeline(punches, corrections)
+      timeline = build_timeline(punches, corrections, as_of=now)  # as in menu_info
       # The menu only offers valid punches (R26.3); re-checked here since state may have changed since it was drawn.
       s = self._settings
       off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
@@ -262,10 +360,8 @@ class Clock:
         raise PunchRefused("; ".join(refusals))
       warnings = tuple(v.message for v in violations if v.action is RuleAction.WARN)
       punch = Punch(id=uuid4(), employee_id=employee_id, kind=kind, at=now, instance_id=self.instance_id)
-      grant = (
-        None
-        if override is None
-        else Override(
+      if override is not None:
+        bypass = FingerprintBypass(
           id=uuid4(),
           punch_id=punch.id,
           employee_id=employee_id,
@@ -275,20 +371,58 @@ class Clock:
           at=now,
           instance_id=self.instance_id,
         )
-      )
-      await asyncio.to_thread(self._store.insert_punch, punch, origin="local", override=grant)
+      else:
+        bypass = self._login_bypass(e, punch.id) if pin_login else None
+      await asyncio.to_thread(self._store.insert_punch, punch, origin="local", bypass=bypass)
     for cb in self._record_listeners:
       cb(punch)
     self.notify_changed({"punches"})
-    s = self._settings
-    hours = worked_time(
-      build_timeline([*punches, punch], corrections),
-      *week_bounds(now, self._tz),
-      now=now,
-      subtract_lunch=s.subtract_lunch,
-      subtract_breaks=s.subtract_breaks,
+    s, punches = self._settings, [*punches, punch]
+    start, end = week_bounds(now, self._tz)
+    totals = total_hours(punches, corrections, settings=s, tz=self._tz, start=start, end=end, now=now)
+    # Alerts only inform; nothing here can refuse the punch (§2).
+    firings = fired_hooks(AlertContext(employee_id, punches, corrections, s, self._tz, now))
+    return PunchOutcome(punch, warnings, totals.worked + totals.paid_break, firings)
+
+  async def add_employee(self, new: NewEmployee, pin: SecretStr) -> Employee:
+    """Create an employee at this clock, saved locally and pushed when the database is reachable (§6.4, §6.6).
+
+    The number is one more than the highest this clock knows in its block, skipping any already used as a username; the
+    username is the number written as digits.
+
+    Raises:
+      EmployeeBlockFull: Every number in this clock's block is taken.
+      ValueError: The role is admin (admins are never created from a clock), or the PIN isn't acceptable.
+    """
+    if new.role not in {EmployeeRole.EMPLOYEE, EmployeeRole.MANAGER}:
+      raise ValueError("a clock adds employees and managers only")
+    if not check_new_pin(pin):
+      raise ValueError("the PIN must be digits only")
+    base = self._clock_number * _BLOCK
+    number = max((n for n in self._known_numbers if base < n < base + _BLOCK), default=base) + 1
+    while number in self._known_numbers:
+      number += 1
+    if number >= base + _BLOCK:
+      raise EmployeeBlockFull
+    # $2a$, like pgcrypto's gen_salt('bf'): pgcrypto's crypt() can't check bcrypt's default $2b$, and the owner may check a
+    # PIN in SQL.
+    pin_hash = await asyncio.to_thread(lambda: bcrypt.hashpw(pin.get_secret_value().encode(), bcrypt.gensalt(prefix=b"2a")).decode())
+    e = Employee(
+      id=number,
+      name=new.name,
+      pin_username=str(number),
+      pin_hash=SecretStr(pin_hash),
+      role=new.role,
+      group_id=new.group_id,
+      phone=new.phone,
+      email=new.email,
+      updated_at=self._now(),
     )
-    return PunchOutcome(punch, warnings, hours)
+    await asyncio.to_thread(self._store.insert_pending_employee, e)
+    self.notify_changed({"employees"})
+    for cb in self._record_listeners:
+      cb(e)
+    return e
 
   async def register_fingerprint(self, employee_id: int, template: bytes) -> Fingerprint:
     """Store a newly enrolled print as a local, unsynced registration."""

@@ -21,6 +21,7 @@ services:
       - c 189:* rmw
     environment:
       - INSTANCE_ID=${INSTANCE_ID:?}
+      - CLOCK_NUMBER=${CLOCK_NUMBER:?}
       - HEARTBEAT_SLUG=timeclock-system-${INSTANCE_ID:?}
       - TZ=America/New_York
       - LOG_HISTORY_RETENTION_DAYS=14

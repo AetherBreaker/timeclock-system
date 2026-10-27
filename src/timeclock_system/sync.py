@@ -10,7 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Final, LiteralString
+from typing import TYPE_CHECKING, Final, LiteralString, cast
 from uuid import UUID
 
 # Third party imports
@@ -33,15 +33,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Explicit column lists: the clocks can't `SELECT *` on overrides, and elsewhere a list keeps `extra="ignore"` meaningful.
+# Explicit column lists: a list keeps `extra="ignore"` meaningful (a newer schema's columns don't reach an older clock).
 _SELECT: Final[dict[str, LiteralString]] = {
-  "employees": "SELECT id, name, pin_username, pin_hash, role, active, group_id, updated_at FROM employees",
+  "employees": (
+    "SELECT id, name, pin_username, pin_hash, role, active, group_id, phone, email, fingerprint_exempt, updated_at FROM employees"
+  ),
   "groups": "SELECT id, name FROM groups",
   "rules": "SELECT id, kind, params, group_id, employee_id, on_violation, updated_at FROM rules",
   "config.business_hours": "SELECT id, weekday, opens, closes FROM config.business_hours",
   "config.settings": (
-    "SELECT auto_clock_out_enabled, auto_clock_out_run_time, auto_clock_out_stamp_time, subtract_lunch, subtract_breaks, "
-    "lunches_enabled, breaks_enabled FROM config.settings"
+    "SELECT auto_clock_out_enabled, auto_clock_out_run_time, auto_clock_out_stamp_time, lunches_enabled, breaks_enabled, "
+    "paid_break_minutes, weekly_hours_alert FROM config.settings"
   ),
   "punches": "SELECT id, employee_id, kind, at, instance_id, automatic, received_at, db_login FROM punches",
   "punch_corrections": "SELECT id, punch_id, action, new_at, new_kind, note, recorded_at FROM punch_corrections",
@@ -66,16 +68,22 @@ _CHANGE_NAME: Final[dict[str, ChangeTable]] = {
   "config.settings": "settings",
 }
 
-# Never name db_login, received_at or automatic: the clocks' column grants refuse them.
+# Never name db_login, received_at or automatic: the clocks' column grants refuse them. An employee's insert has no ON
+# CONFLICT: a taken number or username is a refusal (§6.6), and a lost acknowledgement is settled at catch-up instead.
+_INSERT_EMPLOYEE: Final = (
+  "INSERT INTO employees (id, name, pin_username, pin_hash, role, group_id, phone, email) "
+  "VALUES (%(id)s, %(name)s, %(pin_username)s, %(pin_hash)s, %(role)s::employee_role, %(group_id)s, %(phone)s, %(email)s)"
+)
 _INSERT_PUNCH: Final = (
   "INSERT INTO punches (id, employee_id, kind, at, instance_id) "
   "VALUES (%(id)s, %(employee_id)s, %(kind)s::punch_kind, %(at)s, %(instance_id)s) ON CONFLICT (id) DO NOTHING"
 )
-_INSERT_OVERRIDE: Final = (
-  "INSERT INTO overrides (id, punch_id, employee_id, manager_id, reason, pin_only, at, instance_id) "
-  "VALUES (%(id)s, %(punch_id)s, %(employee_id)s, %(manager_id)s, %(reason)s::override_reason, %(pin_only)s, %(at)s, "
+_INSERT_BYPASS: Final = (
+  "INSERT INTO fingerprint_bypasses (id, punch_id, employee_id, manager_id, reason, pin_only, at, instance_id) "
+  "VALUES (%(id)s, %(punch_id)s, %(employee_id)s, %(manager_id)s, %(reason)s::bypass_reason, %(pin_only)s, %(at)s, "
   "%(instance_id)s) ON CONFLICT (id) DO NOTHING"
 )
+_BYPASS_COLUMNS: Final[set[str]] = {"id", "punch_id", "employee_id", "manager_id", "pin_only", "at", "instance_id"}
 _INSERT_FINGERPRINT: Final = (
   "INSERT INTO fingerprints (id, employee_id, template, registered_at, instance_id) "
   "VALUES (%(id)s, %(employee_id)s, %(template)s, %(registered_at)s, %(instance_id)s) ON CONFLICT (id) DO NOTHING"
@@ -118,7 +126,7 @@ class DatabaseSync:
     """
     self._clock = clock
     self._alert = alert
-    self._refused: set[UUID] = set()  # records already alerted
+    self._refused: set[UUID | int] = set()  # records already alerted
     self._store = store
     self._conninfo = conninfo
     self._now = now
@@ -225,7 +233,10 @@ class DatabaseSync:
       self._store.replace_db_punches([*open_tails, *punches], since=since)
       self._store.replace_corrections(corrections)
       for table, rows in small.items():
-        self._store.replace_table(table, rows)
+        if table == "employees":
+          self._store.replace_employees(cast("list[Employee]", rows))  # also settles pending employees it now holds
+        else:
+          self._store.replace_table(table, rows)
       self._store.replace_table("business_hours", hours)
       self._store.replace_db_fingerprints(fingerprints)
       self._store.set_settings(settings[0] if settings else Settings())
@@ -234,20 +245,45 @@ class DatabaseSync:
     self._since = since
     self._clock.notify_changed(_CHANGE_NAME.values())
 
-  def _refused_record(self, kind: str, record_id: UUID, summary: str, e: psycopg.Error) -> None:
-    # One alert per record: it stays unsynced and is retried on every push, so the owner can correct it at the clock
-    # (an employee is only ever disabled, so a refusal means a mistaken delete or a bug).
+  def _refused_record(self, kind: str, record_id: UUID | int, summary: str, e: psycopg.Error) -> None:
+    # One alert per record: it stays unsynced and is retried on every push, so the owner can correct it at the clock. For
+    # a punch that means a mistaken delete or a bug (an employee is only ever disabled); for an employee added here, a
+    # number or username the database already has.
     logger.warning("the database refused %s %s: %s", kind, record_id, e)
     if record_id not in self._refused:
       self._refused.add(record_id)
       self._alert(f"Database refused a {kind}", f"{kind} {record_id} ({summary}) stays on this clock and is retried: {e}")
 
-  async def _push(self, conn: AsyncConnection[DictRow]) -> None:
-    """Push unsynced records oldest first, one transaction per punch with its override (§6.6 step 4, R38).
+  async def _push_employees(self, conn: AsyncConnection[DictRow]) -> None:
+    """Push the employees added here; split out of `_push` for C901."""
+    accepted = False
+    for e in await asyncio.to_thread(self._store.pending_employees):
+      try:
+        await conn.execute(
+          _INSERT_EMPLOYEE,
+          {
+            **e.model_dump(include={"id", "name", "pin_username", "group_id", "phone", "email"}),
+            "role": e.role.value,
+            "pin_hash": e.pin_hash.get_secret_value(),
+          },
+        )
+      except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as err:
+        self._refused_record("employee", e.id, f"{e.name}, username {e.pin_username}", err)
+        continue
+      await asyncio.to_thread(self._store.accept_employee, e)
+      accepted = True
+    if accepted:
+      self._clock.notify_changed({"employees"})
 
-    A record the database refuses doesn't hold back the ones after it: it's alerted, kept unsynced and retried next push.
+  async def _push(self, conn: AsyncConnection[DictRow]) -> None:
+    """Push unsynced records (§6.6 step 4, R38): employees, punches, fingerprints, then PIN logins that punched nothing.
+
+    Punches go oldest first, one transaction each with its bypass. A record the database refuses doesn't hold back the
+    ones after it: it's alerted, kept unsynced and retried next push. The store holds back a pending employee's records,
+    so those of one accepted here go in this same push.
     """
-    for punch, override in await asyncio.to_thread(self._store.unsynced_punches):
+    await self._push_employees(conn)
+    for punch, bypass in await asyncio.to_thread(self._store.unsynced_punches):
       try:
         async with conn.transaction():
           await conn.execute(
@@ -260,9 +296,8 @@ class DatabaseSync:
               "instance_id": punch.instance_id,
             },
           )
-          if override is not None:
-            params = override.model_dump(include={"id", "punch_id", "employee_id", "manager_id", "pin_only", "at", "instance_id"})
-            await conn.execute(_INSERT_OVERRIDE, {**params, "reason": override.reason.value})
+          if bypass is not None:
+            await conn.execute(_INSERT_BYPASS, {**bypass.model_dump(include=_BYPASS_COLUMNS), "reason": bypass.reason.value})
       except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as e:
         self._refused_record("punch", punch.id, f"employee {punch.employee_id}, {punch.kind.value} at {punch.at}", e)
         continue
@@ -283,6 +318,13 @@ class DatabaseSync:
         self._refused_record("fingerprint", f.id, f"employee {f.employee_id}", e)
         continue
       await asyncio.to_thread(self._store.mark_fingerprint_synced, f.id)
+    for b in await asyncio.to_thread(self._store.unsynced_bypasses):
+      try:
+        await conn.execute(_INSERT_BYPASS, {**b.model_dump(include=_BYPASS_COLUMNS), "reason": b.reason.value})
+      except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as err:
+        self._refused_record("fingerprint bypass", b.id, f"employee {b.employee_id}, {b.reason.value} at {b.at}", err)
+        continue
+      await asyncio.to_thread(self._store.mark_bypass_synced, b.id)
 
   async def _apply(self, conn: AsyncConnection[DictRow], payload: str) -> None:
     """Apply one notification (§4.4): re-read what it names and mirror it; a row that's gone is deleted locally."""

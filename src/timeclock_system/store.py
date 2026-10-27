@@ -1,6 +1,10 @@
 """The clock's SQLite mirror of the PostgreSQL tables it reads, plus its unsynced queue and weekly prune (spec §6.5).
 
 Synchronous and guarded by one lock; callers on the event loop wrap calls in `asyncio.to_thread`.
+
+Employees added at this clock wait in `pending_employees` until the database accepts them (§6.6). While one is pending,
+its records stay out of the push queues, and rows with its id that didn't come from this clock (the database's holder of
+a refused number) are hidden from `punches`, `corrections` and `fingerprints`, so they're never filed under it here.
 """
 
 # Standard library imports
@@ -15,8 +19,8 @@ from timeclock_schema.models import (
   BusinessHours,
   Employee,
   Fingerprint,
+  FingerprintBypass,
   Group,
-  Override,
   Punch,
   PunchCorrection,
   RuleRow,
@@ -51,13 +55,23 @@ CREATE TABLE IF NOT EXISTS punches (
   origin TEXT NOT NULL, synced INTEGER NOT NULL, json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS punches_at ON punches (at);
-CREATE TABLE IF NOT EXISTS overrides (id TEXT PRIMARY KEY, punch_id TEXT NOT NULL, json TEXT NOT NULL);
+-- punch_id is null for a login that punched nothing; `at` lets the prune drop those once synced.
+CREATE TABLE IF NOT EXISTS fingerprint_bypasses (
+  id TEXT PRIMARY KEY, punch_id TEXT, at TEXT NOT NULL, synced INTEGER NOT NULL, json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fingerprint_bypasses_punch ON fingerprint_bypasses (punch_id);
+CREATE TABLE IF NOT EXISTS pending_employees (id INTEGER PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS punch_corrections (id TEXT PRIMARY KEY, punch_id TEXT NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS fingerprints (
   id TEXT PRIMARY KEY, employee_id INTEGER NOT NULL, origin TEXT NOT NULL, synced INTEGER NOT NULL, json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
+
+
+# A pending employee's id: rows not made here are hidden, and records made here wait for it (module docstring).
+_VISIBLE = "(origin = 'local' OR employee_id NOT IN (SELECT id FROM pending_employees))"
+_HELD = "employee_id NOT IN (SELECT id FROM pending_employees)"
 
 
 def _dump(model: TimeclockModel) -> str:
@@ -78,7 +92,7 @@ class LocalStore:
     Args:
       path: The SQLite file.
     """
-    # foreign_keys stays off: a punch's correction or override can arrive before the punch itself.
+    # foreign_keys stays off: a punch's correction can arrive before the punch itself.
     self._conn = sqlite3.connect(path, check_same_thread=False)
     self._lock = threading.Lock()
     with self._lock:
@@ -112,6 +126,36 @@ class LocalStore:
     with self._lock, self._conn:
       self._conn.execute(f"DELETE FROM {table} WHERE id = ?", (row_id,))
 
+  def replace_employees(self, rows: Sequence[Employee]) -> None:
+    """Replace the employee mirror, settling each pending employee the mirror now holds with the same `pin_hash`.
+
+    That's an insert whose acknowledgement was lost (§6.6): the database has the row, the clock never heard back.
+    """
+    fetched = {e.id: e.pin_hash.get_secret_value() for e in rows}
+    with self._lock, self._conn:
+      self._conn.execute("DELETE FROM employees")
+      self._conn.executemany("INSERT INTO employees (id, json) VALUES (?, ?)", [(e.id, _dump(e)) for e in rows])
+      for pid, json in self._conn.execute("SELECT id, json FROM pending_employees").fetchall():
+        if fetched.get(pid) == Employee.model_validate_json(json).pin_hash.get_secret_value():
+          self._conn.execute("DELETE FROM pending_employees WHERE id = ?", (pid,))
+
+  def insert_pending_employee(self, e: Employee) -> None:
+    """Store an employee added at this clock, unsynced until the database accepts it."""
+    with self._lock, self._conn:
+      self._conn.execute("INSERT INTO pending_employees (id, json) VALUES (?, ?)", (e.id, _dump(e)))
+
+  def pending_employees(self) -> list[Employee]:
+    """Return the employees added here that the database hasn't accepted yet, by id."""
+    with self._lock:
+      rows = self._conn.execute("SELECT json FROM pending_employees ORDER BY id").fetchall()
+    return [Employee.model_validate_json(r[0]) for r in rows]
+
+  def accept_employee(self, e: Employee) -> None:
+    """The database accepted `e`: move it from pending into the mirror in one transaction."""
+    with self._lock, self._conn:
+      self._conn.execute("DELETE FROM pending_employees WHERE id = ?", (e.id,))
+      self._conn.execute("INSERT OR REPLACE INTO employees (id, json) VALUES (?, ?)", (e.id, _dump(e)))
+
   def load(self, table: MirrorTable) -> list[TimeclockModel]:
     """Return a mirrored table's rows, validated back into their model, ordered by id."""
     model = _MODELS[table]
@@ -132,13 +176,13 @@ class LocalStore:
 
   # -- punches ------------------------------------------------------------------------------------------------------
 
-  def insert_punch(self, p: Punch, *, origin: Origin, override: Override | None = None) -> bool:
-    """Insert a punch (and its override, in the same transaction).
+  def insert_punch(self, p: Punch, *, origin: Origin, bypass: FingerprintBypass | None = None) -> bool:
+    """Insert a punch (and the fingerprint bypass that authorized it, in the same transaction).
 
     Args:
       p: The punch.
       origin: Where it came from; only `local` punches start unsynced.
-      override: The manager override recorded with it.
+      bypass: The override or PIN login recorded with it; synced with it.
 
     Returns:
       False if a punch with that id already exists (nothing is written).
@@ -150,11 +194,20 @@ class LocalStore:
       )
       if cur.rowcount == 0:
         return False
-      if override is not None:
+      if bypass is not None:
         self._conn.execute(
-          "INSERT OR REPLACE INTO overrides (id, punch_id, json) VALUES (?, ?, ?)", (str(override.id), str(p.id), _dump(override))
+          "INSERT OR REPLACE INTO fingerprint_bypasses (id, punch_id, at, synced, json) VALUES (?, ?, ?, ?, ?)",
+          (str(bypass.id), str(p.id), _iso(bypass.at), int(origin != "local"), _dump(bypass)),
         )
     return True
+
+  def insert_bypass(self, b: FingerprintBypass) -> None:
+    """Insert an unsynced bypass for a PIN login that punched nothing."""
+    with self._lock, self._conn:
+      self._conn.execute(
+        "INSERT INTO fingerprint_bypasses (id, punch_id, at, synced, json) VALUES (?, NULL, ?, 0, ?)",
+        (str(b.id), _iso(b.at), _dump(b)),
+      )
 
   def upsert_db_punch(self, p: Punch) -> None:
     """Apply a database copy: update an existing row's JSON (origin and synced stay), else insert it as `db`."""
@@ -166,10 +219,10 @@ class LocalStore:
       )
 
   def delete_punch(self, punch_id: UUID) -> None:
-    """Delete a punch and its override."""
+    """Delete a punch and its bypass."""
     with self._lock, self._conn:
       self._conn.execute("DELETE FROM punches WHERE id = ?", (str(punch_id),))
-      self._conn.execute("DELETE FROM overrides WHERE punch_id = ?", (str(punch_id),))
+      self._conn.execute("DELETE FROM fingerprint_bypasses WHERE punch_id = ?", (str(punch_id),))
 
   def replace_db_punches(self, punches: Sequence[Punch], *, since: datetime) -> None:
     """Replace the local copies with a catch-up fetch of the window `at >= since` (spec §6.6 step 3), in one transaction.
@@ -194,8 +247,8 @@ class LocalStore:
       self._conn.executemany("DELETE FROM punches WHERE id = ?", [(r[0],) for r in stale if r[0] not in fetched])
 
   def punches(self, employee_id: int | None = None) -> list[Punch]:
-    """Return stored punches, oldest first, optionally for one employee."""
-    sql = "SELECT json FROM punches" + ("" if employee_id is None else " WHERE employee_id = ?") + " ORDER BY at, id"
+    """Return stored punches, oldest first, optionally for one employee; hides what the module docstring says."""
+    sql = f"SELECT json FROM punches WHERE {_VISIBLE}" + ("" if employee_id is None else " AND employee_id = ?") + " ORDER BY at, id"
     with self._lock:
       rows = self._conn.execute(sql, () if employee_id is None else (employee_id,)).fetchall()
     return [Punch.model_validate_json(r[0]) for r in rows]
@@ -226,7 +279,7 @@ class LocalStore:
     """Return corrections, optionally only those of one employee's punches."""
     sql = "SELECT c.json FROM punch_corrections c"
     if employee_id is not None:
-      sql += " JOIN punches p ON p.id = c.punch_id WHERE p.employee_id = ?"
+      sql += f" JOIN punches p ON p.id = c.punch_id WHERE p.employee_id = ? AND {_VISIBLE}"
     with self._lock:
       rows = self._conn.execute(sql + " ORDER BY c.id", () if employee_id is None else (employee_id,)).fetchall()
     return [PunchCorrection.model_validate_json(r[0]) for r in rows]
@@ -271,31 +324,48 @@ class LocalStore:
       self._conn.executemany("DELETE FROM fingerprints WHERE id = ?", [(r[0],) for r in stale if r[0] not in fetched])
 
   def fingerprints(self) -> list[Fingerprint]:
-    """Return every stored fingerprint."""
+    """Return every stored fingerprint but those the module docstring hides."""
     with self._lock:
-      rows = self._conn.execute("SELECT json FROM fingerprints ORDER BY id").fetchall()
+      rows = self._conn.execute(f"SELECT json FROM fingerprints WHERE {_VISIBLE} ORDER BY id").fetchall()
     return [Fingerprint.model_validate_json(r[0]) for r in rows]
 
   # -- unsynced queue and prune -------------------------------------------------------------------------------------
 
-  def unsynced_punches(self) -> list[tuple[Punch, Override | None]]:
-    """Return local punches not yet pushed with their overrides, oldest `at` first."""
+  def unsynced_punches(self) -> list[tuple[Punch, FingerprintBypass | None]]:
+    """Return local punches not yet pushed with their bypasses, oldest `at` first; a pending employee's are held."""
     with self._lock:
       rows = self._conn.execute(
-        "SELECT p.json, o.json FROM punches p LEFT JOIN overrides o ON o.punch_id = p.id WHERE p.synced = 0 ORDER BY p.at, p.id"
+        "SELECT p.json, b.json FROM punches p LEFT JOIN fingerprint_bypasses b ON b.punch_id = p.id "
+        f"WHERE p.synced = 0 AND {_HELD} ORDER BY p.at, p.id"
       ).fetchall()
-    return [(Punch.model_validate_json(p), None if o is None else Override.model_validate_json(o)) for p, o in rows]
+    return [(Punch.model_validate_json(p), None if b is None else FingerprintBypass.model_validate_json(b)) for p, b in rows]
+
+  def unsynced_bypasses(self) -> list[FingerprintBypass]:
+    """Return PIN-login bypasses that punched nothing and aren't pushed yet, oldest first; a pending employee's are held."""
+    with self._lock:
+      rows = self._conn.execute(
+        "SELECT json FROM fingerprint_bypasses WHERE punch_id IS NULL AND synced = 0 ORDER BY at, id"
+      ).fetchall()
+    bypasses = [FingerprintBypass.model_validate_json(r[0]) for r in rows]
+    pending = {e.id for e in self.pending_employees()}
+    return [b for b in bypasses if b.employee_id not in pending]
 
   def unsynced_fingerprints(self) -> list[Fingerprint]:
-    """Return local fingerprints not yet pushed."""
+    """Return local fingerprints not yet pushed; a pending employee's are held."""
     with self._lock:
-      rows = self._conn.execute("SELECT json FROM fingerprints WHERE synced = 0 ORDER BY id").fetchall()
+      rows = self._conn.execute(f"SELECT json FROM fingerprints WHERE synced = 0 AND {_HELD} ORDER BY id").fetchall()
     return [Fingerprint.model_validate_json(r[0]) for r in rows]
 
   def mark_punch_synced(self, pid: UUID) -> None:
-    """Mark a pushed punch synced."""
+    """Mark a pushed punch synced, with the bypass pushed in its transaction."""
     with self._lock, self._conn:
       self._conn.execute("UPDATE punches SET synced = 1 WHERE id = ?", (str(pid),))
+      self._conn.execute("UPDATE fingerprint_bypasses SET synced = 1 WHERE punch_id = ?", (str(pid),))
+
+  def mark_bypass_synced(self, bid: UUID) -> None:
+    """Mark a pushed PIN-login bypass synced."""
+    with self._lock, self._conn:
+      self._conn.execute("UPDATE fingerprint_bypasses SET synced = 1 WHERE id = ?", (str(bid),))
 
   def mark_fingerprint_synced(self, fid: UUID) -> None:
     """Mark a pushed fingerprint synced."""
@@ -303,7 +373,9 @@ class LocalStore:
       self._conn.execute("UPDATE fingerprints SET synced = 1 WHERE id = ?", (str(fid),))
 
   def prune(self, before: datetime, keep_from: Mapping[int, datetime]) -> int:
-    """Delete synced punches older than `before`, then the corrections (and overrides) of punches that are gone.
+    """Delete synced punches older than `before`, then the corrections and bypasses of punches that are gone.
+
+    A synced bypass that punched nothing goes once it's older than `before`.
 
     Args:
       before: Punches with `at` earlier than this are candidates.
@@ -319,7 +391,10 @@ class LocalStore:
       doomed = [(pid,) for pid, employee_id, at in candidates if employee_id not in keep_from or at < _iso(keep_from[employee_id])]
       self._conn.executemany("DELETE FROM punches WHERE id = ?", doomed)
       corrections = self._conn.execute("DELETE FROM punch_corrections WHERE punch_id NOT IN (SELECT id FROM punches)").rowcount
-      self._conn.execute("DELETE FROM overrides WHERE punch_id NOT IN (SELECT id FROM punches)")
+      self._conn.execute(
+        "DELETE FROM fingerprint_bypasses WHERE punch_id NOT IN (SELECT id FROM punches) OR (punch_id IS NULL AND synced = 1 AND at < ?)",
+        (_iso(before),),
+      )
     return len(doomed) + corrections
 
   # -- meta ---------------------------------------------------------------------------------------------------------
