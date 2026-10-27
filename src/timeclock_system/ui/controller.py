@@ -1,4 +1,4 @@
-"""The kiosk's screen state machine and reader schedule (spec §6.3, §6.4; R23, R40.2, R45).
+"""The kiosk's screen state machine and reader schedule (spec §6.3, §6.4, §6.11; R23, R40.2, R45).
 
 The page only renders `screen`; every input and scanner event comes through one entry point here, under one lock.
 """
@@ -6,18 +6,29 @@ The page only renders `screen`; every input and scanner event comes through one 
 # Standard library imports
 import asyncio
 import contextlib
+import re
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, Protocol
 
 # Third party imports
 from pydantic import SecretStr
-from timeclock_schema.enums import BypassReason
+from timeclock_schema.alerts import CONFIRMATION_NOTICE
+from timeclock_schema.enums import BypassReason, EmployeeRole
+from timeclock_schema.models import EMAIL_PATTERN
 
 # First party imports
-from timeclock_system.clock import MenuInfo, OverrideGrant, PunchRefused
+from timeclock_system.clock import (
+  EmployeeBlockFull,
+  MenuInfo,
+  NewEmployee,
+  OverrideGrant,
+  PunchRefused,
+  check_new_pin,
+  normalize_phone,
+)
 from timeclock_system.hours import is_open
 from timeclock_system.scanner import (
   Enrolled,
@@ -39,6 +50,7 @@ if TYPE_CHECKING:
 
   # Third party imports
   from timeclock_schema.enums import PunchKind
+  from timeclock_schema.models import Employee
 
   # First party imports
   from timeclock_system.clock import Clock
@@ -52,6 +64,7 @@ WAKE_SECS = 30  # R40.2
 DOUBLE_TAP_SECS = 0.5  # two taps this close end a confirmation early
 SCAN_IN_PROGRESS_SECS = 16  # the spike's slowest resting thumb
 _MAX_DIGITS = 12
+_ADDABLE_ROLES = (EmployeeRole.EMPLOYEE, EmployeeRole.MANAGER)  # never admin (§2)
 
 
 class ReaderIndicator(StrEnum):
@@ -84,23 +97,28 @@ class Menu:
 
 @dataclass(frozen=True)
 class Rescan:
-  """A punch tapped more than 30 s after the scan, waiting for the same employee's finger (R45.2)."""
+  """A punch tapped more than 30 s after the scan, waiting for the same employee's finger (R45.2).
+
+  `pin_ok`: an admin or exempt employee may answer with their PIN instead (§6.4), and needs no override.
+  """
 
   employee_id: int
   kind: PunchKind
   auth: OverrideGrant | None
   touched_at: float
   message: str | None = None
+  pin_ok: bool = False
 
 
 @dataclass(frozen=True)
 class Confirmation:
-  """A recorded punch, shown until `until`."""
+  """A recorded punch, shown until `until`, with any rule warnings and alert notices (§6.11)."""
 
   text: str
   hours: str
   warnings: tuple[str, ...]
   until: float
+  notices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -113,13 +131,21 @@ class OverrideRequest:
 
 
 @dataclass(frozen=True)
+class PinRecheck:
+  """An admin's or exempt employee's own PIN again: the Admin button's reconfirm (`kind` None) or a 30 s rescan's punch."""
+
+  employee_id: int
+  kind: PunchKind | None
+
+
+@dataclass(frozen=True)
 class PinEntry:
-  """The number pad: a PIN login, or a manager's PIN for `override`."""
+  """The number pad: a PIN login, a manager's PIN for an override, or a PIN recheck."""
 
   field: Literal["username", "password"]
   username: str  # typed first; not secret
   pin: SecretStr  # typed second; a SecretStr until bcrypt checks it, so no repr, log or alert shows it
-  override: OverrideRequest | None
+  purpose: OverrideRequest | PinRecheck | None
   touched_at: float
   error: str | None = None
 
@@ -143,12 +169,13 @@ class RegisterPrompt:
 
 @dataclass(frozen=True)
 class Registering:
-  """Enrollment in progress."""
+  """Enrollment in progress; `added` is set when it's the add-employee flow's optional step."""
 
   employee_id: int
   done: int
   total: int
   touched_at: float
+  added: Employee | None = None
 
 
 @dataclass(frozen=True)
@@ -160,7 +187,95 @@ class OverridePrompt:
   message: str | None = None
 
 
-type Screen = Idle | Menu | Rescan | Confirmation | PinEntry | PinScan | RegisterPrompt | Registering | OverridePrompt
+@dataclass(frozen=True)
+class AdminReconfirm:
+  """The Admin button was tapped: waiting for that admin's own finger or PIN before the admin menu (§6.4)."""
+
+  employee_id: int
+  touched_at: float
+  message: str | None = None
+
+
+@dataclass(frozen=True)
+class AdminMenu:
+  """The admin menu; more items (per-clock settings) slot in beside "Add employee" later."""
+
+  admin_id: int
+  touched_at: float
+  message: str | None = None
+
+
+type DetailsField = Literal["name", "phone", "email", "role", "group_id"]
+
+
+@dataclass(frozen=True)
+class AddEmployeeDetails:
+  """The add-employee form (§6.4 step 1).
+
+  The typed values and `touched_at` are left out of equality: the page edits them as the admin types, and the page redraws
+  only when the screen compares unequal, so typing never redraws the form (which would drop the input's focus). Errors
+  do redraw it, with the values kept here.
+  """
+
+  admin_id: int
+  groups: tuple[tuple[int, str], ...]
+  touched_at: float = field(compare=False)
+  name: str = field(default="", compare=False)
+  phone: str = field(default="", compare=False)
+  email: str = field(default="", compare=False)
+  role: str = field(default=EmployeeRole.EMPLOYEE.value, compare=False)
+  group_id: int = field(default=1, compare=False)
+  errors: tuple[tuple[DetailsField, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class NewPin:
+  """The new employee's PIN, typed twice on the number pad (§6.4 step 2); nothing is saved until both match."""
+
+  admin_id: int
+  details: NewEmployee
+  field: Literal["first", "second"]
+  first: SecretStr
+  pin: SecretStr
+  touched_at: float
+  error: str | None = None
+
+
+@dataclass(frozen=True)
+class NewFingerprint:
+  """The new employee is saved; registering their print is optional and needs no override (§6.4 step 3)."""
+
+  employee: Employee
+  touched_at: float
+  message: str | None = None
+
+
+@dataclass(frozen=True)
+class EmployeeAdded:
+  """The add-employee flow's last screen: the name and number, until OK (§6.4 step 4)."""
+
+  name: str
+  number: int
+  touched_at: float
+
+
+type Screen = (
+  Idle
+  | Menu
+  | Rescan
+  | Confirmation
+  | PinEntry
+  | PinScan
+  | RegisterPrompt
+  | Registering
+  | OverridePrompt
+  | AdminReconfirm
+  | AdminMenu
+  | AddEmployeeDetails
+  | NewPin
+  | NewFingerprint
+  | EmployeeAdded
+)
 
 
 class ReaderPort(Protocol):
@@ -272,17 +387,20 @@ class KioskController:
       return Idle(refused.message, until=now + MESSAGE_SECS)
     return Menu(info, auth, opened_at=now, touched_at=now, notice=notice)
 
-  async def _record(self, employee_id: int, kind: PunchKind, auth: OverrideGrant | None) -> Screen:
+  async def _record(self, employee_id: int, kind: PunchKind, auth: OverrideGrant | None, *, pin_login: bool = False) -> Screen:
     """Record a punch and confirm it; a refusal reopens the menu with its message and the grant unspent."""
     try:
-      outcome = await self._clock.record_punch(employee_id, kind, override=auth)
+      outcome = await self._clock.record_punch(employee_id, kind, override=auth, pin_login=pin_login)
     except PunchRefused as refused:
       return await self._open_menu(employee_id, auth, notice=refused.message)
+    # The confirmation notice is the clock's one alert action (§6.11); other actions belong to other deliverers.
+    notices = tuple(text.alert_notice(f) for f in outcome.firings if CONFIRMATION_NOTICE in f.hook.actions)
     return Confirmation(
       text.CONFIRMATIONS[kind].format(time=text.format_clock_time(outcome.punch.at, self._tz)),
       text.format_hours(outcome.hours_this_week),
       outcome.warnings,
       until=self._mono() + CONFIRM_SECS,
+      notices=notices,
     )
 
   async def _granted(self, request: OverrideRequest, grant: OverrideGrant) -> Screen:
@@ -316,7 +434,7 @@ class KioskController:
           message = text.NOT_RECOGNIZED if isinstance(ev, NoMatch) else text.RETRY
           if isinstance(s, Idle):
             self._screen = Idle(message, until=now + MESSAGE_SECS)
-          elif isinstance(s, Rescan | PinScan | OverridePrompt):
+          elif isinstance(s, Rescan | PinScan | OverridePrompt | AdminReconfirm):
             self._screen = replace(s, message=message)
         case Matched(employee_id=employee_id):
           await self._on_match(s, employee_id)
@@ -334,15 +452,20 @@ class KioskController:
         self._screen = replace(s, done=done, total=total, touched_at=now)
       case Enrolled(template=template):
         await self._clock.register_fingerprint(s.employee_id, template)
-        self._screen = await self._open_menu(s.employee_id)
+        added = s.added
+        self._screen = await self._open_menu(s.employee_id) if added is None else EmployeeAdded(added.name, added.id, now)
       case EnrollFailed(reason=reason):
         message = text.REGISTRATION_TIMED_OUT if reason == "timeout" else text.REGISTRATION_FAILED
-        self._screen = Idle(message, until=now + MESSAGE_SECS)
+        # In the add-employee flow the employee is already saved: back to the optional step, to retry or skip.
+        self._screen = Idle(message, until=now + MESSAGE_SECS) if s.added is None else NewFingerprint(s.added, now, message)
 
   async def _on_match(self, s: Screen, employee_id: int) -> None:
     # Split out of on_scanner_event for C901.
     if isinstance(s, Idle | Menu | Confirmation):
       self._screen = await self._open_menu(employee_id)  # a new scan switches the menu (R45.4)
+    elif isinstance(s, AdminReconfirm):
+      # The admin's own finger opens the admin menu; anyone else's opens their punch menu, as a rescan does.
+      self._screen = AdminMenu(employee_id, self._mono()) if employee_id == s.employee_id else await self._open_menu(employee_id)
     elif isinstance(s, Rescan):
       same = employee_id == s.employee_id
       self._screen = await (self._record(employee_id, s.kind, None) if same else self._open_menu(employee_id))
@@ -370,7 +493,7 @@ class KioskController:
           self._confirmation_tap = (s, now)
 
   async def use_pin(self) -> None:
-    """Open the number pad: a PIN login from idle or a confirmation, or a manager's PIN on an override prompt."""
+    """Open the number pad: a PIN login, a manager's override PIN, or an admin's or exempt employee's own PIN again."""
     async with self._transition():
       now = self._mono()
       s = self._screen
@@ -378,17 +501,22 @@ class KioskController:
         self._screen = PinEntry("username", "", SecretStr(""), None, touched_at=now)
       elif isinstance(s, OverridePrompt):
         self._screen = PinEntry("username", "", SecretStr(""), s.request, touched_at=now)
+      elif isinstance(s, AdminReconfirm):
+        self._screen = PinEntry("username", "", SecretStr(""), PinRecheck(s.employee_id, None), touched_at=now)
+      elif isinstance(s, Rescan) and s.pin_ok:
+        self._screen = PinEntry("username", "", SecretStr(""), PinRecheck(s.employee_id, s.kind), touched_at=now)
 
   async def digit(self, d: str) -> None:
     """Type one digit on the number pad."""
     async with self._transition():
       s = self._screen
-      if not (isinstance(s, PinEntry) and len(d) == 1 and d.isdecimal() and d.isascii()):
+      if not (isinstance(s, PinEntry | NewPin) and len(d) == 1 and d.isdecimal() and d.isascii()):
         return
       now = self._mono()
-      if s.field == "username" and len(s.username) < _MAX_DIGITS:
-        self._screen = replace(s, username=s.username + d, touched_at=now, error=None)
-      elif s.field == "password" and len(pin := s.pin.get_secret_value()) < _MAX_DIGITS:
+      if isinstance(s, PinEntry) and s.field == "username":
+        if len(s.username) < _MAX_DIGITS:
+          self._screen = replace(s, username=s.username + d, touched_at=now, error=None)
+      elif len(pin := s.pin.get_secret_value()) < _MAX_DIGITS:
         self._screen = replace(s, pin=SecretStr(pin + d), touched_at=now, error=None)
 
   async def backspace(self) -> None:
@@ -397,31 +525,64 @@ class KioskController:
       s = self._screen
       if isinstance(s, PinEntry) and s.field == "username":
         self._screen = replace(s, username=s.username[:-1], touched_at=self._mono(), error=None)
-      elif isinstance(s, PinEntry):
+      elif isinstance(s, PinEntry | NewPin):
         self._screen = replace(s, pin=SecretStr(s.pin.get_secret_value()[:-1]), touched_at=self._mono(), error=None)
 
   async def enter(self) -> None:
-    """Submit the username, then the password."""
+    """Submit the username, then the password; or the new employee's PIN, then its confirmation."""
     async with self._transition():
       s = self._screen
+      if isinstance(s, NewPin) and s.pin.get_secret_value():
+        self._screen = await self._enter_new_pin(s)
+        return
       if not isinstance(s, PinEntry) or not (s.username if s.field == "username" else s.pin.get_secret_value()):
         return
       now = self._mono()
       if s.field == "username":
-        self._screen = PinEntry("password", s.username, SecretStr(""), s.override, touched_at=now)
+        self._screen = PinEntry("password", s.username, SecretStr(""), s.purpose, touched_at=now)
         return
       employee = await self._clock.verify_pin(s.username, s.pin)
       if employee is None:
-        self._screen = PinEntry("username", "", SecretStr(""), s.override, touched_at=now, error=text.WRONG_PIN)
-      elif s.override is not None:
-        if self._clock.override_manager(employee, s.override.employee_id):
-          self._screen = await self._granted(s.override, OverrideGrant(employee.id, s.override.reason, pin_only=True))
+        self._screen = PinEntry("username", "", SecretStr(""), s.purpose, touched_at=now, error=text.WRONG_PIN)
+      elif isinstance(s.purpose, OverrideRequest):
+        if self._clock.override_manager(employee, s.purpose.employee_id):
+          self._screen = await self._granted(s.purpose, OverrideGrant(employee.id, s.purpose.reason, pin_only=True))
         else:
-          self._screen = OverridePrompt(s.override, touched_at=now, message=text.NOT_A_MANAGER)
+          self._screen = OverridePrompt(s.purpose, touched_at=now, message=text.NOT_A_MANAGER)
+      elif isinstance(s.purpose, PinRecheck):
+        self._screen = await self._recheck(s.purpose, employee)
+      elif self._clock.pin_only_login(employee):
+        # No fingerprint step, no register prompt, no override (§6.4); each such login is recorded.
+        await self._clock.record_pin_login(employee)
+        self._screen = await self._open_menu(employee.id)
       elif await self._clock.has_fingerprint(employee.id):
         self._screen = PinScan(employee.id, touched_at=now)
       else:
         self._screen = RegisterPrompt(employee.id, touched_at=now)
+
+  async def _recheck(self, purpose: PinRecheck, employee: Employee) -> Screen:
+    """A PIN recheck by `employee`; split out of `enter` for C901. It must be the same person's PIN."""
+    if employee.id != purpose.employee_id:
+      return PinEntry("username", "", SecretStr(""), purpose, touched_at=self._mono(), error=text.NOT_YOUR_PIN)
+    if purpose.kind is None:
+      await self._clock.record_pin_login(employee)
+      return AdminMenu(employee.id, self._mono())
+    return await self._record(employee.id, purpose.kind, None, pin_login=True)
+
+  async def _enter_new_pin(self, s: NewPin) -> Screen:
+    """The new employee's PIN, then its confirmation; saved once both match. Split out of `enter` for C901."""
+    now = self._mono()
+    if s.field == "first":
+      return replace(s, field="second", first=s.pin, pin=SecretStr(""), touched_at=now, error=None)
+    if s.pin.get_secret_value() != s.first.get_secret_value():
+      return replace(s, field="first", first=SecretStr(""), pin=SecretStr(""), touched_at=now, error=text.PIN_MISMATCH)
+    if not check_new_pin(s.pin):
+      return replace(s, field="first", first=SecretStr(""), pin=SecretStr(""), touched_at=now, error=text.PIN_DIGITS_ONLY)
+    try:
+      employee = await self._clock.add_employee(s.details, s.pin)
+    except EmployeeBlockFull:
+      return AdminMenu(s.admin_id, now, message=text.BLOCK_FULL)
+    return NewFingerprint(employee, now)
 
   async def punch(self, kind: PunchKind) -> None:
     """A punch button on the menu: recorded within 30 s of the scan, else it asks for a new scan (R45.2)."""
@@ -431,18 +592,81 @@ class KioskController:
         return
       now = self._mono()
       if now - s.opened_at > RESCAN_AFTER_SECS:
-        self._screen = Rescan(s.info.employee_id, kind, s.auth, touched_at=now)
+        employee = self._clock.employee(s.info.employee_id)
+        pin_ok = employee is not None and self._clock.pin_only_login(employee)
+        self._screen = Rescan(s.info.employee_id, kind, s.auth, touched_at=now, pin_ok=pin_ok)
       else:
         screen = await self._record(s.info.employee_id, kind, s.auth)
         # A refusal reopens the menu; only a new scan restarts R45.2's 30 s window, so it keeps this menu's.
         self._screen = replace(screen, opened_at=s.opened_at) if isinstance(screen, Menu) else screen
 
   async def register(self) -> None:
-    """Start enrolling the employee's finger (R23.4)."""
+    """Start enrolling the employee's finger (R23.4), or the new employee's (§6.4 step 3)."""
     async with self._transition():
       s = self._screen
       if isinstance(s, RegisterPrompt):
         self._screen = Registering(s.employee_id, 0, 5, touched_at=self._mono())
+      elif isinstance(s, NewFingerprint):
+        self._screen = Registering(s.employee.id, 0, 5, touched_at=self._mono(), added=s.employee)
+
+  async def admin(self) -> None:
+    """The Admin button on an admin's menu: reconfirm by their own finger or PIN first (§6.4)."""
+    async with self._transition():
+      s = self._screen
+      if isinstance(s, Menu) and s.info.is_admin:
+        self._screen = AdminReconfirm(s.info.employee_id, touched_at=self._mono())
+
+  async def add_employee(self) -> None:
+    """Open the add-employee form from the admin menu."""
+    async with self._transition():
+      s = self._screen
+      if isinstance(s, AdminMenu):
+        groups = tuple((g.id, g.name) for g in self._clock.groups())
+        self._screen = AddEmployeeDetails(s.admin_id, groups, touched_at=self._mono(), group_id=groups[0][0] if groups else 1)
+
+  async def edit_details(self, name: DetailsField, value: str) -> None:
+    """One field of the add-employee form changed; kept on the screen, which doesn't redraw (see `AddEmployeeDetails`)."""
+    async with self._transition():
+      s = self._screen
+      if isinstance(s, AddEmployeeDetails):
+        typed: str | int = int(value) if name == "group_id" else value
+        self._screen = replace(s, touched_at=self._mono(), **{name: typed})
+
+  async def submit_details(self) -> None:
+    """Check the form: errors beside their fields, or on to the PIN."""
+    async with self._transition():
+      s = self._screen
+      if not isinstance(s, AddEmployeeDetails):
+        return
+      errors: list[tuple[DetailsField, str]] = []
+      name, phone, email = s.name.strip(), s.phone.strip(), s.email.strip()
+      if not name:
+        errors.append(("name", text.NAME_REQUIRED))
+      try:
+        stored_phone = normalize_phone(phone) if phone else None
+      except ValueError:
+        stored_phone = None
+        errors.append(("phone", text.PHONE_INVALID))
+      if email and re.fullmatch(EMAIL_PATTERN, email) is None:
+        errors.append(("email", text.EMAIL_INVALID))
+      role = next((r for r in _ADDABLE_ROLES if r.value == s.role), None)
+      if role is None:
+        errors.append(("role", text.ROLE_INVALID))
+      if s.group_id not in {gid for gid, _ in s.groups}:
+        errors.append(("group_id", text.GROUP_INVALID))
+      now = self._mono()
+      if errors or role is None:
+        self._screen = replace(s, touched_at=now, errors=tuple(errors))
+      else:
+        details = NewEmployee(name, stored_phone, email or None, role, s.group_id)
+        self._screen = NewPin(s.admin_id, details, "first", SecretStr(""), SecretStr(""), touched_at=now)
+
+  async def skip_fingerprint(self) -> None:
+    """Skip the new employee's optional fingerprint; they enrol later through the normal flow."""
+    async with self._transition():
+      s = self._screen
+      if isinstance(s, NewFingerprint):
+        self._screen = EmployeeAdded(s.employee.name, s.employee.id, touched_at=self._mono())
 
   async def request_override(self) -> None:
     """Ask a manager to authorize instead of a fingerprint (R23.5)."""
@@ -457,12 +681,18 @@ class KioskController:
         self._screen = OverridePrompt(OverrideRequest(s.employee_id, BypassReason.OVERRIDE_NO_FINGERPRINT, None), touched_at=now)
 
   async def cancel(self) -> None:
-    """Back to idle from any screen."""
+    """Back to idle from any screen; in the add-employee flow's optional fingerprint step it counts as a skip (§6.4)."""
     async with self._transition():
       if self._mode is ReaderMode.ENROLL:
         self._mode = ReaderMode.READY
         self._reader.set_mode(ReaderMode.READY)
-      self._screen = Idle()
+      s = self._screen
+      if isinstance(s, NewFingerprint):
+        self._screen = EmployeeAdded(s.employee.name, s.employee.id, touched_at=self._mono())
+      elif isinstance(s, Registering) and s.added is not None:
+        self._screen = EmployeeAdded(s.added.name, s.added.id, touched_at=self._mono())
+      else:
+        self._screen = Idle()
 
   async def tick(self) -> None:
     """Expire timed screens and messages, and follow business hours; the app calls it every 0.5 s (R5)."""

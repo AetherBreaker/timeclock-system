@@ -400,7 +400,17 @@ def test_normalize_phone_accepts_common_us_formats(raw: str, stored: str) -> Non
   assert normalize_phone(raw) == stored
 
 
-@pytest.mark.parametrize("raw", ["555-1234", "+44 20 7946 0958", "555-123-45678", "555-CALL-NOW", "", "\uff15\uff15\uff15\uff11\uff12\uff13\uff14\uff15\uff16\uff17"])
+@pytest.mark.parametrize(
+  "raw",
+  [
+    "555-1234",
+    "+44 20 7946 0958",
+    "555-123-45678",
+    "555-CALL-NOW",
+    "",
+    "\uff15\uff15\uff15\uff11\uff12\uff13\uff14\uff15\uff16\uff17",
+  ],
+)
 def test_normalize_phone_refuses_anything_else(raw: str) -> None:
   with pytest.raises(ValueError, match="phone"):
     normalize_phone(raw)

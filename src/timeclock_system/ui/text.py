@@ -16,6 +16,9 @@ if TYPE_CHECKING:
   from datetime import datetime
   from zoneinfo import ZoneInfo
 
+  # Third party imports
+  from timeclock_schema.alerts import Firing
+
   # First party imports
   from timeclock_system.sync import DbStatus
 
@@ -40,6 +43,37 @@ MANAGER_PROMPT: Final = "Manager: scan your finger or enter your PIN"
 NOT_A_MANAGER: Final = "A manager must authorize this"
 MANAGER_OVERRIDE: Final = "Manager override"
 CANCEL: Final = "Cancel"
+NOT_YOUR_PIN: Final = "That isn't your PIN. Try again."
+
+ADMIN: Final = "Admin"
+ADMIN_RECONFIRM: Final = "Admin: scan your finger or enter your PIN"
+ADMIN_MENU: Final = "Admin menu"
+ADD_EMPLOYEE: Final = "Add employee"
+BACK: Final = "Back"
+NEXT: Final = "Next"
+SKIP: Final = "Skip"
+OK: Final = "OK"
+FIELD_NAME: Final = "Name"
+FIELD_PHONE: Final = "Phone (optional)"
+FIELD_EMAIL: Final = "Email (optional)"
+FIELD_ROLE: Final = "Role"
+FIELD_GROUP: Final = "Group"
+ROLE_LABELS: Final[Mapping[str, str]] = MappingProxyType({"employee": "Employee", "manager": "Manager"})
+NAME_REQUIRED: Final = "Enter a name"
+PHONE_INVALID: Final = "Enter a 10-digit US phone number"
+EMAIL_INVALID: Final = "Enter an email like name@example.com"
+ROLE_INVALID: Final = "Choose Employee or Manager"
+GROUP_INVALID: Final = "Choose a group"
+NEW_PIN: Final = "Choose a PIN for {name}"
+CONFIRM_NEW_PIN: Final = "Enter the PIN again"
+PIN_MISMATCH: Final = "The PINs didn't match. Start again."
+PIN_DIGITS_ONLY: Final = "A PIN is digits only"
+BLOCK_FULL: Final = "This clock has no employee numbers left"
+NEW_FINGERPRINT: Final = "Register {name}'s fingerprint?"
+EMPLOYEE_ADDED: Final = "Added {name}"
+EMPLOYEE_NUMBER: Final = "Employee number (PIN username): {number}"
+WEEKLY_HOURS_NOTICE: Final = "You've worked over {limit} hours this week"
+WEEKLY_HOURS_EARLY_NOTICE: Final = "You're within {lead} h of {limit} hours this week"
 
 PUNCH_LABELS: Final[Mapping[PunchKind, str]] = MappingProxyType(
   {
@@ -86,3 +120,16 @@ def format_db_status(status: DbStatus, tz: ZoneInfo) -> str:
   """The idle screen's status line, e.g. `"Database connected · last contact 8:02 AM"`."""
   contact = "never" if status.last_contact is None else format_clock_time(status.last_contact, tz)
   return f"Database {'connected' if status.connected else 'offline'} · last contact {contact}"
+
+
+def _hours_number(td: timedelta) -> str:
+  # Whole hours plainly, otherwise truncated hundredths without trailing zeros: 40, 37.5, 0.25.
+  return f"{Decimal(td // timedelta(seconds=36)).scaleb(-2).normalize():f}"
+
+
+def alert_notice(firing: Firing) -> str:
+  """The confirmation-screen line for an alert hook the punch reached (§6.11); the weekly-hours type is the only one."""
+  limit = _hours_number(firing.limit)
+  if firing.hook.lead:
+    return WEEKLY_HOURS_EARLY_NOTICE.format(lead=_hours_number(firing.hook.lead), limit=limit)
+  return WEEKLY_HOURS_NOTICE.format(limit=limit)
