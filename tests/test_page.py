@@ -11,6 +11,7 @@ import pytest
 from nicegui import ui
 from nicegui.testing import user_simulation
 from pydantic import SecretBytes, SecretStr
+from timeclock_schema.enums import PunchKind
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint
 
 # First party imports
@@ -137,3 +138,16 @@ async def test_the_whole_idle_screen_wakes_the_reader(
         break
       await asyncio.sleep(0.02)
   assert taps == [None]
+
+
+async def test_a_double_tap_anywhere_ends_the_confirmation(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await controller.punch(PunchKind.CLOCK_IN)
+    await user.should_see("Clocked in at")
+    [layer] = user.find(marker="confirm-tap").elements
+    assert {"fixed", "inset-0"} <= set(layer.classes)
+    user.find(marker="confirm-tap").click()
+    user.find(marker="confirm-tap").click()
+    await user.should_see(text.IDLE_READY)

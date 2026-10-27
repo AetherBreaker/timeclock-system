@@ -38,6 +38,7 @@ IDLE_CLOSE_SECS = 120  # R45.4, for every non-idle screen
 CONFIRM_SECS = 5
 MESSAGE_SECS = 3
 WAKE_SECS = 30  # R40.2
+DOUBLE_TAP_SECS = 0.5  # two taps this close end a confirmation early
 SCAN_IN_PROGRESS_SECS = 16  # the spike's slowest resting thumb
 _MAX_DIGITS = 12
 
@@ -179,6 +180,8 @@ class KioskController:
     self._lock = asyncio.Lock()
     self._listeners: list[Callable[[], object]] = []
     self._wake_until = float("-inf")
+    # The confirmation and time of its last tap, kept off the screen so the first tap of a double tap doesn't redraw it.
+    self._confirmation_tap: tuple[Confirmation, float] | None = None
     self._last_finger = float("-inf")
     self._mode: ReaderMode | None = None
     self._sync_reader()
@@ -320,10 +323,17 @@ class KioskController:
         self._screen = replace(s, message=text.NOT_A_MANAGER)
 
   async def tap(self) -> None:
-    """A tap on the idle screen wakes the reader for 30 s (R40.2)."""
+    """A tap on the idle screen wakes the reader for 30 s (R40.2); a double tap ends a confirmation early."""
     async with self._transition():
-      if isinstance(self._screen, Idle):
-        self._wake_until = self._mono() + WAKE_SECS
+      s, now = self._screen, self._mono()
+      if isinstance(s, Idle):
+        self._wake_until = now + WAKE_SECS
+      elif isinstance(s, Confirmation):
+        last = self._confirmation_tap
+        if last is not None and last[0] is s and now - last[1] <= DOUBLE_TAP_SECS:
+          self._screen, self._confirmation_tap = Idle(), None
+        else:
+          self._confirmation_tap = (s, now)
 
   async def use_pin(self) -> None:
     """Open the number pad: a PIN login from idle or a confirmation, or a manager's PIN on an override prompt."""

@@ -160,6 +160,28 @@ async def test_punch_within_30s_records_and_confirms(kiosk: Kiosk) -> None:
   assert kiosk.ctl.screen == Idle()
 
 
+async def test_a_double_tap_ends_the_confirmation_early(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  await kiosk.ctl.tap()
+  assert isinstance(kiosk.ctl.screen, Confirmation)  # one tap isn't enough
+  kiosk.t.advance(0.3)
+  await kiosk.ctl.tap()
+  assert kiosk.ctl.screen == Idle()
+
+
+async def test_two_slow_taps_dont_end_the_confirmation(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  await kiosk.ctl.tap()
+  kiosk.t.advance(0.6)
+  await kiosk.ctl.tap()
+  assert isinstance(kiosk.ctl.screen, Confirmation)
+  kiosk.t.advance(0.3)
+  await kiosk.ctl.tap()  # pairs with the previous tap
+  assert kiosk.ctl.screen == Idle()
+
+
 async def test_punch_after_30s_needs_a_rescan_of_the_same_employee(kiosk: Kiosk) -> None:
   await kiosk.ctl.on_scanner_event(matched(ANN))
   kiosk.t.advance(31)
@@ -224,6 +246,7 @@ async def test_a_refused_punch_keeps_the_scans_30s_window(kiosk: Kiosk) -> None:
   await kiosk.ctl.punch(PunchKind.CLOCK_IN)
   assert kiosk.ctl.screen == Rescan(ANN, PunchKind.CLOCK_IN, None, touched_at=kiosk.t.mono)
   assert kiosk.store.punches() == []
+
 
 async def test_pin_login_without_print_prompts_registration(kiosk: Kiosk) -> None:
   await kiosk.pin_login(BOB)

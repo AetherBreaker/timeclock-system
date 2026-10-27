@@ -55,6 +55,8 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 """
 # R13.2: no text selection, no long-press menu.
 _NO_SELECT_CSS = "body { user-select: none; -webkit-user-select: none; touch-action: manipulation; }"
+# A touch-only kiosk: cage still draws a pointer in the middle of the screen unless the page hides it.
+_NO_CURSOR_CSS = "* { cursor: none !important; }"
 _NO_CONTEXT_MENU = '<script>document.addEventListener("contextmenu", e => e.preventDefault());</script>'
 _PAD = ("1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "✓")
 
@@ -108,6 +110,7 @@ class _KioskPage:
         logger.warning("no logo at %s; the page renders without it (R39.1)", self._branding_dir / LOGO_FILE)
     ui.add_css(_THEME_CSS)
     ui.add_css(_NO_SELECT_CSS)
+    ui.add_css(_NO_CURSOR_CSS)
     ui.add_head_html(_NO_CONTEXT_MENU)
     ui.keyboard(on_key=self._on_key)
 
@@ -222,10 +225,13 @@ class _KioskPage:
       self._button(text.CANCEL, self._controller.cancel)
 
   def _confirmation(self, s: Confirmation) -> None:
-    ui.label(s.text).classes("sft-title")
-    ui.label(s.hours)
-    for warning in s.warnings:
-      ui.label(warning).classes("sft-error")
+    # A double tap anywhere ends it early; the same full-screen layer as the idle screen's.
+    layer = ui.column().classes("fixed inset-0 z-10 items-center gap-6 pt-8").mark("confirm-tap")
+    with layer.on("click", lambda: self._guarded(self._controller.tap)):
+      ui.label(s.text).classes("sft-title")
+      ui.label(s.hours)
+      for warning in s.warnings:
+        ui.label(warning).classes("sft-error")
 
   def _pin_pad(self, s: PinEntry) -> None:
     ui.label(text.ENTER_USERNAME if s.field == "username" else text.ENTER_PIN).classes("sft-title")
