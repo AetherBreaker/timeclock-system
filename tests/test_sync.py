@@ -24,7 +24,7 @@ import psycopg
 import pytest
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
-from timeclock_schema.enums import OverrideReason, PunchKind
+from timeclock_schema.enums import EmployeeRole, OverrideReason, PunchKind
 from timeclock_schema.migrations import load_migrations
 from timeclock_schema.models import Override, Punch
 from timeclock_schema.shifts import EmployeeState
@@ -82,12 +82,12 @@ async def admin_execute(pg: Pg, query: LiteralString, params: dict[str, Any] | N
     return await cur.fetchall() if cur.description else []
 
 
-async def seed_employee(pg: Pg, name: str = "Ann", *, pin_username: str = "1001", is_manager: bool = False) -> int:
+async def seed_employee(pg: Pg, name: str = "Ann", *, pin_username: str = "1001", role: EmployeeRole = EmployeeRole.EMPLOYEE) -> int:
   rows = await admin_execute(
     pg,
-    "INSERT INTO employees (name, pin_username, pin_hash, is_manager) VALUES (%(n)s, %(u)s, crypt('1234', gen_salt('bf')), %(m)s) "
+    "INSERT INTO employees (name, pin_username, pin_hash, role) VALUES (%(n)s, %(u)s, crypt('1234', gen_salt('bf')), %(r)s::employee_role) "
     "RETURNING id",
-    {"n": name, "u": pin_username, "m": is_manager},
+    {"n": name, "u": pin_username, "r": role.value},
   )
   return rows[0][0]
 
@@ -155,18 +155,21 @@ def origin_of(rig: Rig, punch: Punch) -> str | None:
 
 
 async def test_catch_up_mirrors_employees_and_settings(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
-  ann = await seed_employee(pg)
-  await admin_execute(pg, "UPDATE config.settings SET subtract_breaks = true")
+  ann = await seed_employee(pg, role=EmployeeRole.ADMIN)
+  await admin_execute(pg, "UPDATE config.settings SET subtract_breaks = true, lunches_enabled = false")
   r = await rig()
   employee = r.clock.employee(ann)
   assert employee is not None
   assert employee.name == "Ann"
+  assert employee.role is EmployeeRole.ADMIN
   assert r.clock.settings().subtract_breaks is True
+  assert r.clock.settings().lunches_enabled is False
+  assert r.clock.settings().breaks_enabled is True
   assert r.sync.status.last_contact is not None
 
 
 async def test_pushes_a_local_punch_with_its_override(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
-  ann, mo = await seed_employee(pg), await seed_employee(pg, "Mo", pin_username="1002", is_manager=True)
+  ann, mo = await seed_employee(pg), await seed_employee(pg, "Mo", pin_username="1002", role=EmployeeRole.MANAGER)
   r = await rig()
   punch = local_punch(ann)
   override = Override(

@@ -35,13 +35,13 @@ logger = logging.getLogger(__name__)
 
 # Explicit column lists: the clocks can't `SELECT *` on overrides, and elsewhere a list keeps `extra="ignore"` meaningful.
 _SELECT: Final[dict[str, LiteralString]] = {
-  "employees": "SELECT id, name, pin_username, pin_hash, is_manager, active, group_id, updated_at FROM employees",
+  "employees": "SELECT id, name, pin_username, pin_hash, role, active, group_id, updated_at FROM employees",
   "groups": "SELECT id, name FROM groups",
   "rules": "SELECT id, kind, params, group_id, employee_id, on_violation, updated_at FROM rules",
   "config.business_hours": "SELECT id, weekday, opens, closes FROM config.business_hours",
   "config.settings": (
-    "SELECT auto_clock_out_enabled, auto_clock_out_run_time, auto_clock_out_stamp_time, subtract_lunch, subtract_breaks "
-    "FROM config.settings"
+    "SELECT auto_clock_out_enabled, auto_clock_out_run_time, auto_clock_out_stamp_time, subtract_lunch, subtract_breaks, "
+    "lunches_enabled, breaks_enabled FROM config.settings"
   ),
   "punches": "SELECT id, employee_id, kind, at, instance_id, automatic, received_at, db_login FROM punches",
   "punch_corrections": "SELECT id, punch_id, action, new_at, new_kind, note, recorded_at FROM punch_corrections",

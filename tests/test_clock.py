@@ -11,8 +11,8 @@ import bcrypt
 import pytest
 from pydantic import BaseModel, SecretBytes, SecretStr
 from timeclock_schema import rules as schema_rules
-from timeclock_schema.enums import CorrectionAction, OverrideReason, PunchKind, RuleAction
-from timeclock_schema.models import Employee, Fingerprint, Punch, PunchCorrection, RuleRow
+from timeclock_schema.enums import CorrectionAction, EmployeeRole, OverrideReason, PunchKind, RuleAction
+from timeclock_schema.models import Employee, Fingerprint, Punch, PunchCorrection, RuleRow, Settings
 from timeclock_schema.shifts import EmployeeState
 
 # First party imports
@@ -34,13 +34,15 @@ MANAGER_ID = 2
 HASH = bcrypt.hashpw(b"1234", bcrypt.gensalt(rounds=6, prefix=b"2a")).decode()
 
 
-def make_employee(employee_id: int, *, manager: bool = False, active: bool = True, username: str | None = None) -> Employee:
+def make_employee(
+  employee_id: int, *, role: EmployeeRole = EmployeeRole.EMPLOYEE, active: bool = True, username: str | None = None
+) -> Employee:
   return Employee(
     id=employee_id,
     name=f"Emp {employee_id}",
     pin_username=username or str(10 + employee_id),
     pin_hash=SecretStr(HASH),
-    is_manager=manager,
+    role=role,
     active=active,
     updated_at=T,
   )
@@ -61,7 +63,7 @@ class Env:
 @pytest.fixture
 def store(tmp_path: Path) -> Iterator[LocalStore]:
   s = LocalStore(tmp_path / "t.sqlite3")
-  s.replace_table("employees", [make_employee(1), make_employee(2, manager=True), make_employee(3, active=False)])
+  s.replace_table("employees", [make_employee(1), make_employee(2, role=EmployeeRole.MANAGER), make_employee(3, active=False)])
   yield s
   s.close()
 
@@ -230,11 +232,36 @@ async def test_gallery_orders_by_latest_punch_here(env: Env) -> None:
 
 async def test_override_manager_rules(env: Env) -> None:
   clock = env.clock
-  manager = make_employee(2, manager=True)
+  manager = make_employee(2, role=EmployeeRole.MANAGER)
   assert clock.override_manager(manager, 1)
   assert not clock.override_manager(make_employee(1), 2)
   assert not clock.override_manager(manager, 2)
-  assert not clock.override_manager(make_employee(2, manager=True, active=False), 1)
+  assert not clock.override_manager(make_employee(2, role=EmployeeRole.MANAGER, active=False), 1)
+
+
+async def test_an_admin_can_approve_overrides(env: Env) -> None:
+  # Admin ranks above manager.
+  assert env.clock.override_manager(make_employee(2, role=EmployeeRole.ADMIN), 1)
+
+
+async def test_switched_off_lunches_and_breaks_hide_their_starts(env: Env) -> None:
+  env.store.set_settings(Settings(lunches_enabled=False, breaks_enabled=False))
+  env.clock.notify_changed(["settings"])
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=1)), origin="local")
+  info = await env.clock.menu_info(1)
+  assert PunchKind.LUNCH_START not in info.valid_next
+  assert PunchKind.BREAK_START not in info.valid_next
+  assert PunchKind.CLOCK_OUT in info.valid_next
+  with pytest.raises(PunchRefused):
+    await env.clock.record_punch(1, PunchKind.LUNCH_START)
+
+
+async def test_a_lunch_under_way_can_still_end_after_the_switch_goes_off(env: Env) -> None:
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=2)), origin="local")
+  env.store.insert_punch(punch_at(1, PunchKind.LUNCH_START, T - timedelta(hours=1)), origin="local")
+  env.store.set_settings(Settings(lunches_enabled=False))
+  env.clock.notify_changed(["settings"])
+  assert PunchKind.LUNCH_END in (await env.clock.menu_info(1)).valid_next
 
 
 async def test_register_fingerprint_stores_local_unsynced(env: Env) -> None:
