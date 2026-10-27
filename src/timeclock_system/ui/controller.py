@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, Protocol
 
 # Third party imports
+from pydantic import SecretStr
 from timeclock_schema.enums import OverrideReason
 
 # First party imports
@@ -95,8 +96,8 @@ class PinEntry:
   """The number pad: a PIN login, or a manager's PIN for `override`."""
 
   field: Literal["username", "password"]
-  username: str
-  digits: str
+  username: str  # typed first; not secret
+  pin: SecretStr  # typed second; a SecretStr until bcrypt checks it, so no repr, log or alert shows it
   override: OverrideRequest | None
   touched_at: float
   error: str | None = None
@@ -330,37 +331,44 @@ class KioskController:
       now = self._mono()
       s = self._screen
       if isinstance(s, Idle | Confirmation):
-        self._screen = PinEntry("username", "", "", None, touched_at=now)
+        self._screen = PinEntry("username", "", SecretStr(""), None, touched_at=now)
       elif isinstance(s, OverridePrompt):
-        self._screen = PinEntry("username", "", "", s.request, touched_at=now)
+        self._screen = PinEntry("username", "", SecretStr(""), s.request, touched_at=now)
 
   async def digit(self, d: str) -> None:
     """Type one digit on the number pad."""
     async with self._transition():
       s = self._screen
-      if isinstance(s, PinEntry) and len(d) == 1 and d.isdecimal() and d.isascii() and len(s.digits) < _MAX_DIGITS:
-        self._screen = replace(s, digits=s.digits + d, touched_at=self._mono(), error=None)
+      if not (isinstance(s, PinEntry) and len(d) == 1 and d.isdecimal() and d.isascii()):
+        return
+      now = self._mono()
+      if s.field == "username" and len(s.username) < _MAX_DIGITS:
+        self._screen = replace(s, username=s.username + d, touched_at=now, error=None)
+      elif s.field == "password" and len(pin := s.pin.get_secret_value()) < _MAX_DIGITS:
+        self._screen = replace(s, pin=SecretStr(pin + d), touched_at=now, error=None)
 
   async def backspace(self) -> None:
     """Delete the last digit."""
     async with self._transition():
       s = self._screen
-      if isinstance(s, PinEntry):
-        self._screen = replace(s, digits=s.digits[:-1], touched_at=self._mono(), error=None)
+      if isinstance(s, PinEntry) and s.field == "username":
+        self._screen = replace(s, username=s.username[:-1], touched_at=self._mono(), error=None)
+      elif isinstance(s, PinEntry):
+        self._screen = replace(s, pin=SecretStr(s.pin.get_secret_value()[:-1]), touched_at=self._mono(), error=None)
 
   async def enter(self) -> None:
     """Submit the username, then the password."""
     async with self._transition():
       s = self._screen
-      if not isinstance(s, PinEntry) or not s.digits:
+      if not isinstance(s, PinEntry) or not (s.username if s.field == "username" else s.pin.get_secret_value()):
         return
       now = self._mono()
       if s.field == "username":
-        self._screen = PinEntry("password", s.digits, "", s.override, touched_at=now)
+        self._screen = PinEntry("password", s.username, SecretStr(""), s.override, touched_at=now)
         return
-      employee = await self._clock.verify_pin(s.username, s.digits)
+      employee = await self._clock.verify_pin(s.username, s.pin)
       if employee is None:
-        self._screen = PinEntry("username", "", "", s.override, touched_at=now, error=text.WRONG_PIN)
+        self._screen = PinEntry("username", "", SecretStr(""), s.override, touched_at=now, error=text.WRONG_PIN)
       elif s.override is not None:
         if self._clock.override_manager(employee, s.override.employee_id):
           self._screen = await self._granted(s.override, OverrideGrant(employee.id, s.override.reason, pin_only=True))

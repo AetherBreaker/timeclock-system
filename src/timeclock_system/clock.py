@@ -14,7 +14,7 @@ from uuid import uuid4
 
 # Third party imports
 import bcrypt
-from pydantic import SecretBytes
+from pydantic import SecretBytes, SecretStr
 from timeclock_schema.enums import OverrideReason, PunchKind, RuleAction
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Override, Punch, RuleRow, Settings
 from timeclock_schema.rules import RuleContext, RuleValidationError, ValidatedRule, applicable_rules, evaluate, validate_rule
@@ -186,11 +186,11 @@ class Clock:
     """Return the cached settings."""
     return self._settings
 
-  async def verify_pin(self, username: str, password: str) -> Employee | None:
+  async def verify_pin(self, username: str, pin: SecretStr) -> Employee | None:
     """Return the active employee with this PIN username if the password matches its bcrypt hash."""
     for e in self._employees.values():
       if e.active and e.pin_username == username:
-        ok = await asyncio.to_thread(bcrypt.checkpw, password.encode(), e.pin_hash.get_secret_value().encode())
+        ok = await asyncio.to_thread(bcrypt.checkpw, pin.get_secret_value().encode(), e.pin_hash.get_secret_value().encode())
         return e if ok else None
     return None
 

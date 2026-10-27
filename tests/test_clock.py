@@ -74,14 +74,14 @@ async def env(store: LocalStore) -> Env:
 
 
 async def test_verify_pin_accepts_pgcrypto_style_hash(env: Env) -> None:
-  found = await env.clock.verify_pin("11", "1234")
+  found = await env.clock.verify_pin("11", SecretStr("1234"))
   assert found is not None
   assert found.id == 1
-  assert await env.clock.verify_pin("11", "9999") is None
+  assert await env.clock.verify_pin("11", SecretStr("9999")) is None
 
 
 async def test_verify_pin_refuses_inactive(env: Env) -> None:
-  assert await env.clock.verify_pin("13", "1234") is None
+  assert await env.clock.verify_pin("13", SecretStr("1234")) is None
 
 
 async def test_menu_info_for_a_clocked_in_employee(env: Env) -> None:
