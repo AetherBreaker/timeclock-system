@@ -518,9 +518,9 @@ def test_finger_down_is_posted()
     a final `too_hot_count=N`; `closed-hold SECONDS` opens, closes, then sleeps holding the Context (for the
     autosuspend check).
 
-- [ ] **Step 1: Write `fprint_reader.py`** per the block. No unit tests (it needs the reader); Task 12 runs it.
-- [ ] **Step 2: Verify** — `uv run ruff check src/timeclock_system/fprint_reader.py`; `uv run python -c "import ast,sys; ast.parse(open('src/timeclock_system/fprint_reader.py').read())"`.
-- [ ] **Step 3: Commit** `feat(fprint_reader): add the libfprint reader and its hardware probe`.
+- [x] **Step 1: Write `fprint_reader.py`** per the block. No unit tests (it needs the reader); Task 12 runs it.
+- [x] **Step 2: Verify** — `uv run ruff check src/timeclock_system/fprint_reader.py`; `uv run python -c "import ast,sys; ast.parse(open('src/timeclock_system/fprint_reader.py').read())"`.
+- [x] **Step 3: Commit** `feat(fprint_reader): add the libfprint reader and its hardware probe`.
 
 ---
 
