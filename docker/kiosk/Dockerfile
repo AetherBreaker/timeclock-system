@@ -1,0 +1,10 @@
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cage seatd udev firefox-esr libgl1-mesa-dri libegl-mesa0 fonts-dejavu-core ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY docker/kiosk/kiosk.sh /kiosk.sh
+COPY docker/kiosk/policies.json /usr/lib/firefox-esr/distribution/policies.json
+COPY docker/kiosk/autoconfig.js /usr/lib/firefox-esr/defaults/pref/autoconfig.js
+COPY docker/kiosk/kiosk.cfg /usr/lib/firefox-esr/kiosk.cfg
+RUN chmod 755 /kiosk.sh
+ENTRYPOINT ["/kiosk.sh"]

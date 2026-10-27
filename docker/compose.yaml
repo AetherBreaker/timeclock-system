@@ -2,26 +2,43 @@ services:
 
   timeclock-system:
     container_name: timeclock-system
+    hostname: timeclock-system-${INSTANCE_ID:?}
     build:
       context: .
       dockerfile: docker/Dockerfile
       args:
         GIT_REPO: https://github.com/AetherBreaker/timeclock-system.git
         GIT_TAG: v0.1.0
-    restart: no
+    restart: unless-stopped
     volumes:
       - type: bind
         source: /data/timeclock_system_files
         target: /app/persisted_data
+      - type: bind
+        source: /dev/bus/usb
+        target: /dev/bus/usb
+    device_cgroup_rules:
+      - c 189:* rmw
     environment:
-      - HEARTBEAT_SLUG=timeclock-system
+      - INSTANCE_ID=${INSTANCE_ID:?}
+      - HEARTBEAT_SLUG=timeclock-system-${INSTANCE_ID:?}
+      - TZ=America/New_York
+      - LOG_HISTORY_RETENTION_DAYS=14
+      - LOG_CONN_HOST=10.8.0.25
       - ALERTS_EMAIL=info@sweetfiretobacco.com
       - ALERTS_EMAIL_PWD=${ALERTS_EMAIL_PWD:?}
       - ALERTS_RECIPIENTS=["jacob.ogden@sweetfiretobacco.com"]
+      - PINGKEY=${PINGKEY:?}
       - WG_PRIVATE_KEY=${WG_PRIVATE_KEY:?}
       - WG_HUB_URL=${WG_HUB_URL:?}
       - WG_HUB_REPO=${WG_HUB_REPO:?}
       - WG_HUB_TOKEN=${WG_HUB_TOKEN:-}
+      - WG_TOLERATE_DISCONNECTED=1
+      - WG_HANDSHAKE_TIMEOUT_SECS=10
+      - TIMECLOCK_DB_HOST=10.8.0.24
+      - TIMECLOCK_DB_NAME=${TIMECLOCK_DB_NAME:?}
+      - TIMECLOCK_DB_USER=${TIMECLOCK_DB_USER:?}
+      - TIMECLOCK_DB_PASSWORD=${TIMECLOCK_DB_PASSWORD:?}
     cap_add:
       - NET_ADMIN
     networks:
@@ -39,6 +56,22 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  kiosk:
+    build:
+      context: .
+      dockerfile: docker/kiosk/Dockerfile
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /dev:/dev
+    environment:
+      - KIOSK_URL=http://timeclock-system:8080
+    depends_on:
+      timeclock-system:
+        condition: service_healthy
+    networks:
+      - coolify
 
 networks:
   coolify:
