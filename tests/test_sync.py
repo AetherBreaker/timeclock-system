@@ -14,7 +14,7 @@ import contextlib
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, LiteralString, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -27,6 +27,7 @@ from psycopg.conninfo import make_conninfo
 from timeclock_schema.enums import OverrideReason, PunchKind
 from timeclock_schema.migrations import load_migrations
 from timeclock_schema.models import Override, Punch
+from timeclock_schema.shifts import EmployeeState
 
 # First party imports
 from timeclock_system.clock import Clock
@@ -243,6 +244,22 @@ async def test_reconnects_after_the_connection_is_killed(pg: Pg, rig: Callable[[
 
   await eventually(pushed, "the punch to arrive after the reconnect")
   assert r.statuses[:3] == [True, False, True]
+
+
+async def test_catch_up_fetches_open_shifts_from_before_the_week(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
+  # A shift begun at another clock while this one was offline across Monday 00:00 must still be offered a clock-out.
+  ann = await seed_employee(pg)
+  bob = await seed_employee(pg, "Bob", pin_username="1002")
+  old = datetime.now(UTC) - timedelta(days=10)  # before this week's start, whatever today is
+  insert = "INSERT INTO punches (id, employee_id, kind, at, instance_id) VALUES (%(id)s, %(e)s, %(kind)s::punch_kind, %(at)s, '2')"
+  ann_in = uuid4()
+  await admin_execute(pg, insert, {"id": ann_in, "e": ann, "kind": "clock_in", "at": old})
+  await admin_execute(pg, insert, {"id": uuid4(), "e": bob, "kind": "clock_in", "at": old})
+  await admin_execute(pg, insert, {"id": uuid4(), "e": bob, "kind": "clock_out", "at": old + timedelta(hours=8)})
+  r = await rig()
+  assert [p.id for p in r.store.punches(ann)] == [ann_in]
+  assert r.store.punches(bob) == []  # a closed shift from before the week stays on the server
+  assert (await r.clock.menu_info(ann)).state is not EmployeeState.OFF
 
 
 async def test_notification_inserts_another_clocks_punch(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
