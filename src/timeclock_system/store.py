@@ -392,7 +392,8 @@ class LocalStore:
       self._conn.executemany("DELETE FROM punches WHERE id = ?", doomed)
       corrections = self._conn.execute("DELETE FROM punch_corrections WHERE punch_id NOT IN (SELECT id FROM punches)").rowcount
       self._conn.execute(
-        "DELETE FROM fingerprint_bypasses WHERE punch_id NOT IN (SELECT id FROM punches) OR (punch_id IS NULL AND synced = 1 AND at < ?)",
+        "DELETE FROM fingerprint_bypasses WHERE (punch_id IS NOT NULL AND punch_id NOT IN (SELECT id FROM punches)) "
+        "OR (punch_id IS NULL AND synced = 1 AND at < ?)",
         (_iso(before),),
       )
     return len(doomed) + corrections
