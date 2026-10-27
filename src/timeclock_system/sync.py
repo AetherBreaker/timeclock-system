@@ -14,7 +14,6 @@ from uuid import UUID
 
 # Third party imports
 import psycopg
-from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Punch, PunchCorrection, RuleRow, Settings
 from timeclock_schema.wire import NOTIFY_CHANNEL, Notification
@@ -77,15 +76,6 @@ _INSERT_FINGERPRINT: Final = (
 
 _BACKOFF_START, _BACKOFF_MAX = 1.0, 60.0
 _PING_AFTER_SECS = 30.0
-# Keepalives find a dead tunnel in about a minute (§6.6); connect_timeout keeps a connect into one from hanging on
-# the kernel's SYN retries instead.
-_CONNECT_OPTIONS: Final = {
-  "keepalives": 1,
-  "keepalives_idle": 30,
-  "keepalives_interval": 10,
-  "keepalives_count": 3,
-  "connect_timeout": 10,
-}
 _LAST_CONTACT_KEY: Final = "last_contact"
 
 
@@ -109,12 +99,12 @@ class DatabaseSync:
     Args:
       clock: Told which tables changed after every catch-up and notification.
       store: The local store it mirrors into and pushes from.
-      conninfo: libpq connection string for the backend's relay.
+      conninfo: libpq connection string for the backend's relay, with its keepalives (`ClockSettings.conninfo`).
       now: The wall clock, injectable for tests.
     """
     self._clock = clock
     self._store = store
-    self._conninfo = make_conninfo(conninfo, **_CONNECT_OPTIONS)
+    self._conninfo = conninfo
     self._now = now
     saved = store.get_meta(_LAST_CONTACT_KEY)  # one small read at startup, before the loop has work
     self._status = DbStatus(connected=False, last_contact=None if saved is None else datetime.fromisoformat(saved))
