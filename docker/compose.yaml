@@ -1,1 +1,45 @@
 services:
+
+  timeclock-system:
+    container_name: timeclock-system
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        GIT_REPO: https://github.com/AetherBreaker/timeclock-system.git
+        GIT_TAG: v0.1.0
+    restart: no
+    volumes:
+      - type: bind
+        source: /data/timeclock_system_files
+        target: /app/persisted_data
+    environment:
+      - HEARTBEAT_SLUG=timeclock-system
+      - ALERTS_EMAIL=info@sweetfiretobacco.com
+      - ALERTS_EMAIL_PWD=${ALERTS_EMAIL_PWD:?}
+      - ALERTS_RECIPIENTS=["jacob.ogden@sweetfiretobacco.com"]
+      - WG_PRIVATE_KEY=${WG_PRIVATE_KEY:?}
+      - WG_HUB_URL=${WG_HUB_URL:?}
+      - WG_HUB_REPO=${WG_HUB_REPO:?}
+      - WG_HUB_TOKEN=${WG_HUB_TOKEN:-}
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - coolify
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/devkit-container
+        - healthcheck
+        - --file
+        - /app/persisted_data/logs/heartbeat.txt
+        - --file
+        - /app/persisted_data/logs/wireguard-heartbeat.txt
+      start_period: 90s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  coolify:
+    external: true
