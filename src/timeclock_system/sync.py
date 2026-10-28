@@ -47,7 +47,7 @@ _SELECT: Final[dict[str, LiteralString]] = {
   ),
   "punches": "SELECT id, employee_id, kind, at, instance_id, automatic, received_at, db_login FROM punches",
   "punch_corrections": "SELECT id, punch_id, action, new_at, new_kind, note, recorded_at FROM punch_corrections",
-  "fingerprints": "SELECT id, employee_id, template, registered_at, instance_id, db_login FROM fingerprints",
+  "fingerprints": "SELECT id, employee_id, finger, template, registered_at, instance_id, db_login FROM fingerprints",
 }
 # Every employee's punches before the window with no clock-out at or after them: an open shift's tail, however old, so a
 # shift begun at another clock while this one was offline across Monday 00:00 still offers a clock-out (§6.6 step 3).
@@ -85,8 +85,14 @@ _INSERT_BYPASS: Final = (
 )
 _BYPASS_COLUMNS: Final[set[str]] = {"id", "punch_id", "employee_id", "manager_id", "pin_only", "at", "instance_id"}
 _INSERT_FINGERPRINT: Final = (
-  "INSERT INTO fingerprints (id, employee_id, template, registered_at, instance_id) "
-  "VALUES (%(id)s, %(employee_id)s, %(template)s, %(registered_at)s, %(instance_id)s) ON CONFLICT (id) DO NOTHING"
+  "INSERT INTO fingerprints (id, employee_id, finger, template, registered_at, instance_id) "
+  "VALUES (%(id)s, %(employee_id)s, %(finger)s, %(template)s, %(registered_at)s, %(instance_id)s) ON CONFLICT (id) DO NOTHING"
+)
+_DELETE_FINGERPRINT: Final = "DELETE FROM fingerprints WHERE id = %(id)s"  # zero rows (already gone) is fine
+_INSERT_FINGERPRINT_CHANGE: Final = (
+  "INSERT INTO fingerprint_changes (id, employee_id, finger, action, approved_by, pin_only, at, instance_id) "
+  "VALUES (%(id)s, %(employee_id)s, %(finger)s, %(action)s, %(approved_by)s, %(pin_only)s, %(at)s, %(instance_id)s) "
+  "ON CONFLICT (id) DO NOTHING"
 )
 
 _BACKOFF_START, _BACKOFF_MAX = 1.0, 60.0
@@ -275,8 +281,52 @@ class DatabaseSync:
     if accepted:
       self._clock.notify_changed({"employees"})
 
+  async def _push_fingerprints(self, conn: AsyncConnection[DictRow]) -> None:
+    """Push removals, then prints, then the change log; split out of `_push` for C901.
+
+    Removals go first, so a finger removed and registered again while offline frees its one-per-finger slot before the
+    new print lands. A re-register deletes the old print in the new one's transaction, for the same reason.
+    """
+    for fid in await asyncio.to_thread(self._store.pending_removals):
+      await conn.execute(_DELETE_FINGERPRINT, {"id": fid})
+      await asyncio.to_thread(self._store.mark_removal_synced, fid)
+    for f, replaces in await asyncio.to_thread(self._store.unsynced_fingerprints):
+      try:
+        async with conn.transaction():
+          if replaces is not None:
+            await conn.execute(_DELETE_FINGERPRINT, {"id": replaces})
+          await conn.execute(
+            _INSERT_FINGERPRINT,
+            {
+              "id": f.id,
+              "employee_id": f.employee_id,
+              "finger": f.finger.value,
+              "template": f.template.get_secret_value(),
+              "registered_at": f.registered_at,
+              "instance_id": f.instance_id,
+            },
+          )
+      except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as e:
+        self._refused_record("fingerprint", f.id, f"employee {f.employee_id}, {f.finger.value}", e)
+        continue
+      await asyncio.to_thread(self._store.mark_fingerprint_synced, f.id)
+    for c in await asyncio.to_thread(self._store.unsynced_fingerprint_changes):
+      try:
+        await conn.execute(
+          _INSERT_FINGERPRINT_CHANGE,
+          {
+            **c.model_dump(include={"id", "employee_id", "approved_by", "pin_only", "at", "instance_id"}),
+            "finger": c.finger.value,
+            "action": c.action.value,
+          },
+        )
+      except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as e:
+        self._refused_record("fingerprint change", c.id, f"employee {c.employee_id}, {c.action.value} {c.finger.value}", e)
+        continue
+      await asyncio.to_thread(self._store.mark_fingerprint_change_synced, c.id)
+
   async def _push(self, conn: AsyncConnection[DictRow]) -> None:
-    """Push unsynced records (§6.6 step 4, R38): employees, punches, fingerprints, then PIN logins that punched nothing.
+    """Push unsynced records (§6.6 step 4, R38): employees, punches, then fingerprints, then PIN logins that punched nothing.
 
     Punches go oldest first, one transaction each with its bypass. A record the database refuses doesn't hold back the
     ones after it: it's alerted, kept unsynced and retried next push. The store holds back a pending employee's records,
@@ -302,22 +352,7 @@ class DatabaseSync:
         self._refused_record("punch", punch.id, f"employee {punch.employee_id}, {punch.kind.value} at {punch.at}", e)
         continue
       await asyncio.to_thread(self._store.mark_punch_synced, punch.id)
-    for f in await asyncio.to_thread(self._store.unsynced_fingerprints):
-      try:
-        await conn.execute(
-          _INSERT_FINGERPRINT,
-          {
-            "id": f.id,
-            "employee_id": f.employee_id,
-            "template": f.template.get_secret_value(),
-            "registered_at": f.registered_at,
-            "instance_id": f.instance_id,
-          },
-        )
-      except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as e:
-        self._refused_record("fingerprint", f.id, f"employee {f.employee_id}", e)
-        continue
-      await asyncio.to_thread(self._store.mark_fingerprint_synced, f.id)
+    await self._push_fingerprints(conn)
     for b in await asyncio.to_thread(self._store.unsynced_bypasses):
       try:
         await conn.execute(_INSERT_BYPASS, {**b.model_dump(include=_BYPASS_COLUMNS), "reason": b.reason.value})
