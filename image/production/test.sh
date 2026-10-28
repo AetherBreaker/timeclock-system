@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install the built ISO into a QEMU VM unattended (software emulation), boot the result, and check the configuration
-# over SSH. Only difference from a real install: the clock's name and number and the disk confirmations are answered on the
-# kernel command line. Mounts: /out (the ISO), /work, /keys/id (the workstation's private key).
+# over SSH, on one blank drive (test-raid.sh: two used ones). Only difference from a real install: the clock's name and
+# number are answered on the kernel command line. Mounts: /out (the ISO), /work, /keys/id (the workstation's private key).
 set -eu
 cd /work
 ISO=/out/$(ls /out | grep '^timeclock-debian-.*\.iso$' | head -n1)
@@ -15,8 +15,23 @@ echo "== install ($(date -u +%H:%M))"
 timeout 5h qemu-system-x86_64 -m 2048 -smp 2 -accel tcg -nographic -no-reboot \
   -drive file=vm/disk.qcow2,if=virtio -cdrom "$ISO" \
   -kernel vm/vmlinuz -initrd vm/initrd.gz \
-  -append "auto=true priority=critical partman/confirm=true partman/confirm_nooverwrite=true timeclock/instance-id=test timeclock/clock-number=98 console=ttyS0,115200n8" \
-  -netdev user,id=n0 -device virtio-net-pci,netdev=n0 > vm/install.log 2>&1 || true
+  -append "auto=true priority=critical timeclock/instance-id=test timeclock/clock-number=98 console=ttyS0,115200n8" \
+  -netdev user,id=n0 -device virtio-net-pci,netdev=n0 > vm/install.log 2>&1 &
+QEMU=$!
+# Nothing may be asked: a screen with a dialog's buttons and no output for 5 minutes is a prompt, so stop there.
+size=0 still=0
+while kill -0 $QEMU 2>/dev/null; do
+  sleep 60
+  now=$(stat -c %s vm/install.log)
+  if [ "$now" = "$size" ]; then still=$((still + 1)); else still=0; fi
+  size=$now
+  [ $still -ge 5 ] || continue
+  screen=$(tail -c 3000 vm/install.log | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tr -cd '\12\40-\176')
+  if echo "$screen" | grep -qE '<(Yes|No|Continue|Go Back)>'; then
+    echo "== stopped at a prompt:"; echo "$screen"; kill $QEMU; exit 1
+  fi
+done
+wait $QEMU || true
 echo "== install ended ($(date -u +%H:%M)); last lines:"
 tail -c 2000 vm/install.log | tr -cd '\11\12\15\40-\176' | tail -n 15
 

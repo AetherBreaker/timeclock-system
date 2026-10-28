@@ -49,7 +49,7 @@ chmod u+w build/x/*
 cat build/preseed.cpio.gz >> build/x/initrd.gz
 cat build/preseed.cpio.gz >> build/x/gtk-initrd.gz
 
-LABEL="Timeclock install (asks the clock's name and number, and before erasing the disk)"
+LABEL="Timeclock install (asks the clock's name and number, then erases the internal drives)"
 # UEFI (GRUB): our entry first and selected, with no timeout, so a stick left in can't reinstall.
 awk -v label="$LABEL" '
   !done && /^menuentry --hotkey=g / {

@@ -1,6 +1,8 @@
 Template: timeclock/instance-id
 Type: string
 Description: Clock name
+ Installing erases every internal drive in this computer.
+ .
  A short name for this clock's location, e.g. office: lowercase letters, digits and hyphens, starting with a
  letter or digit, at most 46 characters. It names the clock in alerts, logs and the database, and sets the
  hostname to timeclock-system-<name>. It can't be changed later.
