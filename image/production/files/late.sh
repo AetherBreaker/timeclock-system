@@ -84,7 +84,7 @@ if [ -d /sys/firmware/efi ] && [ -n "$own_esps" ]; then
     while read -r num partuuid; do
       case " $own_esps " in
         *" $(echo "$partuuid" | tr A-F a-f) "*) ;;
-        *) efibootmgr -q -b "$num" -B ;;
+        *) echo "late.sh: deleting firmware boot entry Boot$num (partition $partuuid)"; efibootmgr -q -b "$num" -B ;;
       esac
     done
 fi
