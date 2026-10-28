@@ -179,7 +179,8 @@ class _KioskPage:
 
   async def _on_key(self, e: KeyEventArguments) -> None:
     # R25: the keyboard reaches the same calls as the on-page pad.
-    if not e.action.keydown or e.action.repeat:
+    # A held key repeats only for Backspace, as in a text field; a held digit types once.
+    if not e.action.keydown or (e.action.repeat and e.key.name != "Backspace"):
       return
     # By code, so the numpad counts too, NumLock on or off (NiceGUI's key.number knows only the number row).
     if (digit := e.key.code.removeprefix("Digit").removeprefix("Numpad")).isdigit() and len(digit) == 1:

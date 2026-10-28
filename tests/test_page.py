@@ -269,3 +269,24 @@ async def test_the_page_keeps_focus_off_buttons(controller: KioskController, tmp
     client = await user.open("/")
     head = client._head_html  # pyright: ignore[reportPrivateUsage]
   assert page.NO_BUTTON_FOCUS in head
+
+
+async def press_held(keyboard: ui.keyboard, code: str, name: str, repeats: int) -> None:
+  # A held key: one keydown, then the browser's auto-repeat keydowns.
+  for repeat in [False] + [True] * repeats:
+    args = {"action": "keydown", "repeat": repeat, "altKey": False, "ctrlKey": False, "metaKey": False, "shiftKey": False}
+    event = GenericEventArguments(sender=keyboard, client=keyboard.client, args=args | {"key": name, "code": code, "location": 0})
+    keyboard._handle_key(event)  # pyright: ignore[reportPrivateUsage]
+    await asyncio.sleep(0.05)
+
+
+async def test_a_held_backspace_keeps_deleting(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    user.find(kind=ui.button, content=text.USE_PIN).click()
+    keyboard = next(iter(user.find(kind=ui.keyboard).elements))
+    for d in "123":
+      await press(keyboard, f"Digit{d}", d)
+    await user.should_see("123")
+    await press_held(keyboard, "Backspace", "Backspace", repeats=2)
+    await user.should_not_see("12")  # one delete would leave "12"; a held key clears all three

@@ -507,12 +507,15 @@ class KioskController:
         self._screen = PinEntry("username", "", SecretStr(""), PinRecheck(s.employee_id, s.kind), touched_at=now)
 
   async def digit(self, d: str) -> None:
-    """Type one digit on the number pad."""
+    """Type one digit on the number pad; on the idle screen, open the pad with it typed (walk up and type)."""
     async with self._transition():
       s = self._screen
-      if not (isinstance(s, PinEntry | NewPin) and len(d) == 1 and d.isdecimal() and d.isascii()):
+      if not (isinstance(s, Idle | PinEntry | NewPin) and len(d) == 1 and d.isdecimal() and d.isascii()):
         return
       now = self._mono()
+      if isinstance(s, Idle):
+        self._screen = PinEntry("username", d, SecretStr(""), None, touched_at=now)
+        return
       if isinstance(s, PinEntry) and s.field == "username":
         if len(s.username) < _MAX_DIGITS:
           self._screen = replace(s, username=s.username + d, touched_at=now, error=None)
