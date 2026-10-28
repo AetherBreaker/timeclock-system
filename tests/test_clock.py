@@ -49,7 +49,8 @@ def make_employee(
 ) -> Employee:
   return Employee(
     id=employee_id,
-    name=f"Emp {employee_id}",
+    first_name="Emp",
+    last_name=str(employee_id),
     pin_username=username or str(10 + employee_id),
     pin_hash=SecretStr(HASH),
     role=role,
@@ -381,7 +382,7 @@ def test_gallery_print_repr_hides_the_template() -> None:
   assert "SECRETBYTES" not in repr(GalleryPrint(uuid4(), 1, b"SECRETBYTES"))
 
 
-NEW = NewEmployee("New Hire", "+15551234567", "new@example.com", EmployeeRole.EMPLOYEE, 1)
+NEW = NewEmployee("New", None, "Hire", "+15551234567", "new@example.com", EmployeeRole.EMPLOYEE, 1)
 
 
 @pytest.mark.parametrize(

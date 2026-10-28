@@ -107,11 +107,23 @@ async def kiosk(tmp_path: Path) -> AsyncIterator[Kiosk]:
   store.replace_table(
     "employees",
     [
-      Employee(id=ANN, name="Ann", pin_username=PINS[ANN], pin_hash=pin_hash, updated_at=START),
-      Employee(id=BOB, name="Bob", pin_username=PINS[BOB], pin_hash=pin_hash, updated_at=START),
-      Employee(id=MIA, name="Mia", pin_username=PINS[MIA], pin_hash=pin_hash, role=EmployeeRole.MANAGER, updated_at=START),
-      Employee(id=ADA, name="Ada", pin_username=PINS[ADA], pin_hash=pin_hash, role=EmployeeRole.ADMIN, updated_at=START),
-      Employee(id=EVE, name="Eve", pin_username=PINS[EVE], pin_hash=pin_hash, fingerprint_exempt=True, updated_at=START),
+      Employee(id=ANN, first_name="Ann", last_name="Lee", pin_username=PINS[ANN], pin_hash=pin_hash, updated_at=START),
+      Employee(id=BOB, first_name="Bob", last_name="Lee", pin_username=PINS[BOB], pin_hash=pin_hash, updated_at=START),
+      Employee(
+        id=MIA,
+        first_name="Mia",
+        last_name="Lee",
+        pin_username=PINS[MIA],
+        pin_hash=pin_hash,
+        role=EmployeeRole.MANAGER,
+        updated_at=START,
+      ),
+      Employee(
+        id=ADA, first_name="Ada", last_name="Lee", pin_username=PINS[ADA], pin_hash=pin_hash, role=EmployeeRole.ADMIN, updated_at=START
+      ),
+      Employee(
+        id=EVE, first_name="Eve", last_name="Lee", pin_username=PINS[EVE], pin_hash=pin_hash, fingerprint_exempt=True, updated_at=START
+      ),
     ],
   )
   store.replace_table("groups", [Group(id=1, name="default")])
@@ -155,7 +167,7 @@ async def test_match_opens_the_menu(kiosk: Kiosk) -> None:
   await kiosk.ctl.on_scanner_event(matched(ANN))
   screen = kiosk.ctl.screen
   assert isinstance(screen, Menu)
-  assert screen.info.name == "Ann"
+  assert screen.info.name == "Ann Lee"
   assert screen.auth is None
   assert screen.info.valid_next == (PunchKind.CLOCK_IN,)
 
@@ -573,12 +585,23 @@ async def test_the_details_form_shows_each_error_beside_its_field(kiosk: Kiosk) 
   form = kiosk.ctl.screen
   assert isinstance(form, AddEmployeeDetails) and form.groups == ((1, "default"),)
   await kiosk.ctl.submit_details()
-  assert dict(cast("AddEmployeeDetails", kiosk.ctl.screen).errors) == {"name": text.NAME_REQUIRED}
-  for name, value in (("name", "  "), ("phone", "555-1234"), ("email", "zed@example"), ("role", "admin"), ("group_id", "9")):
+  assert dict(cast("AddEmployeeDetails", kiosk.ctl.screen).errors) == {
+    "first_name": text.FIRST_NAME_REQUIRED,
+    "last_name": text.LAST_NAME_REQUIRED,
+  }
+  for name, value in (
+    ("first_name", "  "),
+    ("last_name", " "),
+    ("phone", "555-1234"),
+    ("email", "zed@example"),
+    ("role", "admin"),
+    ("group_id", "9"),
+  ):
     await kiosk.ctl.edit_details(cast("DetailsField", name), value)
   await kiosk.ctl.submit_details()
   assert dict(cast("AddEmployeeDetails", kiosk.ctl.screen).errors) == {
-    "name": text.NAME_REQUIRED,
+    "first_name": text.FIRST_NAME_REQUIRED,
+    "last_name": text.LAST_NAME_REQUIRED,
     "phone": text.PHONE_INVALID,
     "email": text.EMAIL_INVALID,
     "role": text.ROLE_INVALID,
@@ -592,10 +615,10 @@ async def test_typing_in_the_form_doesnt_count_as_a_screen_change(kiosk: Kiosk) 
   kiosk.ctl.add_listener(lambda: changes.append(None))
   before = kiosk.ctl.screen
   kiosk.t.advance(100)
-  await kiosk.ctl.edit_details("name", "Zed")
+  await kiosk.ctl.edit_details("first_name", "Zed")
   assert kiosk.ctl.screen == before and changes == []
   form = kiosk.ctl.screen
-  assert isinstance(form, AddEmployeeDetails) and form.name == "Zed"
+  assert isinstance(form, AddEmployeeDetails) and form.first_name == "Zed"
   kiosk.t.advance(100)  # typing keeps the form open past two minutes from its start
   await kiosk.ctl.tick()
   assert isinstance(kiosk.ctl.screen, AddEmployeeDetails)
@@ -603,7 +626,14 @@ async def test_typing_in_the_form_doesnt_count_as_a_screen_change(kiosk: Kiosk) 
 
 async def fill_details(kiosk: Kiosk, *, role: str = "manager") -> None:
   await admin_menu(kiosk)
-  for name, value in (("name", " Zed New "), ("phone", "(555) 123-4567"), ("email", "zed@example.com"), ("role", role)):
+  for name, value in (
+    ("first_name", " Zed "),
+    ("middle_name", " Q "),
+    ("last_name", " New "),
+    ("phone", "(555) 123-4567"),
+    ("email", "zed@example.com"),
+    ("role", role),
+  ):
     await kiosk.ctl.edit_details(cast("DetailsField", name), value)
   await kiosk.ctl.submit_details()
 
@@ -611,7 +641,9 @@ async def fill_details(kiosk: Kiosk, *, role: str = "manager") -> None:
 async def test_add_an_employee_end_to_end(kiosk: Kiosk) -> None:
   await fill_details(kiosk)
   pin = kiosk.ctl.screen
-  assert isinstance(pin, NewPin) and pin.details == NewEmployee("Zed New", "+15551234567", "zed@example.com", EmployeeRole.MANAGER, 1)
+  assert isinstance(pin, NewPin) and pin.details == NewEmployee(
+    "Zed", "Q", "New", "+15551234567", "zed@example.com", EmployeeRole.MANAGER, 1
+  )
   assert kiosk.store.pending_employees() == []  # nothing is saved before the PIN
   await kiosk.type_and_enter("2468")
   await kiosk.type_and_enter("1357")

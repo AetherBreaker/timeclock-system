@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # Explicit column lists: a list keeps `extra="ignore"` meaningful (a newer schema's columns don't reach an older clock).
 _SELECT: Final[dict[str, LiteralString]] = {
   "employees": (
-    "SELECT id, name, pin_username, pin_hash, role, active, group_id, phone, email, fingerprint_exempt, updated_at FROM employees"
+    "SELECT id, first_name, middle_name, last_name, pin_username, pin_hash, role, active, group_id, phone, email, fingerprint_exempt, updated_at FROM employees"
   ),
   "groups": "SELECT id, name FROM groups",
   "rules": "SELECT id, kind, params, group_id, employee_id, on_violation, updated_at FROM rules",
@@ -71,8 +71,8 @@ _CHANGE_NAME: Final[dict[str, ChangeTable]] = {
 # Never name db_login, received_at or automatic: the clocks' column grants refuse them. An employee's insert has no ON
 # CONFLICT: a taken number or username is a refusal (§6.6), and a lost acknowledgement is settled at catch-up instead.
 _INSERT_EMPLOYEE: Final = (
-  "INSERT INTO employees (id, name, pin_username, pin_hash, role, group_id, phone, email) "
-  "VALUES (%(id)s, %(name)s, %(pin_username)s, %(pin_hash)s, %(role)s::employee_role, %(group_id)s, %(phone)s, %(email)s)"
+  "INSERT INTO employees (id, first_name, middle_name, last_name, pin_username, pin_hash, role, group_id, phone, email) "
+  "VALUES (%(id)s, %(first_name)s, %(middle_name)s, %(last_name)s, %(pin_username)s, %(pin_hash)s, %(role)s::employee_role, %(group_id)s, %(phone)s, %(email)s)"
 )
 _INSERT_PUNCH: Final = (
   "INSERT INTO punches (id, employee_id, kind, at, instance_id) "
@@ -262,13 +262,13 @@ class DatabaseSync:
         await conn.execute(
           _INSERT_EMPLOYEE,
           {
-            **e.model_dump(include={"id", "name", "pin_username", "group_id", "phone", "email"}),
+            **e.model_dump(include={"id", "first_name", "middle_name", "last_name", "pin_username", "group_id", "phone", "email"}),
             "role": e.role.value,
             "pin_hash": e.pin_hash.get_secret_value(),
           },
         )
       except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as err:
-        self._refused_record("employee", e.id, f"{e.name}, username {e.pin_username}", err)
+        self._refused_record("employee", e.id, f"{e.display_name}, username {e.pin_username}", err)
         continue
       await asyncio.to_thread(self._store.accept_employee, e)
       accepted = True

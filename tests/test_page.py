@@ -51,8 +51,8 @@ async def controller(tmp_path: Path) -> AsyncIterator[KioskController]:
   store.replace_table(
     "employees",
     [
-      Employee(id=1, name="Ann", pin_username="12", pin_hash=pin_hash, updated_at=NOW),
-      Employee(id=2, name="Ada", pin_username="34", pin_hash=pin_hash, role=EmployeeRole.ADMIN, updated_at=NOW),
+      Employee(id=1, first_name="Ann", last_name="Lee", pin_username="12", pin_hash=pin_hash, updated_at=NOW),
+      Employee(id=2, first_name="Ada", last_name="Lee", pin_username="34", pin_hash=pin_hash, role=EmployeeRole.ADMIN, updated_at=NOW),
     ],
   )
   store.replace_table("groups", [Group(id=1, name="default")])
@@ -206,7 +206,7 @@ async def test_the_admin_button_is_only_on_an_admins_menu(controller: KioskContr
     await ctl.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
     await user.should_see(text.ADMIN_MENU)
     user.find(kind=ui.button, content=text.ADD_EMPLOYEE).click()
-    await user.should_see(marker="field-name")
+    await user.should_see(marker="field-first_name")
 
 
 async def test_typed_form_text_survives_a_finger_touch_and_errors(controller: KioskController, tmp_path: Path) -> None:
@@ -217,7 +217,7 @@ async def test_typed_form_text_survives_a_finger_touch_and_errors(controller: Ki
     await ctl.admin()
     await ctl.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
     await ctl.add_employee()
-    await user.should_see(marker="field-name")
+    await user.should_see(marker="field-first_name")
     user.find(marker="field-phone").type("555-12")
     for _ in range(50):
       if getattr(ctl.screen, "phone", "") == "555-12":
@@ -228,7 +228,7 @@ async def test_typed_form_text_survives_a_finger_touch_and_errors(controller: Ki
     await user.should_see(marker="reader-scanning")
     assert next(iter(user.find(marker="field-phone").elements)) is phone
     user.find(kind=ui.button, content=text.NEXT).click()
-    await user.should_see(text.NAME_REQUIRED)
+    await user.should_see(text.FIRST_NAME_REQUIRED)
     await user.should_see(text.PHONE_INVALID)
     redrawn = next(iter(user.find(marker="field-phone").elements))
     assert cast("ui.input", redrawn).value == "555-12"  # the redraw keeps what was typed

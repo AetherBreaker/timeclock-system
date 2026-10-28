@@ -85,12 +85,14 @@ async def admin_execute(pg: Pg, query: LiteralString, params: dict[str, Any] | N
     return await cur.fetchall() if cur.description else []
 
 
-async def seed_employee(pg: Pg, name: str = "Ann", *, pin_username: str = "1001", role: EmployeeRole = EmployeeRole.EMPLOYEE) -> int:
+async def seed_employee(
+  pg: Pg, first_name: str = "Ann", *, pin_username: str = "1001", role: EmployeeRole = EmployeeRole.EMPLOYEE
+) -> int:
   rows = await admin_execute(
     pg,
-    "INSERT INTO employees (name, pin_username, pin_hash, role) VALUES (%(n)s, %(u)s, crypt('1234', gen_salt('bf')), %(r)s::employee_role) "
+    "INSERT INTO employees (first_name, last_name, pin_username, pin_hash, role) VALUES (%(n)s, 'Lee', %(u)s, crypt('1234', gen_salt('bf')), %(r)s::employee_role) "
     "RETURNING id",
-    {"n": name, "u": pin_username, "r": role.value},
+    {"n": first_name, "u": pin_username, "r": role.value},
   )
   return rows[0][0]
 
@@ -166,7 +168,7 @@ async def test_catch_up_mirrors_employees_and_settings(pg: Pg, rig: Callable[[],
   r = await rig()
   employee = r.clock.employee(ann)
   assert employee is not None
-  assert employee.name == "Ann"
+  assert employee.display_name == "Ann Lee"
   assert employee.role is EmployeeRole.ADMIN
   assert r.clock.settings().breaks_enabled is False
   assert r.clock.settings().lunches_enabled is False
@@ -341,7 +343,9 @@ def added_here(employee_id: int = 10001, pin_hash: str = NEW_HASH) -> Employee:
   """An employee this clock added (§6.4), as the store holds it until the database accepts it."""
   return Employee(
     id=employee_id,
-    name="New",
+    first_name="New",
+    middle_name="Q",
+    last_name="Hire",
     pin_username=str(employee_id),
     pin_hash=SecretStr(pin_hash),
     role=EmployeeRole.MANAGER,
@@ -369,8 +373,10 @@ async def test_an_employee_added_here_goes_first_then_its_punch(pg: Pg, rig: Cal
   prefill(tmp_path / "clock.sqlite3", new, punches=(punch,))
   r = await rig()
   await eventually(lambda: r.store.unsynced_punches() == [], "the punch to be pushed")
-  rows = await admin_execute(pg, "SELECT id, name, role::text, phone, email, fingerprint_exempt FROM employees")
-  assert rows == [(new.id, "New", "manager", "+15551234567", "new@example.com", False)]
+  rows = await admin_execute(
+    pg, "SELECT id, first_name, middle_name, last_name, role::text, phone, email, fingerprint_exempt FROM employees"
+  )
+  assert rows == [(new.id, "New", "Q", "Hire", "manager", "+15551234567", "new@example.com", False)]
   assert await admin_execute(pg, "SELECT employee_id FROM punches") == [(new.id,)]
   assert r.store.pending_employees() == []
   assert r.alerts == []
@@ -378,7 +384,7 @@ async def test_an_employee_added_here_goes_first_then_its_punch(pg: Pg, rig: Cal
 
 async def test_add_employee_on_a_connected_clock_is_pushed(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
   r = await rig()
-  e = await r.clock.add_employee(NewEmployee("Ann", None, None, EmployeeRole.EMPLOYEE, 1), SecretStr("1234"))
+  e = await r.clock.add_employee(NewEmployee("Ann", None, "Lee", None, None, EmployeeRole.EMPLOYEE, 1), SecretStr("1234"))
   assert e.id == 10001  # noqa: PLR2004  # clock 1's block
   r.sync.wake()  # the app wires every new record to this
   await eventually(lambda: r.store.pending_employees() == [], "the employee to be accepted")
@@ -390,7 +396,8 @@ async def test_add_employee_on_a_connected_clock_is_pushed(pg: Pg, rig: Callable
 async def test_a_refused_employee_and_its_punch_stay_here(pg: Pg, rig: Callable[[], Awaitable[Rig]], tmp_path: Path) -> None:
   # The owner hand-added someone else with the number while the clock was offline.
   await admin_execute(
-    pg, "INSERT INTO employees (id, name, pin_username, pin_hash) VALUES (10001, 'Other', '777', crypt('1', gen_salt('bf')))"
+    pg,
+    "INSERT INTO employees (id, first_name, last_name, pin_username, pin_hash) VALUES (10001, 'Other', 'One', '777', crypt('1', gen_salt('bf')))",
   )
   new = added_here()
   punch = local_punch(new.id)
@@ -405,7 +412,7 @@ async def test_a_refused_employee_and_its_punch_stay_here(pg: Pg, rig: Callable[
   assert [p.id for p in r.store.punches(new.id)] == [punch.id]
   assert await admin_execute(pg, "SELECT count(*) FROM punches") == [(0,)]
   held = r.clock.employee(new.id)
-  assert held is not None and held.name == "New"  # this clock keeps the number for its own employee
+  assert held is not None and held.first_name == "New"  # this clock keeps the number for its own employee
 
 
 async def test_a_lost_acknowledgement_settles_at_catch_up(pg: Pg, rig: Callable[[], Awaitable[Rig]], tmp_path: Path) -> None:
@@ -413,7 +420,7 @@ async def test_a_lost_acknowledgement_settles_at_catch_up(pg: Pg, rig: Callable[
   new = added_here()
   await admin_execute(
     pg,
-    "INSERT INTO employees (id, name, pin_username, pin_hash, role) VALUES (%(id)s, 'New', %(u)s, %(h)s, 'manager')",
+    "INSERT INTO employees (id, first_name, middle_name, last_name, pin_username, pin_hash, role) VALUES (%(id)s, 'New', 'Q', 'Hire', %(u)s, %(h)s, 'manager')",
     {"id": new.id, "u": new.pin_username, "h": NEW_HASH},
   )
   prefill(tmp_path / "clock.sqlite3", new)

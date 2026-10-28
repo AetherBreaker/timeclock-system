@@ -310,10 +310,10 @@ class _KioskPage:
       case AddEmployeeDetails():
         self._details_form(s)
       case NewPin():
-        title = text.NEW_PIN.format(name=s.details.name) if s.field == "first" else text.CONFIRM_NEW_PIN
+        title = text.NEW_PIN.format(name=s.details.display_name) if s.field == "first" else text.CONFIRM_NEW_PIN
         self._pin_pad(title, "•" * len(s.pin.get_secret_value()), s.error)
       case NewFingerprint():
-        ui.label(text.NEW_FINGERPRINT.format(name=s.employee.name)).classes("sft-title")
+        ui.label(text.NEW_FINGERPRINT.format(name=s.employee.display_name)).classes("sft-title")
         if s.message:
           ui.label(s.message).classes("sft-error")
         with ui.row():
@@ -334,7 +334,9 @@ class _KioskPage:
     ui.label(text.ADD_EMPLOYEE).classes("sft-title")
     with ui.column().classes("w-[32rem] max-w-full gap-1"):
       texts: tuple[tuple[DetailsField, str, str], ...] = (
-        ("name", text.FIELD_NAME, s.name),
+        ("first_name", text.FIELD_FIRST_NAME, s.first_name),
+        ("middle_name", text.FIELD_MIDDLE_NAME, s.middle_name),
+        ("last_name", text.FIELD_LAST_NAME, s.last_name),
         ("phone", text.FIELD_PHONE, s.phone),
         ("email", text.FIELD_EMAIL, s.email),
       )
