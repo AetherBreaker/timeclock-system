@@ -1,6 +1,7 @@
 # Setting up a production clock
 
-Two steps per clock: install from the production image, then run `new_clock.py` from the workstation. The image is
+Three steps per clock: install from the production image, enrol it in wireguard-hub by hand, then run `new_clock.py`
+from the workstation. The image is
 built from [`image/production/`](../image/production/), which shares the test device's setup ([dev-device-setup.md](dev-device-setup.md));
 the BIOS settings and the disk prompts are the same.
 
@@ -29,19 +30,27 @@ In Coolify, **Keys & Tokens → API tokens**, create one with **root** permissio
 2. **BIOS** as for the test device (dev-device-setup.md, 2).
 3. **Install:** wired network plugged in; boot the stick (F9); **Timeclock install** is selected, press Enter. Enter the
    clock name and number; answer **Yes** at the disk prompts (dev-device-setup.md, 3.4). Remove the stick when it reboots.
-4. **From the workstation**, in this repository:
+4. **Enrol it in wireguard-hub, by hand** (never from a script, since it ends in a release), in the wireguard-hub
+   checkout:
+   - a key pair; the private key, base64, in `timeclock-system-<name>.key` (gitignored);
+   - a `[[peers]]` row in `src/wireguard_hub/peers.toml` with the next address (the README lists the taken ones; update
+     its list and the file's comment);
+   - two forwards in `src/wireguard_hub/rules.v4`, copying timeclock-dev's: to the central log server on 9020 and to
+     timeclock-backend on 5432;
+   - commit, push, `poe release-and-pin patch Enrol timeclock-system-<name>`, and deploy wireguard-hub in Coolify.
+5. **From the workstation**, in this repository:
 
    ```powershell
    uv run image/production/new_clock.py timeclock-system-<name>.local
    ```
 
-   It enrols the clock in the WireGuard hub (and releases the hub), opens its Coolify tunnel (and redeploys
+   It checks the hub enrolment against the pinned release (the row, its key, both forwards), opens its Coolify tunnel (and redeploys
    coolify-tunnel), adds and validates the Coolify server, creates its database login, then creates the Coolify
-   application with every variable filled in and deploys it. It takes about half an hour, mostly the hub release and
+   application with every variable filled in and deploys it. It takes up to twenty minutes, mostly
    Coolify's validation. If a step fails, fix the cause and run it again: done steps are skipped.
 
    The variables stay editable in the application's settings in Coolify.
-5. **Wifi, if the clock won't stay wired:** over SSH while still wired,
+6. **Wifi, if the clock won't stay wired:** over SSH while still wired,
    `sudo nmcli dev wifi connect "<network>" password "<password>"`, then unplug the cable. It reconnects after every
    reboot. Wired stays the better choice for a clock.
 
