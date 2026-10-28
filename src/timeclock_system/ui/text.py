@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 # Third party imports
-from timeclock_schema.enums import PunchKind
+from timeclock_schema.enums import Finger, PunchKind
 from timeclock_schema.shifts import EmployeeState
 
 if TYPE_CHECKING:
@@ -35,7 +35,7 @@ SCAN_YOUR_FINGER: Final = "Scan your finger"
 NOT_YOUR_FINGER: Final = "That fingerprint doesn't match. Try again."
 REGISTER_PROMPT: Final = "Register your fingerprint"
 REGISTER: Final = "Register"
-REGISTERING: Final = "Press your finger on the reader ({done} of {total})"
+REGISTERING: Final = "Press your {finger} on the reader ({done} of {total})"  # the finger label, lower-cased
 REGISTRATION_TIMED_OUT: Final = "Registration timed out"
 REGISTRATION_FAILED: Final = "Registration failed, try again"
 RESCAN: Final = "Scan your finger to confirm"
@@ -44,6 +44,42 @@ NOT_A_MANAGER: Final = "A manager must authorize this"
 NOT_AN_ADMIN: Final = "An admin must approve this"
 FINGERPRINT_SAVED: Final = "Fingerprint saved"
 FINGERPRINT_REMOVED: Final = "Fingerprint removed"
+FINGERPRINTS: Final = "Fingerprints"
+FINGERPRINT_ACTIONS: Final = "{name}'s fingerprints"
+REREGISTER_FINGER: Final = "Re-register a finger"
+ADD_FINGER: Final = "Add a finger"
+REMOVE_FINGER: Final = "Remove a finger"
+APPROVE_HOW: Final = "An admin scans their finger, or uses their PIN"
+FINGER_LABELS: Final[Mapping[Finger, str]] = MappingProxyType(
+  {
+    Finger.LEFT_THUMB: "Left thumb",
+    Finger.LEFT_INDEX: "Left index",
+    Finger.LEFT_MIDDLE: "Left middle",
+    Finger.LEFT_RING: "Left ring",
+    Finger.LEFT_LITTLE: "Left little",
+    Finger.RIGHT_THUMB: "Right thumb",
+    Finger.RIGHT_INDEX: "Right index",
+    Finger.RIGHT_MIDDLE: "Right middle",
+    Finger.RIGHT_RING: "Right ring",
+    Finger.RIGHT_LITTLE: "Right little",
+  }
+)
+# By the controller's FingerAction; None is a first registration.
+PICK_FINGER: Final[Mapping[str | None, str]] = MappingProxyType(
+  {
+    None: "Which finger will you register?",
+    "add": "Which finger to add?",
+    "replace": "Which finger to re-register?",
+    "remove": "Which finger to remove?",
+  }
+)
+APPROVE_CHANGE: Final[Mapping[str, str]] = MappingProxyType(  # {finger}: the label, lower-cased
+  {
+    "add": "Admin: approve adding {name}'s {finger} print",
+    "replace": "Admin: approve re-registering {name}'s {finger} print",
+    "remove": "Admin: approve removing {name}'s {finger} print",
+  }
+)
 MANAGER_OVERRIDE: Final = "Manager override"
 CANCEL: Final = "Cancel"
 NOT_YOUR_PIN: Final = "That isn't your PIN. Try again."

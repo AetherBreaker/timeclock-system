@@ -13,7 +13,7 @@ from nicegui import ui
 from nicegui.events import GenericEventArguments
 from nicegui.testing import user_simulation
 from pydantic import SecretBytes, SecretStr
-from timeclock_schema.enums import EmployeeRole, PunchKind
+from timeclock_schema.enums import EmployeeRole, Finger, PunchKind
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group
 
 # First party imports
@@ -53,13 +53,17 @@ async def controller(tmp_path: Path) -> AsyncIterator[KioskController]:
     [
       Employee(id=1, first_name="Ann", last_name="Lee", pin_username="12", pin_hash=pin_hash, updated_at=NOW),
       Employee(id=2, first_name="Ada", last_name="Lee", pin_username="34", pin_hash=pin_hash, role=EmployeeRole.ADMIN, updated_at=NOW),
+      Employee(id=3, first_name="Bob", last_name="Lee", pin_username="56", pin_hash=pin_hash, updated_at=NOW),
+      Employee(id=4, first_name="Cal", last_name="Lee", pin_username="78", pin_hash=pin_hash, updated_at=NOW),
     ],
   )
   store.replace_table("groups", [Group(id=1, name="default")])
   store.replace_table("business_hours", [BusinessHours(id=d, weekday=d, opens=time(0, 0), closes=time(23, 59)) for d in range(1, 8)])
-  for print_id, employee_id in ((ANN_PRINT, 1), (ADA_PRINT, 2)):
+  prints = [(ANN_PRINT, 1, Finger.LEFT_INDEX), (ADA_PRINT, 2, Finger.LEFT_INDEX), *((uuid4(), 4, f) for f in Finger)]  # Cal: all ten
+  for print_id, employee_id, finger in prints:
     store.insert_fingerprint(
-      Fingerprint(id=print_id, employee_id=employee_id, template=SecretBytes(b"t"), registered_at=NOW, instance_id="1"), origin="db"
+      Fingerprint(id=print_id, employee_id=employee_id, finger=finger, template=SecretBytes(b"t"), registered_at=NOW, instance_id="1"),
+      origin="db",
     )
   clock = Clock(store, instance_id="1", clock_number=1, tz=NY, alert=lambda _s, _b: None)
   await clock.load()
@@ -299,3 +303,87 @@ async def test_the_version_shows_in_the_corner(controller: KioskController, tmp_
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")
     await user.should_see(f"v{version('timeclock-system')}")
+
+
+async def fingerprints_as(controller: KioskController, username: str) -> None:
+  await controller.gear()
+  await controller.open_fingerprints()
+  for typed in (username, "1234"):
+    for d in typed:
+      await controller.digit(d)
+    await controller.enter()
+
+
+async def test_gear_shows_on_idle_and_menu_only(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await user.should_see(marker="gear")
+    user.find(marker="gear").click()
+    await user.should_see(text.FINGERPRINTS)
+    await user.should_see(text.CANCEL)
+    await user.should_not_see(marker="gear")
+    await controller.cancel()
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("Clock in")
+    await user.should_see(marker="gear")
+    await controller.cancel()
+    await controller.use_pin()
+    await user.should_see(text.ENTER_USERNAME)
+    await user.should_not_see(marker="gear")
+
+
+async def test_version_sits_right_of_the_gear(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    [gear] = user.find(marker="gear").elements
+    [label] = user.find(marker="version").elements
+    assert {"fixed", "top-2", "left-4", "z-20"} <= set(gear.classes)
+    assert {"fixed", "left-16"} <= set(label.classes)
+
+
+@pytest.mark.parametrize(
+  ("username", "offered", "absent"),
+  [
+    ("56", [text.ADD_FINGER], [text.REREGISTER_FINGER, text.REMOVE_FINGER]),
+    ("12", [text.REREGISTER_FINGER, text.ADD_FINGER, text.REMOVE_FINGER], []),
+    ("78", [text.REREGISTER_FINGER, text.REMOVE_FINGER], [text.ADD_FINGER]),
+  ],
+)
+async def test_fingerprint_actions_offer_only_what_applies(
+  controller: KioskController, tmp_path: Path, username: str, offered: list[str], absent: list[str]
+) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await fingerprints_as(controller, username)
+    await user.should_see(text.CANCEL)
+    for label in offered:
+      await user.should_see(kind=ui.button, content=label)
+    for label in absent:
+      await user.should_not_see(kind=ui.button, content=label)
+
+
+async def test_finger_pick_shows_one_button_per_choice(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await fingerprints_as(controller, "12")
+    await user.should_see(kind=ui.button, content=text.ADD_FINGER)
+    user.find(kind=ui.button, content=text.ADD_FINGER).click()
+    await user.should_see(text.PICK_FINGER["add"])
+    for finger in Finger:
+      if finger is Finger.LEFT_INDEX:
+        await user.should_not_see(kind=ui.button, content=text.FINGER_LABELS[finger])
+      else:
+        await user.should_see(kind=ui.button, content=text.FINGER_LABELS[finger])
+
+
+async def test_approval_prompt_names_the_change(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await fingerprints_as(controller, "12")
+    await user.should_see(kind=ui.button, content=text.REMOVE_FINGER)
+    user.find(kind=ui.button, content=text.REMOVE_FINGER).click()
+    await user.should_see(kind=ui.button, content="Left index")
+    user.find(kind=ui.button, content="Left index").click()
+    await user.should_see("Admin: approve removing Ann Lee's left index print")
+    await user.should_see(text.APPROVE_HOW)
+    await user.should_see(kind=ui.button, content=text.USE_PIN)
