@@ -59,11 +59,13 @@ install -m 644 "$S/90-sync-esp" /etc/apt/apt.conf.d/90-sync-esp
 install -m 644 "$S/52timeclock-unattended" /etc/apt/apt.conf.d/52timeclock-unattended
 root_dev=$(findmnt -no SOURCE /)
 main_esp=$(findmnt -no SOURCE /boot/efi || true)
+own_esps=$([ -z "$main_esp" ] || blkid -s PARTUUID -o value "$main_esp")
 case "$root_dev" in /dev/md*)
   for member in $(mdadm --detail "$root_dev" | awk '/active sync/ {print $NF}'); do
     esp=${member%3}1
     [ "$esp" = "$main_esp" ] && continue
     [ "$(blkid -s TYPE -o value "$esp" || true)" = vfat ] || mkfs.vfat -F 32 -n EFI2 "$esp"
+    own_esps="$own_esps $(blkid -s PARTUUID -o value "$esp")"
     printf 'UUID=%s /boot/efi2 vfat umask=0077,nofail 0 1\n' "$(blkid -s UUID -o value "$esp")" >> /etc/fstab
     install -d /boot/efi2
     mount "$esp" /boot/efi2
@@ -72,12 +74,18 @@ case "$root_dev" in /dev/md*)
   done ;;
 esac
 
-# Drop "Windows Boot Manager" entries whose partition this install erased. HP firmware keeps
-# trying to restore a dead one (its "boot option restoration" loop) instead of booting Debian.
-if [ -d /sys/firmware/efi ]; then
-  efibootmgr -v | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\* Windows Boot Manager.*HD([0-9]*,GPT,\([0-9a-fA-F-]*\),.*/\1 \2/p' |
+# Drop firmware boot entries left by earlier systems (Windows, ubuntu, an older debian): any on a GPT partition other
+# than this install's EFI partitions. HP firmware keeps trying to restore a dead one (its "boot option restoration"
+# loop) instead of booting Debian. Firmware built-ins (VenMedia, BBS) and USB devices stay.
+if [ -d /sys/firmware/efi ] && [ -n "$own_esps" ]; then
+  own_esps=$(echo "$own_esps" | tr A-F a-f)
+  efibootmgr -v | grep -v 'USB(' |
+    sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\{0,1\} .*HD([0-9]*,GPT,\([0-9a-fA-F-]*\),.*/\1 \2/p' |
     while read -r num partuuid; do
-      blkid -t PARTUUID="$partuuid" >/dev/null 2>&1 || efibootmgr -q -b "$num" -B
+      case " $own_esps " in
+        *" $(echo "$partuuid" | tr A-F a-f) "*) ;;
+        *) efibootmgr -q -b "$num" -B ;;
+      esac
     done
 fi
 

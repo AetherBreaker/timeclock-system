@@ -29,12 +29,21 @@ d-i clock-setup/ntp boolean true
 
 # Every disk except the installer's own USB stick. Two or more: mirror the first two (an EFI
 # partition on each, RAID1 for swap and for /, per /timeclock-raid.recipe). One: a plain install.
+# The disks used are blanked first (head, and the tail's backup GPT): partman never formats an EFI partition that lands
+# on an old filesystem, so an old ESP's boot loaders (Windows) would survive into the new one, and os-prober and the
+# firmware would find them. Partman then sees empty disks: no old arrays or ESPs to ask about.
 d-i partman/early_command string \
   media=$(mount | sed -n 's|^/dev/\([a-z]*\)[0-9]* on /cdrom .*|\1|p'); \
   disks=""; \
   for d in $(list-devices disk); do [ "$d" = "/dev/$media" ] || disks="$disks $d"; done; \
   set -- $disks; \
-  if [ $# -ge 2 ]; then \
+  [ $# -le 2 ] || set -- $1 $2; \
+  for d in "$@"; do \
+    dd if=/dev/zero of=$d bs=1M count=16 2>/dev/null; \
+    dd if=/dev/zero of=$d bs=512 seek=$(($(cat /sys/block/${d#/dev/}/size) - 2048)) count=2048 2>/dev/null; \
+    sync; blockdev --rereadpt $d 2>/dev/null || true; \
+  done; \
+  if [ $# -eq 2 ]; then \
     p1=$1; p2=$2; \
     case $1 in *nvme*|*mmcblk*) p1=${1}p ;; esac; \
     case $2 in *nvme*|*mmcblk*) p2=${2}p ;; esac; \
@@ -51,7 +60,8 @@ d-i partman-lvm/device_remove_lvm boolean true
 d-i partman-md/device_remove_md boolean true
 d-i partman-partitioning/confirm_write_new_label boolean true
 d-i partman/choose_partition select finish
-# Write confirmations: confirm when an existing filesystem is lost, confirm_nooverwrite otherwise; partman-md's for RAID.
+# Write confirmations (confirm when an existing filesystem is lost, confirm_nooverwrite otherwise; partman-md's for
+# RAID), and the old-system questions, answered too in case blanking a disk failed.
 d-i partman/confirm boolean true
 d-i partman/confirm_nooverwrite boolean true
 d-i partman-md/confirm boolean true
@@ -75,6 +85,10 @@ d-i grub-installer/with_other_os boolean true
 d-i grub-installer/bootdev string default
 # Also install to \EFI\BOOT\BOOTX64.EFI, which firmware boots from any drive without a boot entry.
 d-i grub-installer/force-efi-extra-removable boolean true
+# No os-prober: no menu entries for other systems (a leftover loader on another disk), and /etc/default/grub doesn't
+# turn it on for later update-grub runs. grub-installer asks this at low priority, defaulting to yes when it finds one.
+d-i grub-installer/enable_os_prober_otheros_yes boolean false
+d-i grub-installer/enable_os_prober_otheros_no boolean false
 
 d-i preseed/late_command string \
   sh /timeclock-ask.sh save; \
