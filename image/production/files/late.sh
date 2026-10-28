@@ -61,6 +61,8 @@ root_dev=$(findmnt -no SOURCE /)
 main_esp=$(findmnt -no SOURCE /boot/efi || true)
 own_esps=$([ -z "$main_esp" ] || blkid -s PARTUUID -o value "$main_esp")
 case "$root_dev" in /dev/md*)
+  # /boot/efi is on the first drive; nofail so the second boots without it, not into emergency mode.
+  sed -i -E 's|^([^#[:space:]]+[[:space:]]+/boot/efi[[:space:]]+[^[:space:]]+[[:space:]]+)([^[:space:]]+)|\1\2,nofail|' /etc/fstab
   for member in $(mdadm --detail "$root_dev" | awk '/active sync/ {print $NF}'); do
     esp=${member%3}1
     [ "$esp" = "$main_esp" ] && continue

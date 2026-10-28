@@ -131,7 +131,7 @@ if boot_and_wait "$D1 $D2 $D3" c; then
     findmnt /boot/efi; findmnt /boot/efi2
     sudo find /boot/efi /boot/efi2 -type f
     sudo diff -r /boot/efi /boot/efi2 && echo "EFI partitions identical"
-    cat /etc/apt/apt.conf.d/90-sync-esp; grep efi2 /etc/fstab
+    cat /etc/apt/apt.conf.d/90-sync-esp; grep /boot/efi /etc/fstab
     sudo grep -A3 "os-prober call found" /var/log/installer/syslog
     grep -n OS_PROBER /etc/default/grub /etc/default/grub.d/* 2>&1
     sudo grep -c -iE "osprober|windows" /boot/grub/grub.cfg
@@ -147,7 +147,7 @@ fi
 
 echo "== C: second drive only ($(date -u +%H:%M))"
 if boot_and_wait "$D2" d; then
-  $SSH 'set -x; hostname; cat /proc/mdstat; findmnt /; sudo efibootmgr | head -n 3'
+  $SSH 'set -x; hostname; systemctl is-system-running; cat /proc/mdstat; findmnt /; findmnt /boot/efi2; sudo efibootmgr | head -n 3'
   $SSH 'sudo poweroff' 2>/dev/null; wait $QB 2>/dev/null
 fi
 echo "== done ($(date -u +%H:%M))"
