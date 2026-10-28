@@ -89,6 +89,9 @@ if (new URLSearchParams(location.search).has("kiosk")) {
 }
 </script>"""
 _NO_CONTEXT_MENU = '<script>document.addEventListener("contextmenu", e => e.preventDefault());</script>'
+# A tap focuses the button it lands on, and ui.keyboard drops every key while a button has focus (its `ignore`). Leaving
+# buttons in `ignore` and keeping focus off them also stops Enter from clicking whichever button was tapped last.
+NO_BUTTON_FOCUS = '<script>document.addEventListener("focusin", e => { if (e.target.closest("button")) e.target.blur(); });</script>'
 _PAD = ("1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "✓")
 
 
@@ -151,6 +154,7 @@ class _KioskPage:
     ui.add_css(_NO_SELECT_CSS)
     ui.add_head_html(KIOSK_CURSOR)
     ui.add_head_html(_NO_CONTEXT_MENU)
+    ui.add_head_html(NO_BUTTON_FOCUS)
     ui.keyboard(on_key=self._on_key)
 
     clock_label = ui.label().classes("fixed top-2 right-4 text-xl")
@@ -174,8 +178,9 @@ class _KioskPage:
     # R25: the keyboard reaches the same calls as the on-page pad.
     if not e.action.keydown or e.action.repeat:
       return
-    if e.key.number is not None:
-      await self._guarded(lambda: self._controller.digit(str(e.key.number)))
+    # By code, so the numpad counts too, NumLock on or off (NiceGUI's key.number knows only the number row).
+    if (digit := e.key.code.removeprefix("Digit").removeprefix("Numpad")).isdigit() and len(digit) == 1:
+      await self._guarded(lambda: self._controller.digit(digit))
     elif e.key.name == "Backspace":
       await self._guarded(self._controller.backspace)
     elif e.key.name == "Enter":
