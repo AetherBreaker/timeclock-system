@@ -9,8 +9,17 @@ from uuid import UUID, uuid4
 # Third party imports
 import pytest
 from pydantic import SecretBytes
-from timeclock_schema.enums import BypassReason, CorrectionAction, PunchKind
-from timeclock_schema.models import Employee, Fingerprint, FingerprintBypass, Group, Punch, PunchCorrection, Settings
+from timeclock_schema.enums import BypassReason, CorrectionAction, Finger, FingerprintChangeAction, PunchKind
+from timeclock_schema.models import (
+  Employee,
+  Fingerprint,
+  FingerprintBypass,
+  FingerprintChange,
+  Group,
+  Punch,
+  PunchCorrection,
+  Settings,
+)
 
 # First party imports
 from timeclock_system.store import LocalStore
@@ -62,8 +71,21 @@ def override(p: Punch) -> FingerprintBypass:
   )
 
 
-def fp(template: bytes = b"tmpl", fid: UUID | None = None) -> Fingerprint:
-  return Fingerprint(id=fid or uuid4(), employee_id=1, template=SecretBytes(template), registered_at=T, instance_id="clock-a")
+def fp(template: bytes = b"tmpl", fid: UUID | None = None, employee_id: int = 1) -> Fingerprint:
+  return Fingerprint(
+    id=fid or uuid4(),
+    employee_id=employee_id,
+    finger=Finger.LEFT_INDEX,
+    template=SecretBytes(template),
+    registered_at=T,
+    instance_id="clock-a",
+  )
+
+
+def change(employee_id: int = 1) -> FingerprintChange:
+  return FingerprintChange(
+    id=uuid4(), employee_id=employee_id, finger=Finger.LEFT_INDEX, action=FingerprintChangeAction.ADD, at=T, instance_id="clock-a"
+  )
 
 
 def origins(db_path: Path) -> dict[UUID, tuple[str, int]]:
@@ -228,7 +250,7 @@ def test_fingerprint_replace_rule(store: LocalStore) -> None:
   store.mark_fingerprint_synced(deleted.id)
   store.insert_fingerprint(unsynced, origin="local")
   store.insert_fingerprint(kept, origin="db")
-  assert store.unsynced_fingerprints() == [unsynced]
+  assert store.unsynced_fingerprints() == [(unsynced, None)]
   store.replace_db_fingerprints([kept])
   assert {f.id for f in store.fingerprints()} == {unsynced.id, kept.id}
   store.upsert_db_fingerprint(fp(b"new"))
@@ -353,3 +375,85 @@ def test_a_punch_and_its_bypass_sync_together(store: LocalStore, db_path: Path) 
   store.insert_punch(p, origin="local", bypass=override(p))
   store.mark_punch_synced(p.id)
   assert query(db_path, "SELECT synced FROM fingerprint_bypasses") == [(1,)]
+
+
+def test_removed_print_stays_gone_through_catch_up_and_notifications(store: LocalStore) -> None:
+  f = fp()
+  store.upsert_db_fingerprint(f)
+  store.remove_fingerprint(f.id)
+  store.replace_db_fingerprints([f])
+  store.upsert_db_fingerprint(f)
+  assert store.fingerprints() == []
+  assert store.pending_removals() == [f.id]
+  store.mark_removal_synced(f.id)
+  assert store.pending_removals() == []
+
+
+def test_removing_an_unsynced_print_queues_nothing(store: LocalStore) -> None:
+  f = fp()
+  store.insert_fingerprint(f, origin="local")
+  store.remove_fingerprint(f.id)
+  assert store.pending_removals() == []
+  assert store.unsynced_fingerprints() == []
+  assert store.fingerprints() == []
+
+
+def test_replacing_pairs_the_new_print_with_the_old(store: LocalStore, db_path: Path) -> None:
+  old, new = fp(b"old"), fp(b"new")
+  store.upsert_db_fingerprint(old)
+  store.insert_fingerprint(new, origin="local", replaces=old.id)
+  assert [f.id for f in store.fingerprints()] == [new.id]
+  assert [(f.id, r) for f, r in store.unsynced_fingerprints()] == [(new.id, old.id)]
+  assert store.pending_removals() == []
+  store.replace_db_fingerprints([old])  # a catch-up read before the push lands
+  assert [f.id for f in store.fingerprints()] == [new.id]
+  store.mark_fingerprint_synced(new.id)
+  assert store.unsynced_fingerprints() == []
+  assert query(db_path, "SELECT count(*) FROM fingerprint_removals") == [(0,)]
+
+
+def test_replacing_an_unsynced_replacement_still_removes_the_database_print(store: LocalStore) -> None:
+  a, b, c = fp(b"a"), fp(b"b"), fp(b"c")
+  store.upsert_db_fingerprint(a)
+  store.insert_fingerprint(b, origin="local", replaces=a.id)
+  store.insert_fingerprint(c, origin="local", replaces=b.id)
+  assert [(f.id, r) for f, r in store.unsynced_fingerprints()] == [(c.id, a.id)]
+  assert [f.id for f in store.fingerprints()] == [c.id]
+
+
+def test_removing_an_unsynced_replacement_removes_the_database_print(store: LocalStore) -> None:
+  a, b = fp(b"a"), fp(b"b")
+  store.upsert_db_fingerprint(a)
+  store.insert_fingerprint(b, origin="local", replaces=a.id)
+  store.remove_fingerprint(b.id)
+  assert store.pending_removals() == [a.id]
+  assert store.unsynced_fingerprints() == []
+
+
+def test_fingerprint_changes_queue_and_clear(store: LocalStore) -> None:
+  c = change()
+  store.insert_fingerprint_change(c)
+  assert store.unsynced_fingerprint_changes() == [c]
+  store.mark_fingerprint_change_synced(c.id)
+  assert store.unsynced_fingerprint_changes() == []
+  pending = Employee(id=7, first_name="A", last_name="B", pin_username="7", pin_hash="hash", updated_at=T)  # pyright: ignore[reportArgumentType]
+  store.insert_pending_employee(pending)
+  store.insert_fingerprint_change(change(employee_id=7))
+  assert store.unsynced_fingerprint_changes() == []
+
+
+def test_unlabelled_local_prints_are_dropped_on_open(db_path: Path) -> None:
+  LocalStore(db_path).close()
+  conn = sqlite3.connect(db_path)
+  with conn:
+    conn.execute(
+      "INSERT INTO fingerprints (id, employee_id, origin, synced, json) VALUES (?, 1, 'local', 0, ?)",
+      (str(uuid4()), '{"employee_id": 1}'),
+    )
+  conn.close()
+  s = LocalStore(db_path)
+  try:
+    assert s.fingerprints() == []
+  finally:
+    s.close()
+  assert query(db_path, "SELECT count(*) FROM fingerprints") == [(0,)]

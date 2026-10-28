@@ -8,10 +8,12 @@ a refused number) are hidden from `punches`, `corrections` and `fingerprints`, s
 """
 
 # Standard library imports
+import logging
 import sqlite3
 import threading
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
+from uuid import UUID
 
 # Third party imports
 from timeclock_schema.base import REVEAL, TimeclockModel
@@ -20,6 +22,7 @@ from timeclock_schema.models import (
   Employee,
   Fingerprint,
   FingerprintBypass,
+  FingerprintChange,
   Group,
   Punch,
   PunchCorrection,
@@ -31,7 +34,8 @@ if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Mapping, Sequence
   from pathlib import Path
-  from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 Origin = Literal["local", "peer", "db"]
 """Where a row came from: recorded here, received over the LAN, or read from the database."""
@@ -65,6 +69,11 @@ CREATE TABLE IF NOT EXISTS punch_corrections (id TEXT PRIMARY KEY, punch_id TEXT
 CREATE TABLE IF NOT EXISTS fingerprints (
   id TEXT PRIMARY KEY, employee_id INTEGER NOT NULL, origin TEXT NOT NULL, synced INTEGER NOT NULL, json TEXT NOT NULL
 );
+-- Prints removed here that the database may still hold. `replaced_by` null: a removal pushed on its own; else the new
+-- print of a re-register, pushed in that print's transaction. Catch-up and notifications never bring one back.
+CREATE TABLE IF NOT EXISTS fingerprint_removals (id TEXT PRIMARY KEY, replaced_by TEXT);
+-- The change log's unpushed rows; a pushed row is deleted.
+CREATE TABLE IF NOT EXISTS fingerprint_changes (id TEXT PRIMARY KEY, employee_id INTEGER NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -99,6 +108,11 @@ class LocalStore:
       self._conn.execute("PRAGMA journal_mode=WAL")
       self._conn.execute("PRAGMA foreign_keys=OFF")
       self._conn.executescript(_SCHEMA)
+      with self._conn:
+        # Stored before prints named their finger; they no longer load. The database refused to migrate with any.
+        dropped = self._conn.execute("DELETE FROM fingerprints WHERE json_extract(json, '$.finger') IS NULL").rowcount
+    if dropped:
+      logger.warning("dropped %d local fingerprints stored without a finger", dropped)
 
   def close(self) -> None:
     """Close the connection."""
@@ -286,18 +300,68 @@ class LocalStore:
 
   # -- fingerprints -------------------------------------------------------------------------------------------------
 
-  def insert_fingerprint(self, f: Fingerprint, *, origin: Origin) -> bool:
-    """Insert a fingerprint (unsynced only if `origin` is `local`); False if the id exists."""
+  def insert_fingerprint(self, f: Fingerprint, *, origin: Origin, replaces: UUID | None = None) -> bool:
+    """Insert a fingerprint (unsynced only if `origin` is `local`); False if the id exists.
+
+    `replaces` (a re-register) goes in the same transaction, its removal pushed with `f`.
+    """
     with self._lock, self._conn:
       cur = self._conn.execute(
         "INSERT OR IGNORE INTO fingerprints (id, employee_id, origin, synced, json) VALUES (?, ?, ?, ?, ?)",
         (str(f.id), f.employee_id, origin, int(origin != "local"), _dump(f)),
       )
+      if replaces is not None and cur.rowcount > 0:
+        self._drop_print(replaces, str(f.id))
     return cur.rowcount > 0
+
+  def remove_fingerprint(self, fid: UUID) -> None:
+    """Remove a print here at once, queueing its removal from the database."""
+    with self._lock, self._conn:
+      self._drop_print(fid, None)
+
+  def _drop_print(self, fid: UUID, replaced_by: str | None) -> None:
+    # Caller holds the lock and transaction. A print the database never had queues nothing; a removal waiting on it (it
+    # was itself an unpushed replacement) passes to `replaced_by` instead, so the database's print still goes.
+    row = self._conn.execute("DELETE FROM fingerprints WHERE id = ? RETURNING origin, synced", (str(fid),)).fetchone()
+    if row == ("local", 0):
+      self._conn.execute("UPDATE fingerprint_removals SET replaced_by = ? WHERE replaced_by = ?", (replaced_by, str(fid)))
+    elif row is not None:
+      self._conn.execute("INSERT OR REPLACE INTO fingerprint_removals (id, replaced_by) VALUES (?, ?)", (str(fid), replaced_by))
+
+  def pending_removals(self) -> list[UUID]:
+    """Return the plain removals not yet pushed (a re-register's travels with its new print)."""
+    with self._lock:
+      rows = self._conn.execute("SELECT id FROM fingerprint_removals WHERE replaced_by IS NULL ORDER BY id").fetchall()
+    return [UUID(r[0]) for r in rows]
+
+  def mark_removal_synced(self, fid: UUID) -> None:
+    """Forget a pushed removal."""
+    with self._lock, self._conn:
+      self._conn.execute("DELETE FROM fingerprint_removals WHERE id = ?", (str(fid),))
+
+  def insert_fingerprint_change(self, c: FingerprintChange) -> None:
+    """Queue a change-log row for the push."""
+    with self._lock, self._conn:
+      self._conn.execute(
+        "INSERT OR IGNORE INTO fingerprint_changes (id, employee_id, json) VALUES (?, ?, ?)", (str(c.id), c.employee_id, _dump(c))
+      )
+
+  def unsynced_fingerprint_changes(self) -> list[FingerprintChange]:
+    """Return the change-log rows not yet pushed, oldest first; a pending employee's are held."""
+    with self._lock:
+      rows = self._conn.execute(f"SELECT json FROM fingerprint_changes WHERE {_HELD} ORDER BY rowid").fetchall()
+    return [FingerprintChange.model_validate_json(r[0]) for r in rows]
+
+  def mark_fingerprint_change_synced(self, cid: UUID) -> None:
+    """Delete a pushed change-log row."""
+    with self._lock, self._conn:
+      self._conn.execute("DELETE FROM fingerprint_changes WHERE id = ?", (str(cid),))
 
   def upsert_db_fingerprint(self, f: Fingerprint) -> None:
     """Apply a database copy: update an existing row's JSON (origin and synced stay), else insert it as `db`."""
     with self._lock, self._conn:
+      if self._conn.execute("SELECT 1 FROM fingerprint_removals WHERE id = ?", (str(f.id),)).fetchone():
+        return
       self._conn.execute(
         "INSERT INTO fingerprints (id, employee_id, origin, synced, json) VALUES (?, ?, 'db', 1, ?) "
         "ON CONFLICT (id) DO UPDATE SET employee_id = excluded.employee_id, json = excluded.json",
@@ -313,7 +377,10 @@ class LocalStore:
     """Replace the local copies with the full fingerprint list, by `replace_db_punches`'s rule with no window."""
     fetched = {str(f.id) for f in fs}
     with self._lock, self._conn:
+      removed = {r[0] for r in self._conn.execute("SELECT id FROM fingerprint_removals")}
       for f in fs:
+        if str(f.id) in removed:
+          continue
         self._conn.execute(
           "INSERT INTO fingerprints (id, employee_id, origin, synced, json) VALUES (?, ?, 'db', 1, ?) "
           "ON CONFLICT (id) DO UPDATE SET employee_id = excluded.employee_id, json = excluded.json, "
@@ -350,11 +417,14 @@ class LocalStore:
     pending = {e.id for e in self.pending_employees()}
     return [b for b in bypasses if b.employee_id not in pending]
 
-  def unsynced_fingerprints(self) -> list[Fingerprint]:
-    """Return local fingerprints not yet pushed; a pending employee's are held."""
+  def unsynced_fingerprints(self) -> list[tuple[Fingerprint, UUID | None]]:
+    """Return local fingerprints not yet pushed, each with the database print it replaces; a pending employee's are held."""
     with self._lock:
-      rows = self._conn.execute(f"SELECT json FROM fingerprints WHERE synced = 0 AND {_HELD} ORDER BY id").fetchall()
-    return [Fingerprint.model_validate_json(r[0]) for r in rows]
+      rows = self._conn.execute(
+        "SELECT f.json, r.id FROM fingerprints f LEFT JOIN fingerprint_removals r ON r.replaced_by = f.id "
+        f"WHERE f.synced = 0 AND {_HELD} ORDER BY f.id"
+      ).fetchall()
+    return [(Fingerprint.model_validate_json(f), None if r is None else UUID(r)) for f, r in rows]
 
   def mark_punch_synced(self, pid: UUID) -> None:
     """Mark a pushed punch synced, with the bypass pushed in its transaction."""
@@ -368,9 +438,10 @@ class LocalStore:
       self._conn.execute("UPDATE fingerprint_bypasses SET synced = 1 WHERE id = ?", (str(bid),))
 
   def mark_fingerprint_synced(self, fid: UUID) -> None:
-    """Mark a pushed fingerprint synced."""
+    """Mark a pushed fingerprint synced, with the removal pushed in its transaction."""
     with self._lock, self._conn:
       self._conn.execute("UPDATE fingerprints SET synced = 1 WHERE id = ?", (str(fid),))
+      self._conn.execute("DELETE FROM fingerprint_removals WHERE replaced_by = ?", (str(fid),))
 
   def prune(self, before: datetime, keep_from: Mapping[int, datetime]) -> int:
     """Delete synced punches older than `before`, then the corrections and bypasses of punches that are gone.
