@@ -1,8 +1,7 @@
 #_preseed_V1
 # Debian 13 answer file for a production timeclock. Everything is answered except the clock's name and number
-# (/timeclock-ask.sh; the hostname follows from the name) and the partitioner's confirmations before it writes
-# to a disk (partman/confirm for disks with partitions, partman/confirm_nooverwrite for empty ones, and the RAID ones),
-# the guard before erasing anything. @PASSWORD_HASH@ is filled in by build.sh.
+# (/timeclock-ask.sh; the hostname follows from the name), disk confirmations included. The guards before erasing every
+# internal drive are the boot entry (no timeout) and the name prompt, which warns. @PASSWORD_HASH@ is filled in by build.sh.
 
 d-i debian-installer/locale string en_US.UTF-8
 d-i keyboard-configuration/xkb-keymap select us
@@ -52,7 +51,13 @@ d-i partman-lvm/device_remove_lvm boolean true
 d-i partman-md/device_remove_md boolean true
 d-i partman-partitioning/confirm_write_new_label boolean true
 d-i partman/choose_partition select finish
-# partman/confirm, partman/confirm_nooverwrite and partman-md/confirm are deliberately unanswered.
+# Write confirmations: confirm when an existing filesystem is lost, confirm_nooverwrite otherwise; partman-md's for RAID.
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+d-i partman-md/confirm boolean true
+d-i partman-md/confirm_nooverwrite boolean true
+# Under UEFI, a disk with old BIOS-boot partitions and no EFI partition anywhere asks whether to stay in UEFI mode.
+d-i partman-efi/non_efi_system boolean true
 
 d-i apt-setup/non-free-firmware boolean true
 d-i apt-setup/contrib boolean false
