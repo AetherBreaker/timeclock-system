@@ -37,7 +37,7 @@ In Coolify, **Keys & Tokens → API tokens**, create one with **root** permissio
      its list and the file's comment);
    - two forwards in `src/wireguard_hub/rules.v4`, copying timeclock-dev's: to the central log server on 9020 and to
      timeclock-backend on 5432;
-   - commit, push, `poe release-and-pin patch Enrol timeclock-system-<name>`, and deploy wireguard-hub in Coolify.
+   - commit, push, `poe release-and-pin patch Enrol timeclock-system-<name>` (Coolify deploys the hub on that push).
 5. **From the workstation**, in this repository:
 
    ```powershell
