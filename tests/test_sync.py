@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, LiteralString, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 # Third party imports
@@ -26,14 +26,14 @@ import psycopg
 import pytest
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
-from pydantic import SecretStr
-from timeclock_schema.enums import BypassReason, EmployeeRole, PunchKind
+from pydantic import SecretBytes, SecretStr
+from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, PunchKind
 from timeclock_schema.migrations import load_migrations
-from timeclock_schema.models import Employee, FingerprintBypass, Punch
+from timeclock_schema.models import Employee, Fingerprint, FingerprintBypass, Punch
 from timeclock_schema.shifts import EmployeeState
 
 # First party imports
-from timeclock_system.clock import Clock, NewEmployee
+from timeclock_system.clock import Approval, Clock, NewEmployee
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DatabaseSync, DbStatus
 
@@ -445,3 +445,75 @@ async def test_a_pin_login_bypass_is_pushed(pg: Pg, rig: Callable[[], Awaitable[
   await eventually(pushed, "the bypass to be pushed")
   assert rows == [(admin, BypassReason.ADMIN_PIN_LOGIN.value, None, None, None)]
   assert r.store.unsynced_bypasses() == []
+
+
+async def seed_print(pg: Pg, employee_id: int, finger: Finger = Finger.LEFT_INDEX) -> UUID:
+  fid = uuid4()
+  await admin_execute(
+    pg,
+    "INSERT INTO fingerprints (id, employee_id, finger, template, registered_at, instance_id) "
+    "VALUES (%(id)s, %(e)s, %(f)s::finger, 'tmpl', now(), '2')",
+    {"id": fid, "e": employee_id, "f": finger.value},
+  )
+  return fid
+
+
+async def db_prints(pg: Pg) -> list[tuple[Any, ...]]:
+  return await admin_execute(pg, "SELECT id, employee_id, finger::text FROM fingerprints ORDER BY id")
+
+
+async def test_a_removal_reaches_the_database(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
+  ann, ada = await seed_employee(pg), await seed_employee(pg, "Ada", pin_username="1002", role=EmployeeRole.ADMIN)
+  fid = await seed_print(pg, ann)
+  r = await rig()
+  assert await r.clock.prints_by_finger(ann) == {Finger.LEFT_INDEX: fid}
+  await r.clock.remove_fingerprint(ann, fid, Finger.LEFT_INDEX, Approval(ada, pin_only=False))
+  r.sync.wake()
+
+  async def logged() -> bool:
+    rows = await admin_execute(pg, "SELECT action::text, finger::text, approved_by, pin_only FROM fingerprint_changes")
+    return rows == [("remove", "left_index", ada, False)]
+
+  await eventually(logged, "the change row to reach PostgreSQL")
+  assert await db_prints(pg) == []
+  await eventually(lambda: r.store.pending_removals() == [] and r.store.unsynced_fingerprint_changes() == [], "the queues to clear")
+  assert await r.clock.prints_by_finger(ann) == {}
+
+
+async def test_a_replacement_swaps_the_print_in_one_transaction(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
+  ann, ada = await seed_employee(pg), await seed_employee(pg, "Ada", pin_username="1002", role=EmployeeRole.ADMIN)
+  old = await seed_print(pg, ann)
+  r = await rig()
+  new = await r.clock.register_fingerprint(ann, b"new", Finger.LEFT_INDEX, approval=Approval(ada, pin_only=True), replaces=old)
+  r.sync.wake()
+
+  async def swapped() -> bool:
+    return await db_prints(pg) == [(new.id, ann, "left_index")]
+
+  await eventually(swapped, "the new print to replace the old")
+  await eventually(lambda: r.store.unsynced_fingerprints() == [], "the new print to be marked synced")
+  assert await r.clock.prints_by_finger(ann) == {Finger.LEFT_INDEX: new.id}
+
+
+async def test_remove_then_add_the_same_finger_while_offline(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
+  ann = await seed_employee(pg)
+  old = await seed_print(pg, ann)
+  r = await rig()
+  new = Fingerprint(
+    id=uuid4(),
+    employee_id=ann,
+    finger=Finger.LEFT_INDEX,
+    template=SecretBytes(b"new"),
+    registered_at=datetime.now(UTC),
+    instance_id="1",
+  )
+  # No await between the two, so no push runs before both are queued.
+  r.store.remove_fingerprint(old)
+  r.store.insert_fingerprint(new, origin="local")
+  r.sync.wake()
+
+  async def only_new() -> bool:
+    return await db_prints(pg) == [(new.id, ann, "left_index")]
+
+  await eventually(only_new, "the removal to land before the insert")
+  assert r.alerts == []
