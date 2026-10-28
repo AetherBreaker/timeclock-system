@@ -320,11 +320,13 @@ class LocalStore:
       self._drop_print(fid, None)
 
   def _drop_print(self, fid: UUID, replaced_by: str | None) -> None:
-    # Caller holds the lock and transaction. A print the database never had queues nothing; a removal waiting on it (it
-    # was itself an unpushed replacement) passes to `replaced_by` instead, so the database's print still goes.
+    # Caller holds the lock and transaction. An unpushed print may be mid-push (its insert committing as this runs), so
+    # its removal is queued plain, pushed before any insert; deleting nothing is harmless. A removal waiting on it (it
+    # was itself an unpushed replacement) passes to `replaced_by`, so the database's print still goes.
     row = self._conn.execute("DELETE FROM fingerprints WHERE id = ? RETURNING origin, synced", (str(fid),)).fetchone()
     if row == ("local", 0):
       self._conn.execute("UPDATE fingerprint_removals SET replaced_by = ? WHERE replaced_by = ?", (replaced_by, str(fid)))
+      self._conn.execute("INSERT OR REPLACE INTO fingerprint_removals (id, replaced_by) VALUES (?, NULL)", (str(fid),))
     elif row is not None:
       self._conn.execute("INSERT OR REPLACE INTO fingerprint_removals (id, replaced_by) VALUES (?, ?)", (str(fid), replaced_by))
 

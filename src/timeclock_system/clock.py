@@ -307,8 +307,8 @@ class Clock:
     )
 
   def fingerprint_approver(self, e: Employee) -> bool:
-    """Whether `e` may approve a fingerprint change: an active admin, themselves included."""
-    return e.active and e.role is EmployeeRole.ADMIN
+    """Whether `e` may approve a fingerprint change: an active admin, themselves included, once the database accepted them."""
+    return e.active and e.role is EmployeeRole.ADMIN and e.id not in self._pending
 
   async def prints_by_finger(self, employee_id: int) -> dict[Finger, UUID]:
     """Return the employee's prints on file here, by finger."""
