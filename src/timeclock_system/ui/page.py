@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING
 # Third party imports
 from nicegui import app, ui
 
+# At runtime: NiceGUI inspects a handler's signature before calling it, which evaluates its annotations (_on_key).
+from nicegui.events import KeyEventArguments  # noqa: TC002
+
 # First party imports
 from timeclock_system.ui import text
 from timeclock_system.ui.controller import (
@@ -40,7 +43,7 @@ if TYPE_CHECKING:
   from zoneinfo import ZoneInfo
 
   # Third party imports
-  from nicegui.events import KeyEventArguments, ValueChangeEventArguments
+  from nicegui.events import ValueChangeEventArguments
 
   # First party imports
   from timeclock_system.sync import DbStatus
