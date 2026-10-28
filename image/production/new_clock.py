@@ -20,7 +20,7 @@ Every step checks what's already done, so a rerun after a failure carries on whe
 5. the clock's database login, timeclock_clock_<name> in timeclock_clocks, with a random password;
 6. the Coolify application (docker/compose.yaml of this repository, beside timeclock-dev's), its variables filled in:
    the clock's own from the steps above, the shared ones copied from timeclock-dev's application; named exactly as the
-   hostname, watching docker/**, on the predefined network. Not deployed: Coolify's API can't turn on Consistent
+   hostname, through timeclock-dev's GitHub App, watching docker/**, on the predefined network. Not deployed: Coolify's API can't turn on Consistent
    Container Names, so that's done in Coolify (Advanced > Container) before the first deploy.
 The variables stay editable in Coolify; nothing here sets them again once the application exists.
 
@@ -255,13 +255,18 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
         project_uuid, environment_name = project["uuid"], environment["name"]
   if project_uuid is None:
     sys.exit("couldn't find timeclock-dev's project and environment")
+  # Through the GitHub App, like timeclock-dev's, though the repository is public: the App's webhook is what redeploys
+  # on a push touching the watch paths.
+  github_app = next((g for g in api("GET", "/github-apps") if g["id"] == template["source_id"]), None)  # pyright: ignore[reportGeneralTypeIssues]
+  if template["source_type"] != "App\\Models\\GithubApp" or github_app is None:
+    sys.exit("timeclock-dev's application isn't deployed through a GitHub App; set its source in Coolify, then rerun")
   body = {
     "project_uuid": project_uuid,
+    "github_app_uuid": github_app["uuid"],
     "environment_name": environment_name,
     "server_uuid": server_uuid,
     "name": peer,
-    # Coolify stores the repository as owner/name.
-    "git_repository": f"https://github.com/{template['git_repository'].removeprefix('https://github.com/')}",
+    "git_repository": template["git_repository"],
     "git_branch": template["git_branch"],
     "build_pack": "dockercompose",
     "docker_compose_location": template["docker_compose_location"],
@@ -270,7 +275,7 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
     "watch_paths": "docker/**",
     "connect_to_docker_network": True,
   }
-  app_uuid = api("POST", "/applications/public", body)["uuid"]  # pyright: ignore[reportIndexIssue]
+  app_uuid = api("POST", "/applications/private-github-app", body)["uuid"]  # pyright: ignore[reportIndexIssue]
   values = {
     "INSTANCE_ID": name,
     "CLOCK_NUMBER": number,
