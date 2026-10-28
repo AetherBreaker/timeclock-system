@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import bcrypt
 import pytest
 from nicegui import ui
+from nicegui.events import KeyboardAction, KeyboardKey, KeyboardModifiers, KeyEventArguments
 from nicegui.testing import user_simulation
 from pydantic import SecretBytes, SecretStr
 from timeclock_schema.enums import EmployeeRole, PunchKind
@@ -27,6 +28,10 @@ if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import AsyncIterator
   from pathlib import Path
+
+  # Third party imports
+  from nicegui import Client
+  from nicegui.element import Element
 
 NY = ZoneInfo("America/New_York")
 NOW = datetime(2026, 10, 27, 12, 2, tzinfo=UTC)
@@ -237,3 +242,35 @@ async def test_the_page_carries_the_cursor_script_and_no_blanket_rule(controller
     head = client._head_html  # pyright: ignore[reportPrivateUsage]  # NiceGUI has no public reader
   assert page.KIOSK_CURSOR in head
   assert 'addStyle("* { cursor: none' not in head  # the old blanket ui.add_css rule
+
+
+def key_event(code: str, name: str) -> KeyEventArguments:
+  return KeyEventArguments(
+    sender=cast("Element", None),
+    client=cast("Client", None),
+    action=KeyboardAction(keydown=True, keyup=False, repeat=False),
+    key=KeyboardKey(name=name, code=code, location=0),
+    modifiers=KeyboardModifiers(alt=False, ctrl=False, meta=False, shift=False),
+  )
+
+
+async def test_number_row_and_numpad_keys_type_into_the_pin_pad(controller: KioskController, tmp_path: Path) -> None:
+  root = build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)
+  async with user_simulation(root) as user:
+    await user.open("/")
+    user.find(kind=ui.button, content=text.USE_PIN).click()
+    await user.should_see(text.ENTER_USERNAME)
+    on_key = root.__self__._on_key  # pyright: ignore[reportFunctionMemberAccess]
+    await on_key(key_event("Digit1", "1"))
+    await on_key(key_event("Numpad2", "End"))  # NumLock off: the key's name isn't a digit, its code still is
+    await user.should_see("12")
+    await on_key(key_event("NumpadEnter", "Enter"))
+    await user.should_see(text.ENTER_PIN)
+
+
+async def test_the_page_keeps_focus_off_buttons(controller: KioskController, tmp_path: Path) -> None:
+  # NiceGUI's ui.keyboard drops every key while a button has focus, and a tap focuses the button it lands on.
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    client = await user.open("/")
+    head = client._head_html  # pyright: ignore[reportPrivateUsage]
+  assert page.NO_BUTTON_FOCUS in head
