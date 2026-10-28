@@ -1,6 +1,7 @@
 # Standard library imports
 import asyncio
 from datetime import UTC, datetime, time
+from importlib.metadata import version
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -287,6 +288,14 @@ async def test_a_held_backspace_keeps_deleting(controller: KioskController, tmp_
     keyboard = next(iter(user.find(kind=ui.keyboard).elements))
     for d in "123":
       await press(keyboard, f"Digit{d}", d)
-    await user.should_see("123")
+    shown = next(iter(user.find(marker="pin-shown").elements))
+    assert shown.text == "123"  # pyright: ignore[reportAttributeAccessIssue]
     await press_held(keyboard, "Backspace", "Backspace", repeats=2)
-    await user.should_not_see("12")  # one delete would leave "12"; a held key clears all three
+    shown = next(iter(user.find(marker="pin-shown").elements))
+    assert shown.text == ""  # pyright: ignore[reportAttributeAccessIssue]  # one delete would leave "12"
+
+
+async def test_the_version_shows_in_the_corner(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await user.should_see(f"v{version('timeclock-system')}")
