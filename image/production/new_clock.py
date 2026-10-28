@@ -13,11 +13,15 @@ Every step checks what's already done, so a rerun after a failure carries on whe
 2. wireguard-hub, checked only: the clock is enrolled by hand beforehand (its key as timeclock-system-<name>.key in the
    hub checkout, gitignored; a peers.toml row; forwards to the log server and the database relay in rules.v4; a
    release-and-pin), and the pinned release has the row, with the key's public half, and both forwards;
-3. coolify-tunnel: the clock's tunnel on the next free port and its line in docker/authorized_keys, pushed and redeployed;
-4. Coolify: the server (coolify-tunnel:<port>, root, no proxy), validated;
+3. coolify-tunnel: the clock's tunnel on the next free port, its line in docker/authorized_keys and its
+   <hostname>-tunnel alias in docker/compose.yaml (Coolify allows one server per address, whatever the port), pushed
+   and redeployed;
+4. Coolify: the server (<hostname>-tunnel:<port>, root, no proxy), validated;
 5. the clock's database login, timeclock_clock_<name> in timeclock_clocks, with a random password;
 6. the Coolify application (docker/compose.yaml of this repository, beside timeclock-dev's), its variables filled in:
-   the clock's own from the steps above, the shared ones copied from timeclock-dev's application. Then a deploy.
+   the clock's own from the steps above, the shared ones copied from timeclock-dev's application; named exactly as the
+   hostname, watching docker/**, on the predefined network. Not deployed: Coolify's API can't turn on Consistent
+   Container Names, so that's done in Coolify (Advanced > Container) before the first deploy.
 The variables stay editable in Coolify; nothing here sets them again once the application exists.
 
 Needs, in .env: COOLIFY_API_TOKEN (a root token). And: ~/.ssh/timeclock_dev (tcadmin's key), `ssh Coolify_Server`,
@@ -172,6 +176,7 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
 
   # 3. Tunnel.
   keys_path = TUNNEL / "docker/authorized_keys"
+  compose_path = TUNNEL / "docker/compose.yaml"
   keys = keys_path.read_text(encoding="utf-8")
   ports = {int(p): line for line in keys.splitlines() for p in re.findall(r'permitlisten="0\.0\.0\.0:(\d+)"', line)}
   mine = [p for p, line in ports.items() if line.endswith(f" {peer}-tunnel")]
@@ -184,7 +189,14 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
     else:
       keys = keys.rstrip("\n") + f"\n\n# {port}: {peer}, a timeclock-system clock (clock {number})\n{line}\n"
     keys_path.write_text(keys, encoding="utf-8")
-    git_commit_push(TUNNEL, ["docker/authorized_keys"], f"feat: register {peer} on port {port}")
+  compose = compose_path.read_text(encoding="utf-8")
+  alias = f"{peer}-tunnel"
+  if f"- {alias}\n" not in compose:
+    # Appended to the end of the aliases list.
+    compose = re.sub(r"(\n( +)aliases:\n(?:\2  - .+\n)*)", lambda m: f"{m[1]}{m[2]}  - {alias}\n", compose, count=1)
+    compose_path.write_text(compose, encoding="utf-8")
+  if run("git", "status", "--porcelain", "--", "docker", cwd=TUNNEL).strip():
+    git_commit_push(TUNNEL, ["docker/authorized_keys", "docker/compose.yaml"], f"feat: register {peer} on port {port}")
     deploy_app_named("coolify-tunnel")
   print(f"  tunnel: port {port}")
 
@@ -198,7 +210,7 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
     body = {
       "name": peer,
       "description": f"timeclock-system clock {number}",
-      "ip": "coolify-tunnel",
+      "ip": f"{peer}-tunnel",
       "port": port,
       "user": "root",
       "private_key_uuid": key_uuid,
@@ -255,6 +267,8 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
     "docker_compose_location": template["docker_compose_location"],
     "base_directory": template["base_directory"],
     "instant_deploy": False,
+    "watch_paths": "docker/**",
+    "connect_to_docker_network": True,
   }
   app_uuid = api("POST", "/applications/public", body)["uuid"]  # pyright: ignore[reportIndexIssue]
   values = {
@@ -270,9 +284,8 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
   api(
     "PATCH", f"/applications/{app_uuid}/envs/bulk", {"data": [{"key": k, "value": v, "is_preview": False} for k, v in values.items()]}
   )
-  api("GET", f"/deploy?uuid={app_uuid}")
-  print(f"  application: {peer} created and deploying ({', '.join(values)})")
-  print("done. The screen shows the clock once the app's health check passes.")
+  print(f"  application: {peer} created ({', '.join(values)})")
+  print(f"done. In Coolify, turn on {peer}'s Advanced > Container > Consistent Container Names, then deploy it.")
 
 
 if __name__ == "__main__":

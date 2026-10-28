@@ -24,6 +24,12 @@ The ISO holds the remote-access client, so it stays in the gitignored `image/pro
 In Coolify, **Keys & Tokens → API tokens**, create one with **root** permission, and add it to this repository's
 `.env` as `COOLIFY_API_TOKEN=...`.
 
+## Once: coolify-tunnel deploys its compose file as written
+
+Coolify reaches each clock at `<hostname>-tunnel:<port>`, a network alias of the coolify-tunnel container, since it
+allows only one server per address whatever the port. Coolify drops compose aliases unless coolify-tunnel's
+**Advanced → Raw Compose Deployment** is on (the API can't set it).
+
 ## Per clock
 
 1. **Write the stick** with `image/production/out/timeclock-debian-<version>-amd64.iso` (Rufus in DD image mode, or balenaEtcher).
@@ -44,13 +50,16 @@ In Coolify, **Keys & Tokens → API tokens**, create one with **root** permissio
    uv run image/production/new_clock.py timeclock-system-<name>.local
    ```
 
-   It checks the hub enrolment against the pinned release (the row, its key, both forwards), opens its Coolify tunnel (and redeploys
-   coolify-tunnel), adds and validates the Coolify server, creates its database login, then creates the Coolify
-   application with every variable filled in and deploys it. It takes up to twenty minutes, mostly
+   It checks the hub enrolment against the pinned release (the row, its key, both forwards), opens its Coolify tunnel
+   (its key line and `<hostname>-tunnel` alias in coolify-tunnel, which it redeploys), adds and validates the Coolify
+   server, creates its database login, then creates the Coolify application: named exactly as the hostname, every
+   variable filled in, watch paths `docker/**`, on the predefined network. It takes up to twenty minutes, mostly
    Coolify's validation. If a step fails, fix the cause and run it again: done steps are skipped.
+6. **In Coolify**, on the new application: **Advanced → Container → Consistent Container Names** on (the API can't
+   set it), then **Deploy**.
 
    The variables stay editable in the application's settings in Coolify.
-6. **Wifi, if the clock won't stay wired:** over SSH while still wired,
+7. **Wifi, if the clock won't stay wired:** over SSH while still wired,
    `sudo nmcli dev wifi connect "<network>" password "<password>"`, then unplug the cable. It reconnects after every
    reboot. Wired stays the better choice for a clock.
 
