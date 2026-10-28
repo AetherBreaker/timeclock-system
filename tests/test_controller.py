@@ -11,11 +11,11 @@ import bcrypt
 import pytest
 from pydantic import SecretBytes, SecretStr
 from timeclock_schema.alerts import CONFIRMATION_NOTICE, WEEKLY_HOURS, Firing, Hook
-from timeclock_schema.enums import BypassReason, EmployeeRole, PunchKind
+from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, FingerprintChangeAction, PunchKind
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Punch, Settings
 
 # First party imports
-from timeclock_system.clock import Clock, NewEmployee, OverrideGrant
+from timeclock_system.clock import Approval, Clock, NewEmployee, OverrideGrant
 from timeclock_system.scanner import Enrolled, EnrollFailed, EnrollStage, FingerDown, Matched, NoMatch, ReaderMode, ReaderPaused
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
@@ -25,8 +25,14 @@ from timeclock_system.ui.controller import (
   AddEmployeeDetails,
   AdminMenu,
   AdminReconfirm,
+  ApprovalPrompt,
   Confirmation,
   EmployeeAdded,
+  FingerChange,
+  FingerPick,
+  FingerprintActions,
+  FingerprintLogin,
+  GearMenu,
   Idle,
   KioskController,
   Menu,
@@ -130,7 +136,14 @@ async def kiosk(tmp_path: Path) -> AsyncIterator[Kiosk]:
   store.replace_table("business_hours", [BusinessHours(id=d, weekday=d, opens=time(0, 0), closes=time(23, 59)) for d in range(1, 8)])
   for print_id, employee_id in ((ANN_PRINT, ANN), (MIA_PRINT, MIA)):
     store.insert_fingerprint(
-      Fingerprint(id=print_id, employee_id=employee_id, template=SecretBytes(b"t"), registered_at=START, instance_id="1"),
+      Fingerprint(
+        id=print_id,
+        employee_id=employee_id,
+        finger=Finger.LEFT_INDEX,
+        template=SecretBytes(b"t"),
+        registered_at=START,
+        instance_id="1",
+      ),
       origin="db",
     )
   t = FakeTime()
@@ -323,11 +336,12 @@ async def test_wrong_pin_returns_to_username_with_error(kiosk: Kiosk) -> None:
 async def test_registration_happy_path_ends_in_the_menu(kiosk: Kiosk) -> None:
   await kiosk.pin_login(BOB)
   await kiosk.ctl.register()
-  assert kiosk.ctl.screen == Registering(BOB, 0, 5, touched_at=kiosk.t.mono)
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
+  assert kiosk.ctl.screen == Registering(BOB, 0, 5, touched_at=kiosk.t.mono, finger=Finger.LEFT_INDEX)
   assert kiosk.reader.modes[-1] is ReaderMode.ENROLL
   for done in range(1, 6):
     await kiosk.ctl.on_scanner_event(EnrollStage(done, 5))
-  assert kiosk.ctl.screen == Registering(BOB, 5, 5, touched_at=kiosk.t.mono)
+  assert kiosk.ctl.screen == Registering(BOB, 5, 5, touched_at=kiosk.t.mono, finger=Finger.LEFT_INDEX)
   await kiosk.ctl.on_scanner_event(Enrolled(b"new-template"))
   screen = kiosk.ctl.screen
   assert isinstance(screen, Menu)
@@ -339,6 +353,7 @@ async def test_registration_happy_path_ends_in_the_menu(kiosk: Kiosk) -> None:
 async def test_registration_timeout_shows_message(kiosk: Kiosk) -> None:
   await kiosk.pin_login(BOB)
   await kiosk.ctl.register()
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   await kiosk.ctl.on_scanner_event(EnrollFailed("timeout"))
   assert kiosk.ctl.screen == Idle(text.REGISTRATION_TIMED_OUT, until=kiosk.t.mono + 3)
   assert kiosk.reader.modes[-1] is ReaderMode.READY
@@ -671,15 +686,17 @@ async def test_the_new_employees_fingerprint_is_optional(kiosk: Kiosk) -> None:
   await kiosk.type_and_enter("11")
   await kiosk.type_and_enter("11")
   await kiosk.ctl.register()
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   registering = kiosk.ctl.screen
   assert isinstance(registering, Registering) and registering.added is not None
   await kiosk.ctl.on_scanner_event(EnrollFailed(reason="timeout"))
   retry = kiosk.ctl.screen
   assert isinstance(retry, NewFingerprint) and retry.message == text.REGISTRATION_TIMED_OUT
   await kiosk.ctl.register()
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   await kiosk.ctl.on_scanner_event(Enrolled(template=b"new"))
   assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)
-  assert [f.employee_id for f in kiosk.store.unsynced_fingerprints()] == []  # held until the employee is accepted
+  assert [f.employee_id for f, _ in kiosk.store.unsynced_fingerprints()] == []  # held until the employee is accepted
   assert any(f.employee_id == 10001 for f in kiosk.store.fingerprints())  # noqa: PLR2004
 
 
@@ -709,6 +726,7 @@ async def test_a_timeout_while_registering_the_new_employee_counts_as_a_skip(kio
   await kiosk.type_and_enter("11")
   await kiosk.type_and_enter("11")
   await kiosk.ctl.register()
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   kiosk.t.advance(IDLE_CLOSE_SECS)
   await kiosk.ctl.tick()
   assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)
@@ -739,3 +757,184 @@ async def test_a_digit_on_the_idle_screen_opens_the_pad_with_it_typed(kiosk: Kio
   assert isinstance(kiosk.ctl.screen, Idle)
   await kiosk.ctl.digit("4")
   assert kiosk.ctl.screen == PinEntry("username", "4", SecretStr(""), None, touched_at=kiosk.t.mono)
+
+
+# -- the gear menu and the Fingerprints flow ---------------------------------------------------------------------------
+
+
+async def fingerprints_login(kiosk: Kiosk, employee_id: int) -> None:
+  await kiosk.ctl.gear()
+  await kiosk.ctl.open_fingerprints()
+  await kiosk.type_and_enter(PINS[employee_id])
+  await kiosk.type_and_enter("1234")
+
+
+async def test_gear_opens_from_idle_and_the_menu_only(kiosk: Kiosk) -> None:
+  await kiosk.ctl.gear()
+  assert kiosk.ctl.screen == GearMenu(touched_at=kiosk.t.mono)
+  await kiosk.ctl.cancel()
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  await kiosk.ctl.gear()
+  assert isinstance(kiosk.ctl.screen, GearMenu)
+  await kiosk.ctl.cancel()
+  await kiosk.ctl.use_pin()
+  await kiosk.ctl.gear()
+  assert isinstance(kiosk.ctl.screen, PinEntry)
+
+
+async def test_fingerprints_login_lists_prints_on_file(kiosk: Kiosk) -> None:
+  await kiosk.ctl.gear()
+  await kiosk.ctl.open_fingerprints()
+  assert kiosk.ctl.screen == PinEntry("username", "", SecretStr(""), FingerprintLogin(), touched_at=kiosk.t.mono)
+  await kiosk.type_and_enter(PINS[ADA])
+  await kiosk.type_and_enter("1234")
+  assert kiosk.ctl.screen == FingerprintActions(ADA, "Ada Lee", (), touched_at=kiosk.t.mono)
+  assert kiosk.store.unsynced_bypasses() == []  # not recorded as a PIN login
+  await kiosk.ctl.cancel()
+  await fingerprints_login(kiosk, ANN)
+  assert kiosk.ctl.screen == FingerprintActions(ANN, "Ann Lee", (Finger.LEFT_INDEX,), touched_at=kiosk.t.mono)
+
+
+async def test_remove_needs_an_admin_and_returns_to_idle(kiosk: Kiosk) -> None:
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("remove")
+  assert kiosk.ctl.screen == FingerPick(ANN, "remove", (Finger.LEFT_INDEX,), touched_at=kiosk.t.mono)
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
+  change = FingerChange(ANN, "Ann Lee", "remove", Finger.LEFT_INDEX, ANN_PRINT)
+  assert kiosk.ctl.screen == ApprovalPrompt(change, touched_at=kiosk.t.mono)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  assert kiosk.ctl.screen == Idle(text.FINGERPRINT_REMOVED, until=kiosk.t.mono + 3)
+  assert await kiosk.clock.prints_by_finger(ANN) == {}
+  [c] = kiosk.store.unsynced_fingerprint_changes()
+  assert (c.action, c.approved_by, c.pin_only) == (FingerprintChangeAction.REMOVE, ADA, False)
+
+
+async def test_a_non_admin_cannot_approve(kiosk: Kiosk) -> None:
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("remove")
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  prompt = kiosk.ctl.screen
+  assert isinstance(prompt, ApprovalPrompt) and prompt.message == text.NOT_AN_ADMIN
+  await kiosk.ctl.on_scanner_event(matched(MIA))  # a manager
+  assert isinstance(kiosk.ctl.screen, ApprovalPrompt)
+  await kiosk.ctl.use_pin()
+  await kiosk.type_and_enter(PINS[BOB])
+  await kiosk.type_and_enter("1234")
+  prompt = kiosk.ctl.screen
+  assert isinstance(prompt, ApprovalPrompt) and prompt.message == text.NOT_AN_ADMIN
+  assert await kiosk.clock.prints_by_finger(ANN) == {Finger.LEFT_INDEX: ANN_PRINT}
+  assert kiosk.store.unsynced_fingerprint_changes() == []
+
+
+async def test_a_deactivated_admin_cannot_approve(kiosk: Kiosk) -> None:
+  ada = kiosk.clock.employee(ADA)
+  assert ada is not None
+  await fingerprints_login(kiosk, ANN)
+  others = [e for e in cast("list[Employee]", kiosk.store.load("employees")) if e.id != ADA]
+  kiosk.store.replace_table("employees", [*others, ada.model_copy(update={"active": False})])
+  kiosk.clock.notify_changed({"employees"})
+  await kiosk.ctl.choose_action("remove")
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  prompt = kiosk.ctl.screen
+  assert isinstance(prompt, ApprovalPrompt) and prompt.message == text.NOT_AN_ADMIN
+  assert await kiosk.clock.prints_by_finger(ANN) == {Finger.LEFT_INDEX: ANN_PRINT}
+
+
+async def test_an_admin_approves_their_own_change_at_the_approval_step(kiosk: Kiosk) -> None:
+  await fingerprints_login(kiosk, ADA)
+  await kiosk.ctl.choose_action("add")
+  await kiosk.ctl.pick_finger(Finger.RIGHT_INDEX)
+  change = FingerChange(ADA, "Ada Lee", "add", Finger.RIGHT_INDEX, None)
+  assert kiosk.ctl.screen == ApprovalPrompt(change, touched_at=kiosk.t.mono)
+  await kiosk.ctl.use_pin()
+  assert kiosk.ctl.screen == PinEntry("username", "", SecretStr(""), change, touched_at=kiosk.t.mono)
+  await kiosk.type_and_enter(PINS[ADA])
+  await kiosk.type_and_enter("1234")
+  assert kiosk.ctl.screen == Registering(
+    ADA, 0, 5, touched_at=kiosk.t.mono, finger=Finger.RIGHT_INDEX, change=change, approval=Approval(ADA, pin_only=True)
+  )
+  assert kiosk.reader.modes[-1] is ReaderMode.ENROLL
+  await kiosk.ctl.on_scanner_event(Enrolled(b"ada"))
+  assert kiosk.ctl.screen == Idle(text.FINGERPRINT_SAVED, until=kiosk.t.mono + 3)
+  assert set(await kiosk.clock.prints_by_finger(ADA)) == {Finger.RIGHT_INDEX}
+  [c] = kiosk.store.unsynced_fingerprint_changes()
+  assert (c.action, c.approved_by, c.pin_only) == (FingerprintChangeAction.ADD, ADA, True)
+
+
+async def test_replace_keeps_the_old_print_until_enrolled(kiosk: Kiosk) -> None:
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("replace")
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  assert isinstance(kiosk.ctl.screen, Registering)
+  await kiosk.ctl.on_scanner_event(EnrollFailed("timeout"))
+  assert kiosk.ctl.screen == FingerprintActions(
+    ANN, "Ann Lee", (Finger.LEFT_INDEX,), touched_at=kiosk.t.mono, message=text.REGISTRATION_TIMED_OUT
+  )
+  assert await kiosk.clock.prints_by_finger(ANN) == {Finger.LEFT_INDEX: ANN_PRINT}
+  # Back at the actions, still logged in; the next choice needs a new approval.
+  await kiosk.ctl.choose_action("replace")
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
+  assert isinstance(kiosk.ctl.screen, ApprovalPrompt)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  await kiosk.ctl.on_scanner_event(Enrolled(b"new"))
+  assert kiosk.ctl.screen == Idle(text.FINGERPRINT_SAVED, until=kiosk.t.mono + 3)
+  prints = await kiosk.clock.prints_by_finger(ANN)
+  assert set(prints) == {Finger.LEFT_INDEX} and prints[Finger.LEFT_INDEX] != ANN_PRINT
+  [(_, replaced)] = kiosk.store.unsynced_fingerprints()
+  assert replaced == ANN_PRINT
+  [c] = kiosk.store.unsynced_fingerprint_changes()
+  assert (c.action, c.approved_by) == (FingerprintChangeAction.REPLACE, ADA)
+
+
+async def test_abandoning_approval_or_touches_changes_nothing(kiosk: Kiosk) -> None:
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("replace")
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
+  await kiosk.ctl.cancel()
+  assert kiosk.ctl.screen == Idle()
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("replace")
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  kiosk.t.advance(IDLE_CLOSE_SECS)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.screen == Idle()
+  assert await kiosk.clock.prints_by_finger(ANN) == {Finger.LEFT_INDEX: ANN_PRINT}
+  assert kiosk.store.unsynced_fingerprint_changes() == []
+
+
+async def test_add_offers_only_fingers_not_on_file(kiosk: Kiosk) -> None:
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("add")
+  pick = kiosk.ctl.screen
+  assert isinstance(pick, FingerPick)
+  assert pick.choices == tuple(f for f in Finger if f is not Finger.LEFT_INDEX)
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)  # not offered
+  assert kiosk.ctl.screen == pick
+
+
+async def test_first_registration_asks_the_finger(kiosk: Kiosk) -> None:
+  await kiosk.pin_login(BOB)
+  await kiosk.ctl.register()
+  assert kiosk.ctl.screen == FingerPick(BOB, None, tuple(Finger), touched_at=kiosk.t.mono)
+  await kiosk.ctl.pick_finger(Finger.RIGHT_THUMB)
+  assert kiosk.ctl.screen == Registering(BOB, 0, 5, touched_at=kiosk.t.mono, finger=Finger.RIGHT_THUMB)
+  await kiosk.ctl.on_scanner_event(Enrolled(b"bob"))
+  assert isinstance(kiosk.ctl.screen, Menu)
+  assert set(await kiosk.clock.prints_by_finger(BOB)) == {Finger.RIGHT_THUMB}
+  [c] = kiosk.store.unsynced_fingerprint_changes()
+  assert (c.action, c.approved_by, c.pin_only) == (FingerprintChangeAction.ADD, None, None)
+
+
+async def test_add_employee_step_asks_the_finger(kiosk: Kiosk) -> None:
+  await fill_details(kiosk)
+  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("11")
+  await kiosk.ctl.register()
+  pick = kiosk.ctl.screen
+  assert isinstance(pick, FingerPick) and pick.action is None and pick.added is not None
+  await kiosk.ctl.cancel()
+  assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)

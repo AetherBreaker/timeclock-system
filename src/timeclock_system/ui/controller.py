@@ -16,11 +16,12 @@ from typing import TYPE_CHECKING, Literal, Protocol
 # Third party imports
 from pydantic import SecretStr
 from timeclock_schema.alerts import CONFIRMATION_NOTICE
-from timeclock_schema.enums import BypassReason, EmployeeRole
+from timeclock_schema.enums import BypassReason, EmployeeRole, Finger
 from timeclock_schema.models import EMAIL_PATTERN
 
 # First party imports
 from timeclock_system.clock import (
+  Approval,
   EmployeeBlockFull,
   MenuInfo,
   NewEmployee,
@@ -46,6 +47,7 @@ from timeclock_system.ui import text
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import AsyncGenerator, Callable
+  from uuid import UUID
   from zoneinfo import ZoneInfo
 
   # Third party imports
@@ -138,14 +140,33 @@ class PinRecheck:
   kind: PunchKind | None
 
 
+type FingerAction = Literal["add", "replace", "remove"]
+
+
+@dataclass(frozen=True)
+class FingerprintLogin:
+  """The Fingerprints flow's PIN login, which names whose prints these are; not recorded as a PIN login."""
+
+
+@dataclass(frozen=True)
+class FingerChange:
+  """One fingerprint change for an admin to approve; the purpose of an approval by PIN, too."""
+
+  employee_id: int
+  name: str
+  action: FingerAction
+  finger: Finger
+  fingerprint_id: UUID | None  # the print replaced or removed
+
+
 @dataclass(frozen=True)
 class PinEntry:
-  """The number pad: a PIN login, a manager's PIN for an override, or a PIN recheck."""
+  """The number pad: a PIN login, a manager's PIN for an override, a PIN recheck, or the Fingerprints flow's."""
 
   field: Literal["username", "password"]
   username: str  # typed first; not secret
   pin: SecretStr  # typed second; a SecretStr until bcrypt checks it, so no repr, log or alert shows it
-  purpose: OverrideRequest | PinRecheck | None
+  purpose: OverrideRequest | PinRecheck | FingerprintLogin | FingerChange | None
   touched_at: float
   error: str | None = None
 
@@ -169,13 +190,16 @@ class RegisterPrompt:
 
 @dataclass(frozen=True)
 class Registering:
-  """Enrollment in progress; `added` is set when it's the add-employee flow's optional step."""
+  """Enrollment in progress; `added` in the add-employee flow's optional step, `change` for an approved gear-menu change."""
 
   employee_id: int
   done: int
   total: int
   touched_at: float
+  finger: Finger
   added: Employee | None = None
+  change: FingerChange | None = None
+  approval: Approval | None = None
 
 
 @dataclass(frozen=True)
@@ -261,6 +285,44 @@ class EmployeeAdded:
   touched_at: float
 
 
+@dataclass(frozen=True)
+class GearMenu:
+  """The gear's menu, from the idle screen or a punch menu; only Fingerprints for now."""
+
+  touched_at: float
+
+
+@dataclass(frozen=True)
+class FingerprintActions:
+  """The Fingerprints flow after its login: re-register, add or remove; `on_file` in `Finger` order."""
+
+  employee_id: int
+  name: str
+  on_file: tuple[Finger, ...]
+  touched_at: float
+  message: str | None = None
+
+
+@dataclass(frozen=True)
+class FingerPick:
+  """Choosing the finger: for a Fingerprints action, or (`action` None) a first registration, `added` as in Registering."""
+
+  employee_id: int
+  action: FingerAction | None
+  choices: tuple[Finger, ...]
+  touched_at: float
+  added: Employee | None = None
+
+
+@dataclass(frozen=True)
+class ApprovalPrompt:
+  """Waiting for an admin's finger or PIN to approve `change`, immediately before it runs."""
+
+  change: FingerChange
+  touched_at: float
+  message: str | None = None
+
+
 type Screen = (
   Idle
   | Menu
@@ -277,6 +339,10 @@ type Screen = (
   | NewPin
   | NewFingerprint
   | EmployeeAdded
+  | GearMenu
+  | FingerprintActions
+  | FingerPick
+  | ApprovalPrompt
 )
 
 
@@ -411,6 +477,19 @@ class KioskController:
       return await self._record(request.employee_id, request.pending_kind, grant)
     return await self._open_menu(request.employee_id, grant)
 
+  async def _fingerprint_actions(self, employee_id: int, name: str, message: str | None = None) -> FingerprintActions:
+    on_file = await self._clock.prints_by_finger(employee_id)
+    return FingerprintActions(employee_id, name, tuple(f for f in Finger if f in on_file), self._mono(), message)
+
+  async def _approved(self, change: FingerChange, approval: Approval) -> Screen:
+    """Run an approved change: a removal at once, a registration through its touches."""
+    now = self._mono()
+    if change.action != "remove":
+      return Registering(change.employee_id, 0, 5, now, change.finger, change=change, approval=approval)
+    if change.fingerprint_id is not None:
+      await self._clock.remove_fingerprint(change.employee_id, change.fingerprint_id, change.finger, approval)
+    return Idle(text.FINGERPRINT_REMOVED, until=now + MESSAGE_SECS)
+
   async def _override_request(self, employee_id: int, pending_kind: PunchKind | None) -> OverrideRequest:
     has_print = await self._clock.has_fingerprint(employee_id)
     reason = BypassReason.OVERRIDE_FINGERPRINT_SKIPPED if has_print else BypassReason.OVERRIDE_NO_FINGERPRINT
@@ -436,7 +515,7 @@ class KioskController:
           message = text.NOT_RECOGNIZED if isinstance(ev, NoMatch) else text.RETRY
           if isinstance(s, Idle):
             self._screen = Idle(message, until=now + MESSAGE_SECS)
-          elif isinstance(s, Rescan | PinScan | OverridePrompt | AdminReconfirm):
+          elif isinstance(s, Rescan | PinScan | OverridePrompt | AdminReconfirm | ApprovalPrompt):
             self._screen = replace(s, message=message)
         case Matched(employee_id=employee_id):
           await self._on_match(s, employee_id)
@@ -452,14 +531,22 @@ class KioskController:
       case EnrollStage(done=done, total=total):
         self._last_finger = now  # a press, like a FingerDown, holds the reader open at closing
         self._screen = replace(s, done=done, total=total, touched_at=now)
+      case Enrolled(template=template) if s.change is not None:
+        replaces = s.change.fingerprint_id
+        await self._clock.register_fingerprint(s.employee_id, template, s.finger, approval=s.approval, replaces=replaces)
+        self._screen = Idle(text.FINGERPRINT_SAVED, until=now + MESSAGE_SECS)
       case Enrolled(template=template):
-        await self._clock.register_fingerprint(s.employee_id, template)
+        await self._clock.register_fingerprint(s.employee_id, template, s.finger)
         added = s.added
         self._screen = await self._open_menu(s.employee_id) if added is None else EmployeeAdded(added.display_name, added.id, now)
       case EnrollFailed(reason=reason):
         message = text.REGISTRATION_TIMED_OUT if reason == "timeout" else text.REGISTRATION_FAILED
-        # In the add-employee flow the employee is already saved: back to the optional step, to retry or skip.
-        self._screen = Idle(message, until=now + MESSAGE_SECS) if s.added is None else NewFingerprint(s.added, now, message)
+        if s.change is not None:
+          # Back to the actions, still logged in; the old print is untouched, and the next choice needs a new approval.
+          self._screen = await self._fingerprint_actions(s.employee_id, s.change.name, message)
+        else:
+          # In the add-employee flow the employee is already saved: back to the optional step, to retry or skip.
+          self._screen = Idle(message, until=now + MESSAGE_SECS) if s.added is None else NewFingerprint(s.added, now, message)
 
   async def _on_match(self, s: Screen, employee_id: int) -> None:
     # Split out of on_scanner_event for C901.
@@ -480,6 +567,12 @@ class KioskController:
         self._screen = await self._granted(s.request, grant)
       else:
         self._screen = replace(s, message=text.NOT_A_MANAGER)
+    elif isinstance(s, ApprovalPrompt):
+      admin = self._clock.employee(employee_id)
+      if admin is not None and self._clock.fingerprint_approver(admin):
+        self._screen = await self._approved(s.change, Approval(admin.id, pin_only=False))
+      else:
+        self._screen = replace(s, message=text.NOT_AN_ADMIN)
 
   async def tap(self) -> None:
     """A tap on the idle screen wakes the reader for 30 s (R40.2); a double tap ends a confirmation early."""
@@ -507,6 +600,8 @@ class KioskController:
         self._screen = PinEntry("username", "", SecretStr(""), PinRecheck(s.employee_id, None), touched_at=now)
       elif isinstance(s, Rescan) and s.pin_ok:
         self._screen = PinEntry("username", "", SecretStr(""), PinRecheck(s.employee_id, s.kind), touched_at=now)
+      elif isinstance(s, ApprovalPrompt):
+        self._screen = PinEntry("username", "", SecretStr(""), s.change, touched_at=now)
 
   async def digit(self, d: str) -> None:
     """Type one digit on the number pad; on the idle screen, open the pad with it typed (walk up and type)."""
@@ -549,13 +644,10 @@ class KioskController:
       employee = await self._clock.verify_pin(s.username, s.pin)
       if employee is None:
         self._screen = PinEntry("username", "", SecretStr(""), s.purpose, touched_at=now, error=text.WRONG_PIN)
-      elif isinstance(s.purpose, OverrideRequest):
-        if self._clock.override_manager(employee, s.purpose.employee_id):
-          self._screen = await self._granted(s.purpose, OverrideGrant(employee.id, s.purpose.reason, pin_only=True))
-        else:
-          self._screen = OverridePrompt(s.purpose, touched_at=now, message=text.NOT_A_MANAGER)
       elif isinstance(s.purpose, PinRecheck):
         self._screen = await self._recheck(s.purpose, employee)
+      elif s.purpose is not None:
+        self._screen = await self._purpose_pin(s.purpose, employee)
       elif self._clock.pin_only_login(employee):
         # No fingerprint step, no register prompt, no override (§6.4); each such login is recorded.
         await self._clock.record_pin_login(employee)
@@ -564,6 +656,18 @@ class KioskController:
         self._screen = PinScan(employee.id, touched_at=now)
       else:
         self._screen = RegisterPrompt(employee.id, touched_at=now)
+
+  async def _purpose_pin(self, purpose: OverrideRequest | FingerprintLogin | FingerChange, employee: Employee) -> Screen:
+    """A manager's override PIN, the Fingerprints flow's login, or an admin's approval by PIN; split out of `enter` for C901."""
+    if isinstance(purpose, OverrideRequest):
+      if self._clock.override_manager(employee, purpose.employee_id):
+        return await self._granted(purpose, OverrideGrant(employee.id, purpose.reason, pin_only=True))
+      return OverridePrompt(purpose, touched_at=self._mono(), message=text.NOT_A_MANAGER)
+    if isinstance(purpose, FingerprintLogin):
+      return await self._fingerprint_actions(employee.id, employee.display_name)
+    if self._clock.fingerprint_approver(employee):
+      return await self._approved(purpose, Approval(employee.id, pin_only=True))
+    return ApprovalPrompt(purpose, touched_at=self._mono(), message=text.NOT_AN_ADMIN)
 
   async def _recheck(self, purpose: PinRecheck, employee: Employee) -> Screen:
     """A PIN recheck by `employee`; split out of `enter` for C901. It must be the same person's PIN."""
@@ -606,13 +710,53 @@ class KioskController:
         self._screen = replace(screen, opened_at=s.opened_at) if isinstance(screen, Menu) else screen
 
   async def register(self) -> None:
-    """Start enrolling the employee's finger (R23.4), or the new employee's (§6.4 step 3)."""
+    """Register the employee's first print (R23.4), or the new employee's (§6.4 step 3): which finger first."""
     async with self._transition():
       s = self._screen
       if isinstance(s, RegisterPrompt):
-        self._screen = Registering(s.employee_id, 0, 5, touched_at=self._mono())
+        self._screen = FingerPick(s.employee_id, None, tuple(Finger), touched_at=self._mono())
       elif isinstance(s, NewFingerprint):
-        self._screen = Registering(s.employee.id, 0, 5, touched_at=self._mono(), added=s.employee)
+        self._screen = FingerPick(s.employee.id, None, tuple(Finger), touched_at=self._mono(), added=s.employee)
+
+  async def pick_finger(self, finger: Finger) -> None:
+    """Pick the finger: a first registration starts at once; a Fingerprints action waits for an admin's approval."""
+    async with self._transition():
+      s, now = self._screen, self._mono()
+      if not isinstance(s, FingerPick) or finger not in s.choices:
+        return
+      if s.action is None:
+        self._screen = Registering(s.employee_id, 0, 5, now, finger, added=s.added)
+        return
+      employee = self._clock.employee(s.employee_id)
+      name = str(s.employee_id) if employee is None else employee.display_name
+      fingerprint_id = (await self._clock.prints_by_finger(s.employee_id)).get(finger)
+      if (fingerprint_id is None) != (s.action == "add"):
+        # Another clock changed this finger since the list was drawn.
+        self._screen = await self._fingerprint_actions(s.employee_id, name)
+      else:
+        self._screen = ApprovalPrompt(FingerChange(s.employee_id, name, s.action, finger, fingerprint_id), touched_at=now)
+
+  async def gear(self) -> None:
+    """The gear, on the idle screen or a punch menu (which it leaves, as Cancel would): its menu."""
+    async with self._transition():
+      if isinstance(self._screen, Idle | Menu):
+        self._screen = GearMenu(touched_at=self._mono())
+
+  async def open_fingerprints(self) -> None:
+    """The gear menu's Fingerprints: a PIN login first, so the clock knows whose prints these are."""
+    async with self._transition():
+      if isinstance(self._screen, GearMenu):
+        self._screen = PinEntry("username", "", SecretStr(""), FingerprintLogin(), touched_at=self._mono())
+
+  async def choose_action(self, action: FingerAction) -> None:
+    """Choose a Fingerprints action, then a finger: one on file, or for add one that isn't."""
+    async with self._transition():
+      s = self._screen
+      if not isinstance(s, FingerprintActions):
+        return
+      choices = tuple(f for f in Finger if (f in s.on_file) != (action == "add"))
+      if choices:
+        self._screen = FingerPick(s.employee_id, action, choices, touched_at=self._mono())
 
   async def admin(self) -> None:
     """The Admin button on an admin's menu: reconfirm by their own finger or PIN first (§6.4)."""
@@ -689,7 +833,10 @@ class KioskController:
         self._screen = OverridePrompt(OverrideRequest(s.employee_id, BypassReason.OVERRIDE_NO_FINGERPRINT, None), touched_at=now)
 
   async def cancel(self) -> None:
-    """Back to idle from any screen; in the add-employee flow's optional fingerprint step it counts as a skip (§6.4)."""
+    """Back to idle from any screen; in the add-employee flow's optional fingerprint step it counts as a skip (§6.4).
+
+    Abandoning a fingerprint change, at its approval or its touches, changes nothing.
+    """
     async with self._transition():
       if self._mode is ReaderMode.ENROLL:
         self._mode = ReaderMode.READY
@@ -697,7 +844,7 @@ class KioskController:
       s = self._screen
       if isinstance(s, NewFingerprint):
         self._screen = EmployeeAdded(s.employee.display_name, s.employee.id, touched_at=self._mono())
-      elif isinstance(s, Registering) and s.added is not None:
+      elif isinstance(s, Registering | FingerPick) and s.added is not None:
         self._screen = EmployeeAdded(s.added.display_name, s.added.id, touched_at=self._mono())
       else:
         self._screen = Idle()
@@ -714,7 +861,7 @@ class KioskController:
         # The new employee is already saved, so a timeout on their optional fingerprint step still shows their number.
         if isinstance(s, NewFingerprint):
           self._screen = EmployeeAdded(s.employee.display_name, s.employee.id, touched_at=now)
-        elif isinstance(s, Registering) and s.added is not None:
+        elif isinstance(s, Registering | FingerPick) and s.added is not None:
           self._screen = EmployeeAdded(s.added.display_name, s.added.id, touched_at=now)
         else:
           self._screen = Idle()
