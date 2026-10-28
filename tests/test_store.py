@@ -76,7 +76,7 @@ def test_round_trip_keeps_secrets(store: LocalStore) -> None:
 
 
 def test_employee_round_trip_keeps_pin_hash(store: LocalStore) -> None:
-  e = Employee(id=1, name="A", pin_username="1", pin_hash="hash", updated_at=T)  # pyright: ignore[reportArgumentType]
+  e = Employee(id=1, first_name="A", last_name="B", pin_username="1", pin_hash="hash", updated_at=T)  # pyright: ignore[reportArgumentType]
   store.replace_table("employees", [e])
   employee = store.load("employees")[0]
   assert isinstance(employee, Employee)
@@ -260,7 +260,14 @@ def test_naive_timestamps_never_stored(store: LocalStore, db_path: Path) -> None
 
 
 def employee(employee_id: int, pin_hash: str = "$2a$06$" + "a" * 53) -> Employee:
-  return Employee(id=employee_id, name=f"E{employee_id}", pin_username=str(employee_id), pin_hash=pin_hash, updated_at=T)  # pyright: ignore[reportArgumentType]
+  return Employee(
+    id=employee_id,
+    first_name="E",
+    last_name=str(employee_id),
+    pin_username=str(employee_id),
+    pin_hash=pin_hash,  # pyright: ignore[reportArgumentType]
+    updated_at=T,
+  )
 
 
 def login_bypass(employee_id: int, at: datetime = T) -> FingerprintBypass:

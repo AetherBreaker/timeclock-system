@@ -83,11 +83,18 @@ class OverrideGrant:
 class NewEmployee:
   """The add-employee form's details, already checked; `phone` is normalized."""
 
-  name: str
+  first_name: str
+  middle_name: str | None
+  last_name: str
   phone: str | None
   email: str | None
   role: EmployeeRole
   group_id: int
+
+  @property
+  def display_name(self) -> str:
+    """First and last name, as `Employee.display_name` gives it."""
+    return f"{self.first_name} {self.last_name}"
 
 
 @dataclass(frozen=True)
@@ -325,7 +332,7 @@ class Clock:
     off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
     valid = tuple(k for k in timeline.valid_next if k not in off)
     hours = totals.worked + totals.paid_break
-    return MenuInfo(employee_id, e.name, timeline.state, since, valid, hours, is_admin=e.role is EmployeeRole.ADMIN)
+    return MenuInfo(employee_id, e.display_name, timeline.state, since, valid, hours, is_admin=e.role is EmployeeRole.ADMIN)
 
   async def record_punch(
     self, employee_id: int, kind: PunchKind, *, override: OverrideGrant | None = None, pin_login: bool = False
@@ -409,7 +416,9 @@ class Clock:
     pin_hash = await asyncio.to_thread(lambda: bcrypt.hashpw(pin.get_secret_value().encode(), bcrypt.gensalt(prefix=b"2a")).decode())
     e = Employee(
       id=number,
-      name=new.name,
+      first_name=new.first_name,
+      middle_name=new.middle_name,
+      last_name=new.last_name,
       pin_username=str(number),
       pin_hash=SecretStr(pin_hash),
       role=new.role,

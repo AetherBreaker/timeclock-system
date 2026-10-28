@@ -205,7 +205,7 @@ class AdminMenu:
   message: str | None = None
 
 
-type DetailsField = Literal["name", "phone", "email", "role", "group_id"]
+type DetailsField = Literal["first_name", "middle_name", "last_name", "phone", "email", "role", "group_id"]
 
 
 @dataclass(frozen=True)
@@ -220,7 +220,9 @@ class AddEmployeeDetails:
   admin_id: int
   groups: tuple[tuple[int, str], ...]
   touched_at: float = field(compare=False)
-  name: str = field(default="", compare=False)
+  first_name: str = field(default="", compare=False)
+  middle_name: str = field(default="", compare=False)
+  last_name: str = field(default="", compare=False)
   phone: str = field(default="", compare=False)
   email: str = field(default="", compare=False)
   role: str = field(default=EmployeeRole.EMPLOYEE.value, compare=False)
@@ -453,7 +455,7 @@ class KioskController:
       case Enrolled(template=template):
         await self._clock.register_fingerprint(s.employee_id, template)
         added = s.added
-        self._screen = await self._open_menu(s.employee_id) if added is None else EmployeeAdded(added.name, added.id, now)
+        self._screen = await self._open_menu(s.employee_id) if added is None else EmployeeAdded(added.display_name, added.id, now)
       case EnrollFailed(reason=reason):
         message = text.REGISTRATION_TIMED_OUT if reason == "timeout" else text.REGISTRATION_FAILED
         # In the add-employee flow the employee is already saved: back to the optional step, to retry or skip.
@@ -642,9 +644,12 @@ class KioskController:
       if not isinstance(s, AddEmployeeDetails):
         return
       errors: list[tuple[DetailsField, str]] = []
-      name, phone, email = s.name.strip(), s.phone.strip(), s.email.strip()
-      if not name:
-        errors.append(("name", text.NAME_REQUIRED))
+      first, middle, last = s.first_name.strip(), s.middle_name.strip(), s.last_name.strip()
+      phone, email = s.phone.strip(), s.email.strip()
+      if not first:
+        errors.append(("first_name", text.FIRST_NAME_REQUIRED))
+      if not last:
+        errors.append(("last_name", text.LAST_NAME_REQUIRED))
       try:
         stored_phone = normalize_phone(phone) if phone else None
       except ValueError:
@@ -661,7 +666,7 @@ class KioskController:
       if errors or role is None:
         self._screen = replace(s, touched_at=now, errors=tuple(errors))
       else:
-        details = NewEmployee(name, stored_phone, email or None, role, s.group_id)
+        details = NewEmployee(first, middle or None, last, stored_phone, email or None, role, s.group_id)
         self._screen = NewPin(s.admin_id, details, "first", SecretStr(""), SecretStr(""), touched_at=now)
 
   async def skip_fingerprint(self) -> None:
@@ -669,7 +674,7 @@ class KioskController:
     async with self._transition():
       s = self._screen
       if isinstance(s, NewFingerprint):
-        self._screen = EmployeeAdded(s.employee.name, s.employee.id, touched_at=self._mono())
+        self._screen = EmployeeAdded(s.employee.display_name, s.employee.id, touched_at=self._mono())
 
   async def request_override(self) -> None:
     """Ask a manager to authorize instead of a fingerprint (R23.5)."""
@@ -691,9 +696,9 @@ class KioskController:
         self._reader.set_mode(ReaderMode.READY)
       s = self._screen
       if isinstance(s, NewFingerprint):
-        self._screen = EmployeeAdded(s.employee.name, s.employee.id, touched_at=self._mono())
+        self._screen = EmployeeAdded(s.employee.display_name, s.employee.id, touched_at=self._mono())
       elif isinstance(s, Registering) and s.added is not None:
-        self._screen = EmployeeAdded(s.added.name, s.added.id, touched_at=self._mono())
+        self._screen = EmployeeAdded(s.added.display_name, s.added.id, touched_at=self._mono())
       else:
         self._screen = Idle()
 
@@ -708,8 +713,8 @@ class KioskController:
       elif now - s.touched_at >= IDLE_CLOSE_SECS:
         # The new employee is already saved, so a timeout on their optional fingerprint step still shows their number.
         if isinstance(s, NewFingerprint):
-          self._screen = EmployeeAdded(s.employee.name, s.employee.id, touched_at=now)
+          self._screen = EmployeeAdded(s.employee.display_name, s.employee.id, touched_at=now)
         elif isinstance(s, Registering) and s.added is not None:
-          self._screen = EmployeeAdded(s.added.name, s.added.id, touched_at=now)
+          self._screen = EmployeeAdded(s.added.display_name, s.added.id, touched_at=now)
         else:
           self._screen = Idle()
