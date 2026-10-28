@@ -389,13 +389,17 @@ def test_removed_print_stays_gone_through_catch_up_and_notifications(store: Loca
   assert store.pending_removals() == []
 
 
-def test_removing_an_unsynced_print_queues_nothing(store: LocalStore) -> None:
+def test_removing_a_print_mid_push_stays_removed(store: LocalStore) -> None:
+  # The push may be inserting it right now, so its removal is queued too; the insert's notification can't bring it back.
   f = fp()
   store.insert_fingerprint(f, origin="local")
   store.remove_fingerprint(f.id)
-  assert store.pending_removals() == []
+  assert store.pending_removals() == [f.id]
   assert store.unsynced_fingerprints() == []
+  store.mark_fingerprint_synced(f.id)  # the in-flight insert landed
+  store.upsert_db_fingerprint(f)
   assert store.fingerprints() == []
+  assert store.pending_removals() == [f.id]
 
 
 def test_replacing_pairs_the_new_print_with_the_old(store: LocalStore, db_path: Path) -> None:
@@ -419,6 +423,7 @@ def test_replacing_an_unsynced_replacement_still_removes_the_database_print(stor
   store.insert_fingerprint(c, origin="local", replaces=b.id)
   assert [(f.id, r) for f, r in store.unsynced_fingerprints()] == [(c.id, a.id)]
   assert [f.id for f in store.fingerprints()] == [c.id]
+  assert store.pending_removals() == [b.id]  # in case its push was in flight; pushed before c
 
 
 def test_removing_an_unsynced_replacement_removes_the_database_print(store: LocalStore) -> None:
@@ -426,7 +431,7 @@ def test_removing_an_unsynced_replacement_removes_the_database_print(store: Loca
   store.upsert_db_fingerprint(a)
   store.insert_fingerprint(b, origin="local", replaces=a.id)
   store.remove_fingerprint(b.id)
-  assert store.pending_removals() == [a.id]
+  assert sorted(store.pending_removals()) == sorted([a.id, b.id])
   assert store.unsynced_fingerprints() == []
 
 

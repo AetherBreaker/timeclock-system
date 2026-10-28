@@ -356,6 +356,10 @@ async def test_fingerprint_approver_is_an_active_admin(env: Env) -> None:
   assert env.clock.fingerprint_approver(make_employee(5, role=EmployeeRole.ADMIN))
   assert not env.clock.fingerprint_approver(make_employee(2, role=EmployeeRole.MANAGER))
   assert not env.clock.fingerprint_approver(make_employee(6, role=EmployeeRole.ADMIN, active=False))
+  pending = make_employee(7, role=EmployeeRole.ADMIN)
+  env.store.insert_pending_employee(pending)
+  await env.clock.load()
+  assert not env.clock.fingerprint_approver(pending)  # its number may yet be refused
 
 
 async def test_insert_peer_record_is_never_pushed_and_dedupes(env: Env) -> None:
