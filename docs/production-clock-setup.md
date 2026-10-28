@@ -1,0 +1,52 @@
+# Setting up a production clock
+
+Two steps per clock: install from the production image, then run `new_clock.py` from the workstation. The image is
+built from [`image/production/`](../image/production/), which shares the test device's setup ([dev-device-setup.md](dev-device-setup.md));
+the BIOS settings and the disk prompts are the same.
+
+## What the image sets up
+
+Everything the test image does except the test tools (fprintd, libinput-tools), plus:
+
+- It asks the **clock name** (e.g. `office`) and **clock number** (1–99, unique per clock), sets the hostname to
+  `timeclock-system-<name>`, and saves both in `/etc/timeclock/clock.env`. Neither can change later.
+- Docker, from Docker's repository.
+- Coolify's key in root's `authorized_keys`, and the tunnel's host key already trusted, so `coolify-tunnel-setup` doesn't ask.
+- `/data/timeclock_system_files/` with the logo in `branding/` and the remote-access client in `remote/`.
+- `tcadmin` / `timeclock` at the console, SSH by the workstation's key (`~/.ssh/timeclock_dev`), passwordless sudo.
+
+The ISO holds the remote-access client, so it stays in the gitignored `image/production/out/`.
+
+## Once: a Coolify API token
+
+In Coolify, **Keys & Tokens → API tokens**, create one with **root** permission, and add it to this repository's
+`.env` as `COOLIFY_API_TOKEN=...`.
+
+## Per clock
+
+1. **Write the stick** with `image/production/out/timeclock-debian-<version>-amd64.iso` (Rufus in DD image mode, or balenaEtcher).
+2. **BIOS** as for the test device (dev-device-setup.md, 2).
+3. **Install:** wired network plugged in; boot the stick (F9); **Timeclock install** is selected, press Enter. Enter the
+   clock name and number; answer **Yes** at the disk prompts (dev-device-setup.md, 3.4). Remove the stick when it reboots.
+4. **From the workstation**, in this repository:
+
+   ```powershell
+   uv run image/production/new_clock.py timeclock-system-<name>.local
+   ```
+
+   It enrols the clock in the WireGuard hub (and releases the hub), opens its Coolify tunnel (and redeploys
+   coolify-tunnel), adds and validates the Coolify server, creates its database login, then creates the Coolify
+   application with every variable filled in and deploys it. It takes about half an hour, mostly the hub release and
+   Coolify's validation. If a step fails, fix the cause and run it again: done steps are skipped.
+
+   The variables stay editable in the application's settings in Coolify.
+
+## Rebuilding the image
+
+In a `debian:trixie` container (Docker Desktop), with `image/` at `/src` (read-only), `image/production/work` at
+`/work`, `image/production/out` at `/out`, `image/production/private` at `/private` (the logo and
+`sweetfiresupportdesk.deb`, kept out of git), and the workstation's `timeclock_dev.pub` at `/keys/authorized_keys`:
+`dev-device/fetch.sh`, then `production/build.sh`. `production/test.sh` installs the result in a QEMU VM (with the
+private key at `/keys/id`) and checks it over SSH.
+
+`files/coolify.pub` is Coolify's public key; `files/tunnel_known_hosts` is coolify-tunnel's host key. Replace either if it changes.
