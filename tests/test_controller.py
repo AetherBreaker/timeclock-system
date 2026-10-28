@@ -700,3 +700,10 @@ def test_alert_notice_wording() -> None:
   assert text.alert_notice(at_limit) == "You've worked over 37.5 hours this week"
   early = Firing(Hook(WEEKLY_HOURS, timedelta(hours=1), (CONFIRMATION_NOTICE,)), measure=limit, limit=timedelta(hours=40))
   assert text.alert_notice(early) == "You're within 1 h of 40 hours this week"
+
+
+async def test_a_digit_on_the_idle_screen_opens_the_pad_with_it_typed(kiosk: Kiosk) -> None:
+  # Walk up and type: no need to tap "Use PIN" first.
+  assert isinstance(kiosk.ctl.screen, Idle)
+  await kiosk.ctl.digit("4")
+  assert kiosk.ctl.screen == PinEntry("username", "4", SecretStr(""), None, touched_at=kiosk.t.mono)
