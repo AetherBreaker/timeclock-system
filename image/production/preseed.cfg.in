@@ -1,0 +1,77 @@
+#_preseed_V1
+# Debian 13 answer file for a production timeclock. Everything is answered except the clock's name and number
+# (/timeclock-ask.sh; the hostname follows from the name) and the partitioner's confirmations before it writes
+# to a disk (partman/confirm for disks with partitions, partman/confirm_nooverwrite for empty ones, and the RAID ones),
+# the guard before erasing anything. @PASSWORD_HASH@ is filled in by build.sh.
+
+d-i debian-installer/locale string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+
+d-i preseed/early_command string sh /timeclock-ask.sh ask
+
+d-i netcfg/choose_interface select auto
+d-i netcfg/get_domain string
+d-i hw-detect/load_firmware boolean true
+
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i mirror/http/proxy string
+
+# No root password: root is locked and tcadmin gets sudo. Root still logs in over SSH by key (Coolify).
+d-i passwd/root-login boolean false
+d-i passwd/user-fullname string Timeclock Admin
+d-i passwd/username string tcadmin
+d-i passwd/user-password-crypted password @PASSWORD_HASH@
+
+d-i clock-setup/utc boolean true
+d-i time/zone string America/New_York
+d-i clock-setup/ntp boolean true
+
+# Every disk except the installer's own USB stick. Two or more: mirror the first two (an EFI
+# partition on each, RAID1 for swap and for /, per /timeclock-raid.recipe). One: a plain install.
+d-i partman/early_command string \
+  media=$(mount | sed -n 's|^/dev/\([a-z]*\)[0-9]* on /cdrom .*|\1|p'); \
+  disks=""; \
+  for d in $(list-devices disk); do [ "$d" = "/dev/$media" ] || disks="$disks $d"; done; \
+  set -- $disks; \
+  if [ $# -ge 2 ]; then \
+    p1=$1; p2=$2; \
+    case $1 in *nvme*|*mmcblk*) p1=${1}p ;; esac; \
+    case $2 in *nvme*|*mmcblk*) p2=${2}p ;; esac; \
+    debconf-set partman-auto/method raid; \
+    debconf-set partman-auto/disk "$1 $2"; \
+    debconf-set partman-auto/expert_recipe_file /timeclock-raid.recipe; \
+    debconf-set partman-auto-raid/recipe "1 2 0 swap - ${p1}2#${p2}2 . 1 2 0 ext4 / ${p1}3#${p2}3 ."; \
+  else \
+    debconf-set partman-auto/disk "$1"; \
+  fi
+d-i partman-auto/method string regular
+d-i partman-auto/choose_recipe select atomic
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-md/device_remove_md boolean true
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+# partman/confirm, partman/confirm_nooverwrite and partman-md/confirm are deliberately unanswered.
+
+d-i apt-setup/non-free-firmware boolean true
+d-i apt-setup/contrib boolean false
+
+tasksel tasksel/first multiselect standard, ssh-server
+d-i pkgsel/include string sudo avahi-daemon usbutils curl ca-certificates systemd-timesyncd rsync efibootmgr dosfstools unattended-upgrades
+d-i pkgsel/update-policy select unattended-upgrades
+d-i pkgsel/upgrade select full-upgrade
+popularity-contest popularity-contest/participate boolean false
+
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/with_other_os boolean true
+d-i grub-installer/bootdev string default
+# Also install to \EFI\BOOT\BOOTX64.EFI, which firmware boots from any drive without a boot entry.
+d-i grub-installer/force-efi-extra-removable boolean true
+
+d-i preseed/late_command string \
+  sh /timeclock-ask.sh save; \
+  cp -a /cdrom/timeclock /target/root/timeclock-setup; \
+  in-target sh /root/timeclock-setup/late.sh
+
+d-i finish-install/reboot_in_progress note

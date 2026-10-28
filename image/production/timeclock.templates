@@ -1,0 +1,12 @@
+Template: timeclock/instance-id
+Type: string
+Description: Clock name
+ A short name for this clock's location, e.g. office: lowercase letters, digits and hyphens, starting with a
+ letter or digit, at most 46 characters. It names the clock in alerts, logs and the database, and sets the
+ hostname to timeclock-system-<name>. It can't be changed later.
+
+Template: timeclock/clock-number
+Type: string
+Description: Clock number (1-99)
+ Unique per clock. Clock n numbers the employees it adds n x 10000 + 1 to n x 10000 + 9999, so two clocks must never
+ share a number. It can't be changed later.

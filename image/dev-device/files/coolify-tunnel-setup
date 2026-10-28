@@ -15,12 +15,17 @@ install -d -m 700 "$D"
 
 ssh-keyscan -t ed25519 -p "$TUNNEL_PORT" "$VPS" > "$D/known_hosts.new" 2>/dev/null
 [ -s "$D/known_hosts.new" ] || { rm -f "$D/known_hosts.new"; echo "could not reach $VPS:$TUNNEL_PORT" >&2; exit 1; }
-echo "The tunnel's host key. Compare with the fingerprint in the coolify-tunnel container's log in Coolify:"
-ssh-keygen -lf "$D/known_hosts.new"
-printf 'Does it match? [y/N] '
-read -r answer
-[ "$answer" = y ] || { rm -f "$D/known_hosts.new"; echo "aborted" >&2; exit 1; }
-mv "$D/known_hosts.new" "$D/known_hosts"
+# The production image ships the tunnel's key already trusted; asking is only for a key not seen before.
+if [ -f "$D/known_hosts" ] && [ "$(ssh-keygen -lf "$D/known_hosts.new")" = "$(ssh-keygen -lf "$D/known_hosts")" ]; then
+  rm -f "$D/known_hosts.new"
+else
+  echo "The tunnel's host key. Compare with the fingerprint in the coolify-tunnel container's log in Coolify:"
+  ssh-keygen -lf "$D/known_hosts.new"
+  printf 'Does it match? [y/N] '
+  read -r answer || answer=
+  [ "$answer" = y ] || { rm -f "$D/known_hosts.new"; echo "aborted" >&2; exit 1; }
+  mv "$D/known_hosts.new" "$D/known_hosts"
+fi
 
 cat > /etc/systemd/system/coolify-tunnel.service <<EOF
 [Unit]

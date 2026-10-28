@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install the built ISO into a QEMU VM unattended (software emulation), boot the result, and
-# check the configuration over SSH. Only difference from a real install: partman/confirm and the
+# check the configuration over SSH. Only difference from a real install: the disk confirmations and the
 # hostname are answered on the kernel command line. Mounts: /out (the ISO), /work, /keys/id (private key).
 set -eu
 cd /work
@@ -15,7 +15,7 @@ echo "== install ($(date -u +%H:%M))"
 timeout 4h qemu-system-x86_64 -m 2048 -smp 2 -accel tcg -nographic -no-reboot \
   -drive file=vm/disk.qcow2,if=virtio -cdrom "$ISO" \
   -kernel vm/vmlinuz -initrd vm/initrd.gz \
-  -append "auto=true priority=critical partman/confirm=true netcfg/get_hostname=timeclock-test console=ttyS0,115200n8" \
+  -append "auto=true priority=critical partman/confirm=true partman/confirm_nooverwrite=true netcfg/get_hostname=timeclock-test console=ttyS0,115200n8" \
   -netdev user,id=n0 -device virtio-net-pci,netdev=n0 > vm/install.log 2>&1 || true
 echo "== install ended ($(date -u +%H:%M)); last lines:"
 tail -c 2000 vm/install.log | tr -cd '\11\12\15\40-\176' | tail -n 15
