@@ -10,8 +10,9 @@ Run from timeclock-system once the clock has rebooted from the install:
 
 Every step checks what's already done, so a rerun after a failure carries on where it stopped:
 1. the clock's name and number, from /etc/timeclock/clock.env (written by the installer);
-2. wireguard-hub: a key pair (the private key kept as timeclock-system-<name>.key in the checkout, gitignored), a
-   peers.toml row with the next address and the clock's two rules.v4 forwards, then a hub release-and-pin;
+2. wireguard-hub, checked only: the clock is enrolled by hand beforehand (its key as timeclock-system-<name>.key in the
+   hub checkout, gitignored; a peers.toml row; forwards to the log server and the database relay in rules.v4; a
+   release-and-pin), and the pinned release has the row, with the key's public half, and both forwards;
 3. coolify-tunnel: the clock's tunnel on the next free port and its line in docker/authorized_keys, pushed and redeployed;
 4. Coolify: the server (coolify-tunnel:<port>, root, no proxy), validated;
 5. the clock's database login, timeclock_clock_<name> in timeclock_clocks, with a random password;
@@ -20,7 +21,7 @@ Every step checks what's already done, so a rerun after a failure carries on whe
 The variables stay editable in Coolify; nothing here sets them again once the application exists.
 
 Needs, in .env: COOLIFY_API_TOKEN (a root token). And: ~/.ssh/timeclock_dev (tcadmin's key), `ssh Coolify_Server`,
-the wireguard-hub and coolify-tunnel checkouts beside this one with push access, and poe at ~/.local/bin.
+the wireguard-hub checkout beside this one (read only), and the coolify-tunnel one with push access.
 """
 
 # Standard library imports
@@ -43,7 +44,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE = ROOT.parent
 HUB = WORKSPACE / "wireguard-hub"
 TUNNEL = WORKSPACE / "coolify-tunnel"
-POE = Path.home() / ".local/bin/poe"
+HUB_REPO = "AetherBreaker/wireguard-hub"
 COOLIFY = "https://coolify.sweetfiretobacco.com/api/v1"
 TEMPLATE_INSTANCE = "dev"  # timeclock-dev's application: where the new one goes, and the shared variables' source
 LOG_SERVER, BACKEND = "central-log-server", "timeclock-backend"
@@ -92,6 +93,18 @@ def git_commit_push(repo: Path, paths: list[str], message: str) -> None:
   run("git", "push", cwd=repo)
 
 
+def raw_github(repo: str, ref: str, path: str) -> str:
+  """A file of a public GitHub repository at a ref."""
+  request = urllib.request.Request(
+    f"https://raw.githubusercontent.com/{repo}/{ref}/{path}", headers={"User-Agent": "timeclock-new-clock/1"}
+  )
+  try:
+    with urllib.request.urlopen(request, timeout=60) as response:
+      return response.read().decode()
+  except urllib.error.HTTPError as e:
+    sys.exit(f"GitHub {repo}@{ref}:{path}: HTTP {e.code}")
+
+
 def deploy_app_named(name: str) -> None:
   """Start a deploy of the one Coolify application with this name."""
   apps = [a for a in api("GET", "/applications") if a["name"] == name]  # pyright: ignore[reportGeneralTypeIssues]
@@ -132,68 +145,30 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
   if template is None:
     sys.exit(f"no timeclock-system application with INSTANCE_ID={TEMPLATE_INSTANCE} in Coolify")
 
-  # 2. WireGuard hub.
-  for repo in (HUB, TUNNEL):
-    run("git", "pull", "--ff-only", cwd=repo)
-  peers_path = HUB / "src/wireguard_hub/peers.toml"
-  rules_path = HUB / "src/wireguard_hub/rules.v4"
+  # 2. WireGuard hub: enrolment is by hand (release commands never run from a script), so only check it. The pinned tag is
+  # what Coolify deploys; the key file sits in the hub checkout, gitignored.
+  run("git", "pull", "--ff-only", cwd=TUNNEL)
   key_path = HUB / f"{peer}.key"
-  if key_path.exists():
-    private = X25519PrivateKey.from_private_bytes(base64.b64decode(key_path.read_text(encoding="utf-8").strip()))
-  else:
-    private = X25519PrivateKey.generate()
-    raw = private.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
-    key_path.write_text(base64.b64encode(raw).decode() + "\n", encoding="utf-8")
-  public = base64.b64encode(private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+  if not key_path.exists():
+    sys.exit(f"{peer} isn't enrolled in wireguard-hub: no {key_path}. Enrol it (wireguard-hub README), release-and-pin, rerun")
   wg_private = key_path.read_text(encoding="utf-8").strip()
-
-  peers_text = peers_path.read_text(encoding="utf-8")
-  rows = dict(re.findall(r'name = "([^"]+)"\s*\npublic_key = "[^"]+"\s*\naddress = "([^"]+)"', peers_text))
-  if not {LOG_SERVER, BACKEND} <= rows.keys():
-    sys.exit(f"{peers_path} has rows this script can't read (name, public_key, address, in that order)")
-  hub_changed = False
+  private = X25519PrivateKey.from_private_bytes(base64.b64decode(wg_private))
+  public = base64.b64encode(private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+  tag = re.search(r"GIT_TAG: (\S+)", raw_github(HUB_REPO, "main", "docker/compose.yaml"))[1]  # pyright: ignore[reportOptionalSubscript]
+  peers_text = raw_github(HUB_REPO, tag, "src/wireguard_hub/peers.toml")
+  rows = {n: (k, a) for n, k, a in re.findall(r'name = "([^"]+)"\s*\npublic_key = "([^"]+)"\s*\naddress = "([^"]+)"', peers_text)}
   if peer not in rows:
-    last = max(int(a.split(".")[3].split("/")[0]) for a in rows.values())
-    rows[peer] = f"10.8.0.{last + 1}/32"
-    peers_text = peers_text.rstrip("\n") + f'\n\n[[peers]]\nname = "{peer}"\npublic_key = "{public}"\naddress = "{rows[peer]}"\n'
-    # Keep the address lists in the comment and README current.
-    peers_text = re.sub(r"further peers from \.\d+", f"{peer} {rows[peer]}, further peers from .{last + 2}", peers_text)
-    peers_path.write_text(peers_text, encoding="utf-8")
-    readme = HUB / "README.md"
-    readme.write_text(
-      re.sub(
-        r"further peers from `\.\d+`",
-        f"`{peer}` `10.8.0.{last + 1}`, further peers from `.{last + 2}`",
-        readme.read_text(encoding="utf-8"),
-      ),
-      encoding="utf-8",
+    sys.exit(f"wireguard-hub {tag} (the pinned release) has no {peer} row; enrol it, release-and-pin, rerun")
+  if rows[peer][0] != public:
+    sys.exit(f"wireguard-hub {tag}'s {peer} row has a different public key than {key_path}; fix one of them by hand")
+  rules = raw_github(HUB_REPO, tag, "src/wireguard_hub/rules.v4")
+  for target, port in ((LOG_SERVER, 9020), (BACKEND, 5432)):
+    rule = (
+      f"-A FORWARD -i wg0 -o wg0 -s {rows[peer][1]} -d {rows[target][1]} -p tcp --dport {port} -m conntrack --ctstate NEW -j ACCEPT"
     )
-    hub_changed = True
-  elif f'public_key = "{public}"' not in peers_text:
-    sys.exit(f"peers.toml's {peer} row has a different key than {key_path}; fix one of them by hand")
-  rules = rules_path.read_text(encoding="utf-8")
-  new_rules = ""
-  for target, port, why in (
-    (LOG_SERVER, 9020, "the central log server (timeclock design 12, R22)"),
-    (BACKEND, 5432, "timeclock-backend's database relay (timeclock design 12, R26.1)"),
-  ):
-    rule = f"-A FORWARD -i wg0 -o wg0 -s {rows[peer]} -d {rows[target]} -p tcp --dport {port} -m conntrack --ctstate NEW -j ACCEPT"
     if rule not in rules:
-      new_rules += f"# {peer} to {why}.\n{rule}\n"
-  if new_rules:
-    head, sep, tail = rules.rpartition("COMMIT")
-    rules_path.write_text(head + new_rules + sep + tail, encoding="utf-8")
-    hub_changed = True
-  if hub_changed:
-    git_commit_push(
-      HUB,
-      ["README.md", "src/wireguard_hub/peers.toml", "src/wireguard_hub/rules.v4"],
-      f"feat(peers): enrol {peer}; forward it to logs and the database relay",
-    )
-    print(f"  hub: {peer} at {rows[peer]}; releasing")
-    run(POE, "release-and-pin", "patch", f"Enrol {peer}", "--force", cwd=HUB)
-  else:
-    print(f"  hub: {peer} already enrolled at {rows[peer]}")
+      sys.exit(f"wireguard-hub {tag}'s rules.v4 lacks {peer}'s forward to {target}:\n{rule}")
+  print(f"  hub: {peer} enrolled at {rows[peer][1]} in {tag}")
 
   # 3. Tunnel.
   keys_path = TUNNEL / "docker/authorized_keys"
