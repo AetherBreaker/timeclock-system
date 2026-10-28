@@ -21,7 +21,7 @@ The installer image does most of the setup. Its source is [`image/dev-device/`](
 
 ## 1. Write the USB stick
 
-Use `timeclock-dev-debian-13.7.0-amd64.iso`. Check it against its `.sha256` file if you like. Write it with **Rufus** (choose **DD image mode** when asked) or **balenaEtcher**. Everything on the stick is erased.
+Use `image/dev-device/out/timeclock-dev-debian-13.7.0-amd64.iso`. Check it against its `.sha256` file if you like. Write it with **Rufus** (choose **DD image mode** when asked) or **balenaEtcher**. Everything on the stick is erased.
 
 ## 2. BIOS
 
@@ -107,6 +107,9 @@ Coolify renames the container (`coolify-tunnel-<id>`) but keeps `coolify-tunnel`
 
 ## 6. Afterwards
 
+- **Wifi** (built in, or a USB dongle such as the TP-Link Archer T3U), over SSH while wired:
+  `sudo nmcli dev wifi connect "<network>" password "<password>"`. It reconnects after every reboot; `nmcli dev` shows the
+  state. The cable keeps working alongside.
 - To run Docker as `tcadmin` once Coolify has installed it: `sudo usermod -aG docker tcadmin`, then log in again.
 - Before the time clock app is deployed here, make sure nothing is using the reader: fprintd only claims it while a command like `fprintd-verify` is running.
 
@@ -139,5 +142,5 @@ Once per clock, after the install. timeclock-dev's values are in parentheses.
 The image is built from [`image/dev-device/`](../image/dev-device/) in a `debian:trixie` container (Docker Desktop):
 
 1. `fetch.sh` downloads the current Debian 13 netinst, and verifies it against Debian's signed checksums.
-2. `build.sh` adds the answer file (`preseed.cfg.in`) and the setup files (`files/`), and writes the new ISO.
+2. `build.sh` adds the answer file (`preseed.cfg.in`) and the setup files (`files/`), and writes the new ISO to `/out`: mount the gitignored `image/dev-device/out/` there.
 3. `test.sh` installs it in a QEMU VM and checks the result over SSH.

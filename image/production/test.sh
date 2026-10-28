@@ -50,6 +50,9 @@ $SSH '
   docker compose version
   systemctl is-active docker avahi-daemon ssh systemd-timesyncd
   dpkg-query -W -f="\${Package} \${Status}\n" fprintd libinput-tools python3-gi 2>&1
+  dpkg-query -W -f="\${Package} \${Status}\n" network-manager wpasupplicant firmware-realtek firmware-iwlwifi firmware-mediatek firmware-atheros
+  systemctl is-active NetworkManager
+  nmcli -t -f DEVICE,TYPE,STATE dev | grep -Ev "^(veth|br-|docker)"
   timedatectl | grep -E "Time zone|NTP service"
   apt-config dump | grep -E "Automatic-Reboot|Origins-Pattern"
 '
