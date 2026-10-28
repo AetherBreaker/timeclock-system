@@ -70,6 +70,7 @@ $SSH '
   nmcli -t -f DEVICE,TYPE,STATE dev | grep -Ev "^(veth|br-|docker)"
   timedatectl | grep -E "Time zone|NTP service"
   apt-config dump | grep -E "Automatic-Reboot|Origins-Pattern"
+  grep -n OS_PROBER /etc/default/grub; grep -c osprober /boot/grub/grub.cfg
 '
 $SSH 'sudo poweroff' 2>/dev/null || true
 wait $QEMU 2>/dev/null || true

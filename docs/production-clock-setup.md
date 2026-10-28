@@ -11,6 +11,9 @@ Everything the test image does except the test tools (fprintd, libinput-tools), 
 
 - It asks the **clock name** (e.g. `office`) and **clock number** (1–99, unique per clock), sets the hostname to
   `timeclock-system-<name>`, and saves both in `/etc/timeclock/clock.env`. Neither can change later.
+- Nothing of a previous system: the drives it uses are blanked first (so their EFI partitions are made fresh), GRUB
+  doesn't probe for other systems, and firmware boot entries for any partition but this install's EFI partitions
+  (an old Windows, ubuntu or debian) are deleted. Firmware built-ins and USB entries stay.
 - Docker, from Docker's repository.
 - NetworkManager and wifi firmware (Intel, Realtek, MediaTek, Atheros), for wifi built in or on a USB dongle.
 - Coolify's key in root's `authorized_keys`, and the tunnel's host key already trusted, so `coolify-tunnel-setup` doesn't ask.
@@ -71,8 +74,8 @@ In a `debian:trixie` container (Docker Desktop), with `image/` at `/src` (read-o
 `sweetfiresupportdesk.deb`, kept out of git), and the workstation's `timeclock_dev.pub` at `/keys/authorized_keys`:
 `dev-device/fetch.sh`, then `production/build.sh`. `production/test.sh` installs the result in a QEMU VM on one blank
 drive (with the private key at `/keys/id`) and checks it over SSH; `production/test-raid.sh` (container run with
-`--privileged`) does the two-drive RAID1 install under UEFI on drives holding old systems, then boots both drives and
-the second alone. Both fail if the installer asks anything beyond what the kernel command line answers (the name and
+`--privileged`, and `python3-virt-firmware` for its firmware boot entries) does the two-drive RAID1 install under UEFI
+on drives holding old systems with stale boot entries, then boots all drives and the second alone. Both fail if the installer asks anything beyond what the kernel command line answers (the name and
 number). Each install takes hours under software emulation.
 
 `files/coolify.pub` is Coolify's public key; `files/tunnel_known_hosts` is coolify-tunnel's host key. Replace either if it changes.
