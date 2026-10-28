@@ -2,9 +2,7 @@
     "python.envFile": "${workspaceFolder}/.env",
     "python.testing.pytestEnabled": true,
     "python.testing.unittestEnabled": false,
-    "python.testing.pytestArgs": [
-        "tests"
-    ],
+    "python.testing.pytestArgs": ["tests"],
     "[python]": {
         "editor.defaultFormatter": "charliermarsh.ruff",
         "editor.formatOnSave": true
@@ -43,5 +41,6 @@
         {
             "text": "Do not review files under tests/; only review production code."
         }
-    ]
+    ],
+    "python.defaultInterpreterPath": "C:\\Users\\User\\AppData\\Roaming\\uv\\python\\cpython-3.14-windows-x86_64-none\\python.exe"
 }
