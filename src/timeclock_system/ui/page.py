@@ -7,6 +7,7 @@
 import inspect
 import logging
 from datetime import UTC, datetime
+from importlib.metadata import version
 from typing import TYPE_CHECKING
 
 # Third party imports
@@ -161,6 +162,8 @@ class _KioskPage:
     ui.keyboard(on_key=self._on_key)
 
     clock_label = ui.label().classes("fixed top-2 right-4 text-xl")
+    # Small and dim: for whoever services the clock, telling which release it runs.
+    ui.label(f"v{version('timeclock-system')}").classes("fixed top-2 left-4 text-sm opacity-50")
     self.indicator()
     self.screen()
     with ui.row().classes("fixed bottom-2 right-4 items-center gap-2 text-base"):
@@ -374,7 +377,7 @@ class _KioskPage:
 
   def _pin_pad(self, title: str, shown: str, error: str | None) -> None:
     ui.label(title).classes("sft-title")
-    ui.label(shown).classes("text-4xl h-12")
+    ui.label(shown).classes("text-4xl h-12").mark("pin-shown")
     if error:
       ui.label(error).classes("sft-error")
     with ui.grid(columns=3).classes("gap-2"):
