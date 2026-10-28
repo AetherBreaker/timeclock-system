@@ -13,12 +13,21 @@ import pytest
 from pydantic import BaseModel, SecretBytes, SecretStr
 from timeclock_schema import rules as schema_rules
 from timeclock_schema.alerts import WEEKLY_HOURS
-from timeclock_schema.enums import BypassReason, CorrectionAction, EmployeeRole, PunchKind, RuleAction
+from timeclock_schema.enums import (
+  BypassReason,
+  CorrectionAction,
+  EmployeeRole,
+  Finger,
+  FingerprintChangeAction,
+  PunchKind,
+  RuleAction,
+)
 from timeclock_schema.models import Employee, Fingerprint, Punch, PunchCorrection, RuleRow, Settings
 from timeclock_schema.shifts import EmployeeState
 
 # First party imports
 from timeclock_system.clock import (
+  Approval,
   Clock,
   EmployeeBlockFull,
   NewEmployee,
@@ -247,7 +256,9 @@ async def test_gallery_orders_by_latest_punch_here(env: Env) -> None:
   env.store.replace_table("employees", [make_employee(1), make_employee(2), make_employee(3, active=False), make_employee(4)])
   await env.clock.load()
   prints = {
-    n: Fingerprint(id=uuid4(), employee_id=n, template=SecretBytes(b"t%d" % n), registered_at=T, instance_id="dev")
+    n: Fingerprint(
+      id=uuid4(), employee_id=n, finger=Finger.LEFT_INDEX, template=SecretBytes(b"t%d" % n), registered_at=T, instance_id="dev"
+    )
     for n in (1, 2, 3, 4)
   }
   for f in prints.values():
@@ -300,11 +311,51 @@ async def test_register_fingerprint_stores_local_unsynced(env: Env) -> None:
   heard: list[object] = []
   env.clock.add_record_listener(heard.append)
   assert not await env.clock.has_fingerprint(1)
-  f = await env.clock.register_fingerprint(1, b"tmpl")
-  assert env.store.unsynced_fingerprints() == [f]
+  f = await env.clock.register_fingerprint(1, b"tmpl", Finger.LEFT_INDEX)
+  assert env.store.unsynced_fingerprints() == [(f, None)]
   assert heard == [f]
   assert f.instance_id == "dev"
   assert await env.clock.has_fingerprint(1)
+
+
+async def test_register_fingerprint_logs_an_add(env: Env) -> None:
+  f = await env.clock.register_fingerprint(1, b"tmpl", Finger.RIGHT_THUMB)
+  [c] = env.store.unsynced_fingerprint_changes()
+  assert (c.employee_id, c.finger, c.action, c.approved_by, c.pin_only) == (
+    1,
+    Finger.RIGHT_THUMB,
+    FingerprintChangeAction.ADD,
+    None,
+    None,
+  )
+  assert (c.at, c.instance_id) == (T, "dev")
+  assert await env.clock.prints_by_finger(1) == {Finger.RIGHT_THUMB: f.id}
+
+
+async def test_replace_logs_the_approval_and_drops_the_old_print(env: Env) -> None:
+  old = await env.clock.register_fingerprint(1, b"old", Finger.LEFT_INDEX)
+  new = await env.clock.register_fingerprint(1, b"new", Finger.LEFT_INDEX, approval=Approval(2, pin_only=True), replaces=old.id)
+  assert await env.clock.prints_by_finger(1) == {Finger.LEFT_INDEX: new.id}
+  c = env.store.unsynced_fingerprint_changes()[-1]
+  assert (c.action, c.approved_by, c.pin_only) == (FingerprintChangeAction.REPLACE, 2, True)
+
+
+async def test_remove_fingerprint_logs_and_stops_matching(env: Env) -> None:
+  heard: list[frozenset[str]] = []
+  env.clock.add_change_listener(heard.append)
+  f = await env.clock.register_fingerprint(1, b"tmpl", Finger.LEFT_INDEX)
+  await env.clock.remove_fingerprint(1, f.id, Finger.LEFT_INDEX, Approval(2, pin_only=False))
+  assert await env.clock.gallery() == []
+  assert await env.clock.prints_by_finger(1) == {}
+  c = env.store.unsynced_fingerprint_changes()[-1]
+  assert (c.action, c.finger, c.approved_by, c.pin_only) == (FingerprintChangeAction.REMOVE, Finger.LEFT_INDEX, 2, False)
+  assert heard[-1] == {"fingerprints"}
+
+
+async def test_fingerprint_approver_is_an_active_admin(env: Env) -> None:
+  assert env.clock.fingerprint_approver(make_employee(5, role=EmployeeRole.ADMIN))
+  assert not env.clock.fingerprint_approver(make_employee(2, role=EmployeeRole.MANAGER))
+  assert not env.clock.fingerprint_approver(make_employee(6, role=EmployeeRole.ADMIN, active=False))
 
 
 async def test_insert_peer_record_is_never_pushed_and_dedupes(env: Env) -> None:
@@ -312,7 +363,9 @@ async def test_insert_peer_record_is_never_pushed_and_dedupes(env: Env) -> None:
   assert await env.clock.insert_peer_record(p) is True
   assert await env.clock.insert_peer_record(p) is False
   assert env.store.unsynced_punches() == []
-  f = Fingerprint(id=uuid4(), employee_id=1, template=SecretBytes(b"x"), registered_at=T, instance_id="other")
+  f = Fingerprint(
+    id=uuid4(), employee_id=1, finger=Finger.LEFT_INDEX, template=SecretBytes(b"x"), registered_at=T, instance_id="other"
+  )
   assert await env.clock.insert_peer_record(f) is True
   assert env.store.unsynced_fingerprints() == []
 

@@ -19,8 +19,18 @@ from uuid import uuid4
 import bcrypt
 from pydantic import SecretBytes, SecretStr
 from timeclock_schema.alerts import AlertContext, Firing, fired_hooks
-from timeclock_schema.enums import BypassReason, EmployeeRole, PunchKind, RuleAction
-from timeclock_schema.models import BusinessHours, Employee, Fingerprint, FingerprintBypass, Group, Punch, RuleRow, Settings
+from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, FingerprintChangeAction, PunchKind, RuleAction
+from timeclock_schema.models import (
+  BusinessHours,
+  Employee,
+  Fingerprint,
+  FingerprintBypass,
+  FingerprintChange,
+  Group,
+  Punch,
+  RuleRow,
+  Settings,
+)
 from timeclock_schema.rules import RuleContext, RuleValidationError, ValidatedRule, applicable_rules, evaluate, validate_rule
 from timeclock_schema.shifts import EmployeeState, apply_corrections, build_timeline, total_hours, week_bounds
 
@@ -39,7 +49,7 @@ if TYPE_CHECKING:
 
 ChangeTable = Literal["employees", "groups", "fingerprints", "punches", "punch_corrections", "rules", "business_hours", "settings"]
 
-type Record = Punch | Fingerprint | Employee | FingerprintBypass
+type Record = Punch | Fingerprint | Employee | FingerprintBypass | FingerprintChange
 """What the record listeners hear about: everything this clock creates."""
 
 _UNKNOWN_EMPLOYEE = "Unknown employee"
@@ -68,6 +78,14 @@ def check_new_pin(pin: SecretStr) -> bool:
   """Whether `pin` is acceptable for a new employee: digits only, any length. The one place a length rule would go."""
   value = pin.get_secret_value()
   return value.isascii() and value.isdecimal()
+
+
+@dataclass(frozen=True)
+class Approval:
+  """An admin's approval of one fingerprint change: by their finger, or `pin_only`."""
+
+  admin_id: int
+  pin_only: bool
 
 
 @dataclass(frozen=True)
@@ -288,6 +306,14 @@ class Clock:
       and manager.id not in self._pending
     )
 
+  def fingerprint_approver(self, e: Employee) -> bool:
+    """Whether `e` may approve a fingerprint change: an active admin, themselves included."""
+    return e.active and e.role is EmployeeRole.ADMIN
+
+  async def prints_by_finger(self, employee_id: int) -> dict[Finger, UUID]:
+    """Return the employee's prints on file here, by finger."""
+    return {f.finger: f.id for f in await asyncio.to_thread(self._store.fingerprints) if f.employee_id == employee_id}
+
   def _login_bypass(self, e: Employee, punch_id: UUID | None) -> FingerprintBypass:
     reason = BypassReason.ADMIN_PIN_LOGIN if e.role is EmployeeRole.ADMIN else BypassReason.EXEMPT_PIN_LOGIN
     return FingerprintBypass(
@@ -433,16 +459,53 @@ class Clock:
       cb(e)
     return e
 
-  async def register_fingerprint(self, employee_id: int, template: bytes) -> Fingerprint:
-    """Store a newly enrolled print as a local, unsynced registration."""
+  async def register_fingerprint(
+    self, employee_id: int, template: bytes, finger: Finger, *, approval: Approval | None = None, replaces: UUID | None = None
+  ) -> Fingerprint:
+    """Store a newly enrolled print as a local, unsynced registration, and log it.
+
+    `replaces` (a re-register) is removed with it; only a first registration goes without `approval`.
+    """
+    now = self._now()
     f = Fingerprint(
-      id=uuid4(), employee_id=employee_id, template=SecretBytes(template), registered_at=self._now(), instance_id=self.instance_id
+      id=uuid4(),
+      employee_id=employee_id,
+      finger=finger,
+      template=SecretBytes(template),
+      registered_at=now,
+      instance_id=self.instance_id,
     )
-    await asyncio.to_thread(self._store.insert_fingerprint, f, origin="local")
+    action = FingerprintChangeAction.ADD if replaces is None else FingerprintChangeAction.REPLACE
+    change = self._fingerprint_change(employee_id, finger, action, approval, now)
+    await asyncio.to_thread(
+      lambda: (self._store.insert_fingerprint(f, origin="local", replaces=replaces), self._store.insert_fingerprint_change(change))
+    )
     for cb in self._record_listeners:
       cb(f)
     self.notify_changed({"fingerprints"})
     return f
+
+  async def remove_fingerprint(self, employee_id: int, fingerprint_id: UUID, finger: Finger, approval: Approval) -> None:
+    """Remove a print here at once (the database follows on the next push), and log it."""
+    change = self._fingerprint_change(employee_id, finger, FingerprintChangeAction.REMOVE, approval, self._now())
+    await asyncio.to_thread(lambda: (self._store.remove_fingerprint(fingerprint_id), self._store.insert_fingerprint_change(change)))
+    for cb in self._record_listeners:
+      cb(change)
+    self.notify_changed({"fingerprints"})
+
+  def _fingerprint_change(
+    self, employee_id: int, finger: Finger, action: FingerprintChangeAction, approval: Approval | None, at: datetime
+  ) -> FingerprintChange:
+    return FingerprintChange(
+      id=uuid4(),
+      employee_id=employee_id,
+      finger=finger,
+      action=action,
+      approved_by=None if approval is None else approval.admin_id,
+      pin_only=None if approval is None else approval.pin_only,
+      at=at,
+      instance_id=self.instance_id,
+    )
 
   async def gallery(self) -> list[GalleryPrint]:
     """Return the active employees' prints, those who punched here most recently first (R36.4)."""
