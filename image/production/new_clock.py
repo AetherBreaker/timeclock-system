@@ -13,10 +13,10 @@ Every step checks what's already done, so a rerun after a failure carries on whe
 2. wireguard-hub, checked only: the clock is enrolled by hand beforehand (its key as timeclock-system-<name>.key in the
    hub checkout, gitignored; a peers.toml row; forwards to the log server and the database relay in rules.v4; a
    release-and-pin), and the pinned release has the row, with the key's public half, and both forwards;
-3. coolify-tunnel: the clock's tunnel on the next free port, its line in docker/authorized_keys and its
-   <hostname>-tunnel alias in docker/compose.yaml (Coolify allows one server per address, whatever the port), pushed
-   and redeployed;
-4. Coolify: the server (<hostname>-tunnel:<port>, root, no proxy), validated;
+3. coolify-tunnel: the clock's tunnel on the next free port and its line in docker/authorized_keys, pushed and
+   redeployed;
+4. Coolify: the server (<hostname>-tunnel:<port>, root, no proxy; Coolify allows one server per address whatever the
+   port, and an ssh rule in Coolify's container sends every *-tunnel name to coolify-tunnel, see its README), validated;
 5. the clock's database login, timeclock_clock_<name> in timeclock_clocks, with a random password;
 6. the Coolify application (docker/compose.yaml of this repository, beside timeclock-dev's), its variables filled in:
    the clock's own from the steps above, the shared ones copied from timeclock-dev's application; named exactly as the
@@ -176,7 +176,6 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
 
   # 3. Tunnel.
   keys_path = TUNNEL / "docker/authorized_keys"
-  compose_path = TUNNEL / "docker/compose.yaml"
   keys = keys_path.read_text(encoding="utf-8")
   ports = {int(p): line for line in keys.splitlines() for p in re.findall(r'permitlisten="0\.0\.0\.0:(\d+)"', line)}
   mine = [p for p, line in ports.items() if line.endswith(f" {peer}-tunnel")]
@@ -189,14 +188,7 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
     else:
       keys = keys.rstrip("\n") + f"\n\n# {port}: {peer}, a timeclock-system clock (clock {number})\n{line}\n"
     keys_path.write_text(keys, encoding="utf-8")
-  compose = compose_path.read_text(encoding="utf-8")
-  alias = f"{peer}-tunnel"
-  if f"- {alias}\n" not in compose:
-    # Appended to the end of the aliases list.
-    compose = re.sub(r"(\n( +)aliases:\n(?:\2  - .+\n)*)", lambda m: f"{m[1]}{m[2]}  - {alias}\n", compose, count=1)
-    compose_path.write_text(compose, encoding="utf-8")
-  if run("git", "status", "--porcelain", "--", "docker", cwd=TUNNEL).strip():
-    git_commit_push(TUNNEL, ["docker/authorized_keys", "docker/compose.yaml"], f"feat: register {peer} on port {port}")
+    git_commit_push(TUNNEL, ["docker/authorized_keys"], f"feat: register {peer} on port {port}")
     deploy_app_named("coolify-tunnel")
   print(f"  tunnel: port {port}")
 
@@ -220,7 +212,7 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
     server_uuid = api("POST", "/servers", body)["uuid"]  # pyright: ignore[reportIndexIssue]
   # The tunnel comes up once coolify-tunnel has redeployed with the new key; validate until Coolify can use the server.
   for _ in range(40):
-    api("GET", f"/servers/{server_uuid}/validate")
+    api("POST", f"/servers/{server_uuid}/validate")
     time.sleep(30)
     settings = api("GET", f"/servers/{server_uuid}")["settings"]  # pyright: ignore[reportIndexIssue]
     if settings.get("is_reachable") and settings.get("is_usable"):
