@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import bcrypt
 import pytest
 from nicegui import ui
-from nicegui.events import KeyboardAction, KeyboardKey, KeyboardModifiers, KeyEventArguments
+from nicegui.events import GenericEventArguments
 from nicegui.testing import user_simulation
 from pydantic import SecretBytes, SecretStr
 from timeclock_schema.enums import EmployeeRole, PunchKind
@@ -29,9 +29,6 @@ if TYPE_CHECKING:
   from collections.abc import AsyncIterator
   from pathlib import Path
 
-  # Third party imports
-  from nicegui import Client
-  from nicegui.element import Element
 
 NY = ZoneInfo("America/New_York")
 NOW = datetime(2026, 10, 27, 12, 2, tzinfo=UTC)
@@ -244,27 +241,25 @@ async def test_the_page_carries_the_cursor_script_and_no_blanket_rule(controller
   assert 'addStyle("* { cursor: none' not in head  # the old blanket ui.add_css rule
 
 
-def key_event(code: str, name: str) -> KeyEventArguments:
-  return KeyEventArguments(
-    sender=cast("Element", None),
-    client=cast("Client", None),
-    action=KeyboardAction(keydown=True, keyup=False, repeat=False),
-    key=KeyboardKey(name=name, code=code, location=0),
-    modifiers=KeyboardModifiers(alt=False, ctrl=False, meta=False, shift=False),
-  )
+async def press(keyboard: ui.keyboard, code: str, name: str) -> None:
+  # Through the element's own handler, as a browser's key event arrives: NiceGUI inspects the page's handler before
+  # calling it, so the handler's annotations must resolve at runtime.
+  args = {"action": "keydown", "repeat": False, "altKey": False, "ctrlKey": False, "metaKey": False, "shiftKey": False}
+  event = GenericEventArguments(sender=keyboard, client=keyboard.client, args=args | {"key": name, "code": code, "location": 0})
+  keyboard._handle_key(event)  # pyright: ignore[reportPrivateUsage]
+  await asyncio.sleep(0.05)  # the handler runs as a task
 
 
 async def test_number_row_and_numpad_keys_type_into_the_pin_pad(controller: KioskController, tmp_path: Path) -> None:
-  root = build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)
-  async with user_simulation(root) as user:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")
     user.find(kind=ui.button, content=text.USE_PIN).click()
     await user.should_see(text.ENTER_USERNAME)
-    on_key = root.__self__._on_key  # pyright: ignore[reportFunctionMemberAccess]
-    await on_key(key_event("Digit1", "1"))
-    await on_key(key_event("Numpad2", "End"))  # NumLock off: the key's name isn't a digit, its code still is
+    keyboard = next(iter(user.find(kind=ui.keyboard).elements))
+    await press(keyboard, "Digit1", "1")
+    await press(keyboard, "Numpad2", "End")  # NumLock off: the key's name isn't a digit, its code still is
     await user.should_see("12")
-    await on_key(key_event("NumpadEnter", "Enter"))
+    await press(keyboard, "NumpadEnter", "Enter")
     await user.should_see(text.ENTER_PIN)
 
 
