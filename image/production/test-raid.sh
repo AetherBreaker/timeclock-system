@@ -19,9 +19,11 @@ install -m 600 /keys/id vmr/id
 CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
 QEMU="qemu-system-x86_64 -m 2048 -smp 2 -accel tcg -nographic -machine q35
   -drive if=pflash,format=raw,readonly=on,file=$CODE -drive if=pflash,format=raw,file=vmr/vars.fd"
-D1="-drive file=vmr/d1.qcow2,if=none,id=d1,format=qcow2 -device nvme,serial=TCDISK0001,drive=d1"
-D2="-drive file=vmr/d2.qcow2,if=none,id=d2,format=qcow2 -device nvme,serial=TCDISK0002,drive=d2"
-D3="-drive file=vmr/d3.qcow2,if=none,id=d3,format=qcow2 -device nvme,serial=TCDISK0003,drive=d3"
+# Fixed PCI slots, as drives stay in their bays: a drive that moves gets its OVMF boot entry re-made behind the EFI
+# shell, which then starts instead.
+D1="-drive file=vmr/d1.qcow2,if=none,id=d1,format=qcow2 -device nvme,serial=TCDISK0001,drive=d1,addr=0x5"
+D2="-drive file=vmr/d2.qcow2,if=none,id=d2,format=qcow2 -device nvme,serial=TCDISK0002,drive=d2,addr=0x6"
+D3="-drive file=vmr/d3.qcow2,if=none,id=d3,format=qcow2 -device nvme,serial=TCDISK0003,drive=d3,addr=0x7"
 NET="-netdev user,id=n0,hostfwd=tcp::2222-:22 -device virtio-net-pci,netdev=n0"
 clean() { sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$1" | tr -cd '\12\40-\176'; }
 part() {  # $1 image, $2 partition number: a loop device over that partition
@@ -50,11 +52,11 @@ mdadm --create /dev/md100 --run --level=1 --raid-devices=2 --metadata=1.2 "$L" m
 mkfs.ext4 -q /dev/md100; mdadm --stop /dev/md100 2>/dev/null; losetup -d "$L"
 # d2: Windows: EFI partition (100 MB, as Windows makes it), Microsoft reserved, basic data (FAT standing in for NTFS).
 printf 'label: gpt\nsize=100M, type=U, uuid=%s\nsize=16M, type=%s\ntype=%s\n' $ESP2 $MSR $DATA | sfdisk -q /tmp/d2.raw
-esp /tmp/d2.raw 1 EFI/Microsoft/Boot/bootmgfw.efi EFI/BOOT/BOOTX64.EFI
+esp /tmp/d2.raw 1 EFI/Microsoft/Boot/bootmgfw.efi EFI/Microsoft/Boot/BCD EFI/BOOT/BOOTX64.EFI
 L=$(part /tmp/d2.raw 3); mkfs.vfat -F 32 "$L" >/dev/null; losetup -d "$L"
 # d3: another Windows EFI partition, on a drive the install leaves alone.
 printf 'label: gpt\nsize=100M, type=U, uuid=%s\n' $ESP3 | sfdisk -q /tmp/d3.raw
-esp /tmp/d3.raw 1 EFI/Microsoft/Boot/bootmgfw.efi
+esp /tmp/d3.raw 1 EFI/Microsoft/Boot/bootmgfw.efi EFI/Microsoft/Boot/BCD
 for d in d1 d2 d3; do sfdisk -l -o Device,Size,Type /tmp/$d.raw | sed -n '/^\/tmp/p'; done
 for d in d1 d2 d3; do qemu-img convert -O qcow2 /tmp/$d.raw vmr/$d.qcow2; rm /tmp/$d.raw; done
 
@@ -132,8 +134,9 @@ if boot_and_wait "$D1 $D2 $D3" c; then
     cat /etc/apt/apt.conf.d/90-sync-esp; grep efi2 /etc/fstab
     sudo grep -A3 "os-prober call found" /var/log/installer/syslog
     grep -n OS_PROBER /etc/default/grub /etc/default/grub.d/* 2>&1
-    grep -c -iE "osprober|windows" /boot/grub/grub.cfg
-    grep "^menuentry" /boot/grub/grub.cfg
+    sudo grep -c -iE "osprober|windows" /boot/grub/grub.cfg
+    sudo grep "^menuentry" /boot/grub/grub.cfg
+    sudo grep "deleting firmware boot entry" /var/log/installer/syslog
     sudo efibootmgr -v
     sudo apt-get install -y --reinstall -qq shim-signed >/dev/null 2>&1; echo "reinstall exit $?"
     sudo diff -r /boot/efi /boot/efi2 && echo "EFI partitions identical after apt"
