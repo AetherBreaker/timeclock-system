@@ -11,6 +11,7 @@ Everything the test image does except the test tools (fprintd, libinput-tools), 
 - It asks the **clock name** (e.g. `office`) and **clock number** (1–99, unique per clock), sets the hostname to
   `timeclock-system-<name>`, and saves both in `/etc/timeclock/clock.env`. Neither can change later.
 - Docker, from Docker's repository.
+- NetworkManager and wifi firmware (Intel, Realtek, MediaTek, Atheros), for wifi built in or on a USB dongle.
 - Coolify's key in root's `authorized_keys`, and the tunnel's host key already trusted, so `coolify-tunnel-setup` doesn't ask.
 - `/data/timeclock_system_files/` with the logo in `branding/` and the remote-access client in `remote/`.
 - `tcadmin` / `timeclock` at the console, SSH by the workstation's key (`~/.ssh/timeclock_dev`), passwordless sudo.
@@ -40,6 +41,9 @@ In Coolify, **Keys & Tokens → API tokens**, create one with **root** permissio
    Coolify's validation. If a step fails, fix the cause and run it again: done steps are skipped.
 
    The variables stay editable in the application's settings in Coolify.
+5. **Wifi, if the clock won't stay wired:** over SSH while still wired,
+   `sudo nmcli dev wifi connect "<network>" password "<password>"`, then unplug the cable. It reconnects after every
+   reboot. Wired stays the better choice for a clock.
 
 ## Rebuilding the image
 

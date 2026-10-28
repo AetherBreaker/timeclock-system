@@ -235,7 +235,8 @@ persisted_data/
 # The remote-access client: its password is baked in (docker/kiosk/remote.sh)
 *.deb
 
-# The production install image (image/production): its output, scratch, and private inputs (the RustDesk client, the logo)
+# The install images: their output (both), and production's scratch and private inputs (the RustDesk client, the logo)
+image/dev-device/out/
 image/production/out/
 image/production/work/
 image/production/private/
