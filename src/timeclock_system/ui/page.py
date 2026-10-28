@@ -15,6 +15,7 @@ from nicegui import app, ui
 
 # At runtime: NiceGUI inspects a handler's signature before calling it, which evaluates its annotations (_on_key).
 from nicegui.events import KeyEventArguments  # noqa: TC002
+from timeclock_schema.enums import Finger
 
 # First party imports
 from timeclock_system.ui import text
@@ -22,8 +23,12 @@ from timeclock_system.ui.controller import (
   AddEmployeeDetails,
   AdminMenu,
   AdminReconfirm,
+  ApprovalPrompt,
   Confirmation,
   EmployeeAdded,
+  FingerPick,
+  FingerprintActions,
+  GearMenu,
   Idle,
   Menu,
   NewFingerprint,
@@ -163,7 +168,8 @@ class _KioskPage:
 
     clock_label = ui.label().classes("fixed top-2 right-4 text-xl")
     # Small and dim: for whoever services the clock, telling which release it runs.
-    ui.label(f"v{version('timeclock-system')}").classes("fixed top-2 left-4 text-sm opacity-50")
+    # Right of the gear, which the idle screen and punch menu draw in the corner.
+    ui.label(f"v{version('timeclock-system')}").classes("fixed top-4 left-16 text-sm opacity-50").mark("version")
     self.indicator()
     self.screen()
     with ui.row().classes("fixed bottom-2 right-4 items-center gap-2 text-base"):
@@ -216,13 +222,12 @@ class _KioskPage:
         case PinEntry():
           title = text.ENTER_USERNAME if s.field == "username" else text.ENTER_PIN
           self._pin_pad(title, s.username if s.field == "username" else "•" * len(s.pin.get_secret_value()), s.error)
-        case Registering():
-          ui.label(text.REGISTERING.format(done=s.done, total=s.total)).classes("sft-title")
-          self._button(text.CANCEL, self._controller.cancel)
         case Confirmation():
           self._confirmation(s)
         case AdminReconfirm() | AdminMenu() | AddEmployeeDetails() | NewPin() | NewFingerprint() | EmployeeAdded():
           self._admin_screen(s)
+        case Registering() | GearMenu() | FingerprintActions() | FingerPick() | ApprovalPrompt():
+          self._fingerprint_screen(s)
 
   # The per-screen renderers below are split out of `screen` for C901/PLR0912.
 
@@ -252,6 +257,12 @@ class _KioskPage:
   def _button(self, label: str, on_click: Callable[[], object], kind: str = "sft-plain") -> None:
     ui.button(label, on_click=lambda: self._guarded(on_click)).classes(f"sft-button {kind}").props("unelevated no-caps")
 
+  def _gear(self) -> None:
+    # On the idle screen and the punch menu only; above the idle screen's tap layer (z-10), so tapping it isn't an idle tap.
+    ui.button(icon="settings", on_click=lambda: self._guarded(self._controller.gear)).props("flat round size=lg").classes(
+      "fixed top-2 left-4 z-20"
+    ).mark("gear")
+
   def _idle(self, s: Idle) -> None:
     # A tap anywhere on the idle screen wakes the reader after hours (R40.2): a transparent layer over the whole
     # viewport holds the content, above the clock and status line, which still show through it.
@@ -261,8 +272,10 @@ class _KioskPage:
         ui.image(f"/branding/{LOGO_FILE}").classes("w-96")
       ui.label(s.message or (text.IDLE_READY if self._controller.reader_awake else text.IDLE_ASLEEP)).classes("sft-title")
       self._button(text.USE_PIN, self._controller.use_pin)
+    self._gear()
 
   def _menu(self, s: Menu) -> None:
+    self._gear()
     info = s.info
     ui.label(info.name).classes("sft-title")
     state = text.STATE_LABELS[info.state]
@@ -323,6 +336,51 @@ class _KioskPage:
         ui.label(text.EMPLOYEE_ADDED.format(name=s.name)).classes("sft-title")
         ui.label(text.EMPLOYEE_NUMBER.format(number=s.number)).classes("text-3xl").mark("employee-number")
         self._button(text.OK, self._controller.cancel, "sft-punch")
+
+  def _fingerprint_screen(self, s: Registering | GearMenu | FingerprintActions | FingerPick | ApprovalPrompt) -> None:
+    match s:
+      case Registering():
+        finger = text.FINGER_LABELS[s.finger].lower()
+        ui.label(text.REGISTERING.format(finger=finger, done=s.done, total=s.total)).classes("sft-title")
+        self._button(text.CANCEL, self._controller.cancel)
+      case GearMenu():
+        with ui.column().classes("items-center gap-4"):
+          self._button(text.FINGERPRINTS, self._controller.open_fingerprints, "sft-punch")
+          self._button(text.CANCEL, self._controller.cancel)
+      case FingerprintActions():
+        self._fingerprint_actions(s)
+      case FingerPick():
+        self._finger_pick(s)
+      case ApprovalPrompt():
+        c = s.change
+        ui.label(text.APPROVE_CHANGE[c.action].format(name=c.name, finger=text.FINGER_LABELS[c.finger].lower())).classes("sft-title")
+        ui.label(text.APPROVE_HOW)
+        if s.message:
+          ui.label(s.message).classes("sft-error")
+        with ui.row():
+          self._button(text.USE_PIN, self._controller.use_pin)
+          self._button(text.CANCEL, self._controller.cancel)
+
+  def _fingerprint_actions(self, s: FingerprintActions) -> None:
+    ui.label(text.FINGERPRINT_ACTIONS.format(name=s.name)).classes("sft-title")
+    if s.message:
+      ui.label(s.message).classes("sft-error")
+    with ui.column().classes("items-center gap-4"):
+      if s.on_file:
+        self._button(text.REREGISTER_FINGER, lambda: self._controller.choose_action("replace"), "sft-punch")
+      if len(s.on_file) < len(Finger):
+        self._button(text.ADD_FINGER, lambda: self._controller.choose_action("add"), "sft-punch")
+      if s.on_file:
+        self._button(text.REMOVE_FINGER, lambda: self._controller.choose_action("remove"), "sft-punch")
+      self._button(text.CANCEL, self._controller.cancel)
+
+  def _finger_pick(self, s: FingerPick) -> None:
+    ui.label(text.PICK_FINGER[s.action]).classes("sft-title")
+    for hand in ("left_", "right_"):  # a row per hand
+      with ui.row().classes("gap-4"):
+        for finger in (f for f in s.choices if f.value.startswith(hand)):
+          self._button(text.FINGER_LABELS[finger], lambda finger=finger: self._controller.pick_finger(finger))
+    self._button(text.CANCEL, self._controller.cancel)
 
   def _details_form(self, s: AddEmployeeDetails) -> None:
     # Typed on a plugged-in keyboard (§6.4). Every change goes to the controller, which keeps it without a redraw.
