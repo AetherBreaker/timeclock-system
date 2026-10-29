@@ -238,6 +238,23 @@ async def test_typed_form_text_survives_a_finger_touch_and_errors(controller: Ki
     assert cast("ui.input", redrawn).value == "555-12"  # the redraw keeps what was typed
 
 
+async def test_the_phone_field_masks_its_digits(controller: KioskController, tmp_path: Path) -> None:
+  # The browser applies the mask; the backspace sequence is checked by hand on the clock (no real-browser tests).
+  ctl = controller
+  async with user_simulation(build_root(ctl, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await ctl.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
+    await ctl.admin()
+    await ctl.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
+    await ctl.add_employee()
+    await user.should_see(marker="field-phone")
+    [field] = user.find(marker="field-phone").elements
+    assert field.props["mask"] == "(###) ###-####"
+    assert field.props["unmasked-value"] is True
+    [other] = user.find(marker="field-email").elements
+    assert "mask" not in other.props
+
+
 async def test_the_page_carries_the_cursor_script_and_no_blanket_rule(controller: KioskController, tmp_path: Path) -> None:
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     client = await user.open("/")
