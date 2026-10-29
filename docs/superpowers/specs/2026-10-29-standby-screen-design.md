@@ -12,7 +12,7 @@ each of those moments with a professional screen that says what's happening (own
 
 ### Goals
 
-- A standby screen that owns the display whenever the clock can't, with two pages: **updating** (a deploy) and
+- A standby screen that owns the display whenever the clock can't, in two modes: **updating** (a deploy) and
   **starting** (boot, or the app launching), each showing live steps (owner).
 - A heads-up banner on the clock while a deploy builds, before the clock goes down (owner).
 - From power-on: no boot menu, no kernel text, no login prompt; a boot splash until the standby screen is up (owner).
@@ -44,7 +44,7 @@ each of those moments with a professional screen that says what's happening (own
 | **Boot**: GRUB hidden, Plymouth splash, quiet console | host | image config | rarely |
 
 The watcher and the status app live in a **new repository** with its own releases, added to this repository as a git
-submodule for development (owner). I'd name it `timeclock-standby` and put the submodule at `standby/` (my call). Its
+submodule for development (owner). It's named `timeclock-standby`, with the submodule at `standby/` (owner). Its
 releases are independent of the clock's: the only contracts are the small files and facts listed in §6 and §4.1, kept
 stable, with each side ignoring fields it doesn't know (owner agreed none need tying).
 
@@ -63,9 +63,9 @@ From seatd 0.9.1's source (Debian's, the kiosk's version):
   device** for a display that isn't showing ("client is not active"), so a display must keep its terminal on screen
   until it has opened its devices.
 
-seatd stays inside the kiosk container, as today; the standby display gets its own seatd on the host (my call: the
-owner asked about one shared seatd on the host, which would turn a mis-ordered start into a clean refusal but makes both
-displays depend on one host daemon; not yet confirmed either way).
+seatd stays inside the kiosk container, as today; the standby display gets its own seatd on the host (owner). One
+shared seatd on the host was considered: it would turn a mis-ordered start into a clean refusal, but makes both displays
+depend on one host daemon.
 
 ### 3.2 Terminals
 
@@ -87,8 +87,10 @@ in on its terminal and hands the screen back as soon as its devices are open:
 2. It starts `seatd-launch -- cage -s -- <wrapper> firefox-esr ...`. Cage starts its client only once its display is
    up (to verify, §10), so the **wrapper** runs exactly when the devices are open.
 3. The wrapper switches back to the terminal that was showing before step 1, if that terminal is still claimed
-   (in graphics mode), then `exec`s Firefox. If it wasn't claimed (nothing to go back to), the display stays on screen.
-4. Firefox loads behind the other screen. The watcher shows it when it's ready (§4).
+   (in graphics mode). If it wasn't claimed (nothing to go back to), the display stays on screen.
+4. **Kiosk only:** the wrapper then waits for the app's `/favicon.ico` (up to 60 s, the wait `kiosk.sh` has today,
+   moved here) (owner). Cage claims the display early, and Firefox starts only once the app serves.
+5. The wrapper `exec`s Firefox, which loads behind the other screen. The watcher shows it when it's ready (§4).
 
 The visible cost is a blink: from the switch in step 1 to the switch back in step 3. Keeping it short (owner agreed):
 
@@ -96,26 +98,25 @@ The visible cost is a blink: from the switch in step 1 to the switch back in ste
   kernel command line gets `i915.fastboot=1`, so a switch between same-mode terminals skips the full modeset. Haswell
   (the G1) may not default to it. Likely the largest part of the blink.
 - **Switch as late as possible.** Everything that doesn't need the screen happens before step 1: udev, the Firefox
-  profile, the remote-access install, the wait for the app's favicon (kiosk only, existing).
+  profile, the remote-access install. `remote.sh` starts just before cage; its wait for cage's Wayland socket ends as
+  soon as cage is up, so remote access is available during the favicon wait.
 - **Hand back at once.** The wrapper (step 3) needs no polling; cage itself signals the moment.
-- **Measure it** on main-office, by phone video and timestamps, before tuning further. My estimate, 0.3–0.7 s without a
+- **Measure it** on main-warehouse, by phone video and timestamps, before tuning further. My estimate, 0.3–0.7 s without a
   resync, is a guess.
 
-The kiosk keeps its existing wait for the app's favicon (up to 60 s) before step 1, so it checks in once the app serves
-and the clock loads straight away behind the standby screen (my call). Its image gains `kbd` for `chvt`.
+The kiosk image gains `kbd` for `chvt`.
 
 ### 3.4 Boot order
 
-Plymouth holds the screen from early boot. The host units start in this order (my call):
+Plymouth holds the screen from early boot. The host units start in this order (owner):
 
-1. **Status app** (so the page has something to serve).
-2. **Standby display**: `plymouth quit --retain-splash`, then its check-in on terminal 7 (§3.3). At boot nothing is
+1. **Watcher.** It never switches to an unclaimed terminal (§4.2), so it can't pull Plymouth's screen away before the
+   standby is up.
+2. **Status app** (so the page has something to serve).
+3. **Standby display**: `plymouth quit --retain-splash`, then its check-in on terminal 7 (§3.3). At boot nothing is
    claimed, so it stays on screen.
-3. **Docker**, ordered `After=` the standby display unit (a drop-in), so no kiosk can start while Plymouth still holds
+4. **Docker**, ordered `After=` the standby display unit (a drop-in), so no kiosk can start while Plymouth still holds
    the display. `After=` only orders: a failed standby doesn't stop Docker.
-
-The watcher starts early too, but it never switches to an unclaimed terminal (§4.2), so it can't pull Plymouth's screen
-away before the standby is up.
 
 ## 4. The watcher (owner: Rust, written once, frozen after thorough testing)
 
@@ -159,7 +160,7 @@ Switching a terminal never clears it: a console keeps its text and its running c
 
 ### 4.3 Config
 
-`/etc/timeclock/watcher.conf`, `key = value` lines, every key optional (my call on names and defaults):
+`/etc/timeclock/watcher.conf`, `key = value` lines, every key optional (owner, names and defaults):
 
 ```ini
 flip = app-stopped              # or deploy-start
@@ -193,18 +194,19 @@ It reads the file at start; a changed setting takes effect with `systemctl resta
 - The decision is a pure function (observations and remembered state in, action out), unit-tested over every case:
   normal switching, debounce, unclaimed targets, a user's switch, the idle return, input resetting it, resuming on the
   wanted screen, another program's switch and the settle, both flip modes, Docker unreachable.
-- On main-office (§10): deploys in each flip mode, Ctrl+Alt+F2 and F7 with the idle return, the status app killed
+- On main-warehouse (§10): deploys in each flip mode, Ctrl+Alt+F2 and F7 with the idle return, the status app killed
   mid-deploy, a reboot, the kiosk crashing.
 
 ## 5. The status app (owner: Python, editable on the clock)
 
 ### 5.1 Pages
 
-- `GET /updating` and `GET /starting` (owner): **one HTML file and one CSS file** (owner), served for both; the page
-  reads its mode from the path. `GET /` redirects to the current mode; the standby display opens `/` (my call).
+- **One page at `GET /`** for both modes, from **one HTML file and one CSS file** (owner). The status app decides the
+  mode, so separate endpoints aren't needed: the page updates its heading and steps in place when the mode changes
+  (owner; this replaces the two endpoints asked for earlier). The standby display opens `/`.
 - `GET /events`: Server-Sent Events carrying the mode and the step list as they change. A few lines of JavaScript in the
-  page; the browser reconnects by itself. A mode change navigates the page to the other endpoint.
-- Listens on `127.0.0.1:8091` only (my call on the port). To see it from the workstation: an SSH tunnel.
+  page; the browser reconnects by itself.
+- Listens on `127.0.0.1:8091` only (owner). To see it from the workstation: an SSH tunnel.
 - The look matches the boot splash (logo, colours), so boot reads as one continuous screen.
 
 ### 5.2 Live steps and their sources
@@ -231,8 +233,7 @@ whole story when it shows, including when someone presses Ctrl+Alt+F7 to watch a
 
 **Updating vs starting:** updating from the helper's appearance until the clock is live again; starting otherwise
 (boot, an app or kiosk restart). Decided from Docker's events on the clock itself, not GitHub tags: GitHub's latest tag
-can differ from what's pinned, kiosk-only deploys have none, and it needs the internet (my call; the owner suggested
-GitHub tags and an app version endpoint early on).
+can differ from what's pinned, kiosk-only deploys have none, and it needs the internet (owner).
 
 Containers are found by their compose service labels (`com.docker.compose.service` = `timeclock-system`, `kiosk`).
 "Clock live" is observed the same way the watcher does (§4.1), in the status app's own code.
@@ -255,8 +256,7 @@ to new containers, against ~20 s of downtime.
 ### 5.5 Fallback when the status app is down
 
 The standby Firefox's own `kiosk.cfg` shows a static copy of the page from disk (same look, no steps) when the status
-app doesn't answer, and returns to `/` once it does (my call; the owner had accepted a black screen in this case when
-the watcher still followed the status app).
+app doesn't answer, and returns to `/` once it does (owner).
 
 ### 5.6 Config and updates
 
@@ -278,7 +278,8 @@ The VPN comes up in devkit-container before the app starts and is covered by "St
 
 The app checks for `/app/persisted_data/status/banner.json` (`{"text": "..."}`) on its existing 0.5 s tick, and shows
 the text in a banner across the top of every screen while it exists and was written in the last 10 minutes (so a
-status app that died mid-deploy can't leave it up) (my call on the placement and the age limit).
+status app that died mid-deploy can't leave it up) (owner). The plan builds it near the end and includes checking on the
+clock's screen that the position looks right on every screen, not only that it renders (owner).
 
 ### 6.3 Version label
 
@@ -327,7 +328,7 @@ shows the clock. The banner file is deleted.
   names follow AGENTS.md's workflow naming).
 - **This repo:** the submodule at `standby/`; §6's app changes; the kiosk check-in (`kiosk.sh`, the wrapper, `kbd`), in
   the backup kiosk (`docker/kiosk-cage-only/`) too; both images.
-- **ISO build** (both images: the dev device runs the same compose, my call): downloads the new repo's latest release
+- **ISO build** (both images: the dev device runs the same compose, owner): downloads the new repo's latest release
   and bakes in the watcher and a fallback copy of the status app (owner: both baked in).
 - **Install** (`late.sh`): installs the host packages (`python3` explicitly, `cage`, `seatd`, `firefox-esr`, `kbd`,
   `plymouth`), the units and config; **fetches the status app from the new repo's latest release** if the network
@@ -336,9 +337,10 @@ shows the clock. The banner file is deleted.
 - **Existing clocks** (main-office, timeclock-dev): a one-off install script over SSH from this repo, or a reinstall
   (my call; to settle when it's time).
 
-## 10. Verify first, on main-office
+## 10. Verify first, on main-warehouse
 
-Before building on them, in this order:
+All experiments run on **main-warehouse**: installed from the image, not yet set up by `new_clock.py` or added to
+Coolify. **main-office is live** and must never be left broken (owner). Before building on them, in this order:
 
 1. Two seatds, container on terminal 1 and host on terminal 7, hand the screen back and forth with `chvt`, and
    Ctrl+Alt+F*n* works from both displays.
@@ -347,7 +349,9 @@ Before building on them, in this order:
 4. The blink: its length, with and without `i915.fastboot=1`.
 5. Plymouth hands over to the standby display with no text or flash in between; GRUB hidden with Esc working.
 6. During a Coolify deploy: the helper container's lifetime, the order compose stops and starts the containers, and how
-   fast the clock page's connection drops when the app stops.
+   fast the clock page's connection drops when the app stops. This needs main-warehouse in Coolify, so it comes once
+   the owner has set that up.
 
 Then the on-device tests for the whole: each flip mode through a real deploy, a reboot, a kiosk crash, the status app
-killed mid-deploy, the standby display killed, Ctrl+Alt+F2 / F7 with the 2-minute return, and a console left logged in.
+killed mid-deploy, the standby display killed, Ctrl+Alt+F2 / F7 with the 2-minute return, a console left logged in,
+and the banner's position on every screen.
