@@ -60,7 +60,7 @@ applies to everything not listed in §2.
 adding employees at a clock (the owner edits everything else in an SQL editor, R30), employee schedules
 (R45.1), per-clock business hours (R40.3), the parallel version 2 matcher (R36.2), any rule kind (R34), host
 settings configured from the database (R42), the notification system (SMS and email, §14). Deferred with
-the admin menu (owner, 2026-10-27; `docs/todo.md`): per-clock settings (UI scaling first), an on-screen
+the admin menu (owner, 2026-10-27; `TODO.md`): per-clock settings (UI scaling first), an on-screen
 keyboard, sharing new employees over the LAN before LAN sharing (§13 step 5), toggling `fingerprint_exempt`
 from a clock, a resolution tool for an employee the database refused (§6.6), a PIN length rule, editing or
 deactivating employees from a clock, and warnings about possible duplicate people (names repeat; spouses can
@@ -166,7 +166,7 @@ punches reference the row: inactive employees can't log in or punch, and their p
   both, so hand-typed rows follow them too (my call).
 - **`fingerprint_exempt`** (owner, 2026-10-27; the name is my call, so it isn't confused with
   `fingerprint_bypasses.pin_only`): the employee logs in by PIN alone, with no fingerprint step and no override (§6.4).
-  Changed only in the database for now; a clock toggle comes later (`docs/todo.md`).
+  Changed only in the database for now; a clock toggle comes later (`TODO.md`).
 
 **`fingerprints`** (plain rows; the owner deletes one to force re-registration, R27.3, R27.4): `id uuid PK`
 (made by the clock), `employee_id bigint FK employees ON DELETE CASCADE`, `finger finger` (enum, `left_thumb` …
@@ -249,7 +249,7 @@ works; spec call).
   R41.3's validation): the owner may set a later stamp, and §8.4 says how it runs.
 - `lunches_enabled boolean default true`, `breaks_enabled boolean default true` (owner, 2026-10-27):
   business-wide; off hides the start button, and the end button stays (§6.4). Per-group switches may come
-  before the first release (`docs/todo.md`), so nothing ties these to other columns.
+  before the first release (`TODO.md`), so nothing ties these to other columns.
 - The daily paid break allowance (default 30 minutes) and the weekly hours alert threshold (default 40 hours)
   (owner, 2026-10-27; §4.5, §6.11). Column names and types are left to the builder.
 - `subtract_lunch` and `subtract_breaks` are removed (owner, 2026-10-27; supersedes R31.1): the hours
@@ -429,16 +429,44 @@ Rules every path follows:
   exponentially, 1 s up to 30 s, reset by a successful capture. A reader failing continuously logs a warning
   on the streak's first failure and is fatal, as a lost reader is, once the streak passes about 3 minutes
   (owner, 2026-10-27). `FP_DEVICE_ERROR_TOO_HOT` (shouldn't happen
-  with the patch) → 60 s, the reader indicator red with no text, and an alert, since it means the patch isn't
-  working on that clock (owner, 2026-10-27). After any capture, pause 1 s before re-arming (owner, 2026-10-27: down from 2 s), so the tail of one press isn't read
-  as the next (seen at 0.54 s in the spike). libfprint 1.94 resets `finger-status` when a capture completes, so
-  waiting for "no finger" never waits.
-- **Finger touch** (`notify::finger-status`) lights the reader indicator at once; a resting thumb can take up
-  to 16 s.
-- **Reader indicator** (owner, 2026-10-27; replaces the "Scanning…" message): a fingerprint icon in the
-  bottom-left corner of every screen. Dim while waiting for a finger; company yellow from a finger's touch until
-  its scan finishes; red, with no text, while the reader has paused itself (above); greyed with "Tap to wake
-  the reader" while it sleeps outside business hours (§6.3).
+  with the patch) → 60 s, the reader line red with "Reader paused", and an alert, since it means the patch isn't
+  working on that clock (owner, 2026-10-27). After any capture, pause 1 s before re-arming (owner, 2026-10-27: down
+  from 2 s), so the tail of one press isn't read as the next (seen at 0.54 s in the spike). `identify_sync` returns
+  only after the finger lifts, but a call cancelled while a finger rests after its match (the re-arm, a gallery
+  change) returns before the lift; the pause keeps that finger from being read again at once.
+- **Finger status** (`notify::finger-status`, identify and enroll alike): libfprint's flags, finger present and
+  waiting for a finger, are posted on every change; a call that ends with a finger still reported clears it. In
+  libfprint 1.94.100 an enroll waits for the lift between presses and reports it, but completes before the last
+  press lifts and doesn't report that lift. Each registration press is posted with whether it counted (a retry
+  doesn't). The once-a-minute re-arm's millisecond gap isn't shown.
+- **Login results arrive early** (owner, 2026-10-29): `identify_sync` returns only after the finger lifts (the device
+  deactivates on finger-off), so the reader passes libfprint's match callback, which `fpi_device_identify_report`
+  calls the moment the scan is matched, and the scanner posts the result from there: the screen acts while the finger
+  is still down. The result is posted once; a cancel after it (a mode change, closing time, the re-arm) isn't a
+  failed read.
+- **Reader line** (owner, 2026-10-29, [the QoL design](2026-10-29-clock-qol-design.md) §4; replaces the 2026-10-27
+  icon): bottom-left on every screen, icon, status, then message; icon 48 px, text 20 px. It reports the reader
+  alone; each screen keeps its own error line for who scanned, roles, PINs and refused punches. Icon and status are
+  live from the reader, never on a timer but the failed read's 1 s floor:
+
+  | Reader | Icon | Status |
+  | --- | --- | --- |
+  | Waiting for a finger | Yellow | "Ready" |
+  | Finger down, being read | Blue | "Keep your finger down" |
+  | Read succeeded, finger still down | Green, until the lift | "Lift your finger" |
+  | Login scan read but matched nobody, finger still down | Orange, until the lift | "Lift your finger" |
+  | Read failed | Red, until the reader waits for a finger again, at least 1 s | "Couldn't read that, try again" |
+  | Paused itself (too hot) | Red | "Reader paused" |
+  | Not taking scans (the gap after a scan) | Dim | None |
+  | Asleep outside business hours (§6.3) | Dim | "Tap to wake the reader" |
+
+  The message lingers. A failed read's text moves there when its red ends, and clears on a screen change, a
+  successful read, a newer message, or, on the idle screen only, after 15 s. "Scan successful" (any read that
+  matched someone, or any counted registration press) and "Not recognized, try again" (a login scan that matched
+  nobody) last 3 s or until replaced; a screen change clears them only onto a screen asking for a finger (idle, the
+  finger prompts, the manager, admin and approval prompts, registering). Typing on a pad or in the form isn't a
+  screen change. Messages show only where a finger does something: idle, punch menu, confirmation, the finger
+  prompts, every PIN pad, registering.
 - **Reader gone** (removed, or open fails) → fatal shutdown; Docker's restart and the startup script pick
   it up when it's back (R14.3, R14.7).
 - **Hung thread** (spec call; the owner left the mechanism open): in ready mode the thread cancels and re-arms
@@ -460,7 +488,8 @@ print) and match in Rust; prints stay in libfprint's serialized form, so it need
 
 A task computes the clock's current window from its local copy of `config.business_hours` in
 `settings.tz`, through the single lookup that per-clock hours would later change (R40.3). Inside a window
-the scanner is in ready mode; outside, closed. A scan in progress at closing finishes first (R40.2).
+the scanner is in ready mode; outside, closed. A scan in progress at closing finishes first (R40.2): the reader stays
+open while a finger is down.
 
 Outside business hours the idle screen says "Tap to scan". A tap, or anything else that needs a scan
 (the PIN path's fingerprint step, a manager override, registration), opens the reader for 30 s, then
@@ -475,7 +504,11 @@ warning; spec call). Large touch targets, landscape layout from 1024×600 up; no
 (R7.1). Typed input uses an on-page number pad that also accepts keyboard input (R25); text (the add-employee
 form) is typed on a plugged-in keyboard, which must work when plugged in at any time, with no restart of the
 app or the kiosk (owner, 2026-10-27; verified on the clock, and the kiosk image fixed if hotplugged input
-isn't picked up). The on-screen keyboard is deferred (`docs/todo.md`). The page turns off text selection and
+isn't picked up). A keyboard's number pad always types digits: the kiosk sets the XKB option `numpad:mac`, since cage
+starts every keyboard with Num Lock off, including one that drops off USB and comes back (owner, 2026-10-29; the Num
+Lock key and light still toggle but no longer matter). The on-screen keyboard is deferred (`TODO.md`). The release
+version shows small and dim in the very bottom-left corner, under the reader line (owner, 2026-10-29). The page
+turns off text selection and
 the long-press menu (R13.2). On the kiosk only (`KIOSK_URL` carries `?kiosk`), it hides the mouse cursor until a
 mouse moves, and again on a touch or after a minute without mouse movement; touch never shows it. Other browsers,
 such as one through an SSH tunnel, always show it (owner, 2026-10-27). Every screen but idle returns to
@@ -485,8 +518,8 @@ paid break time (owner, 2026-10-27; §4.5).
 
 - **Idle.** Logo, date and time, "Place your finger on the reader" (or "Tap to scan" after hours), a "Use
   PIN" button, and a database status icon: green while connected, red while not, with a small timestamp of
-  the last contact with the database. No match:
-  "Not recognized: try again or use your PIN", 3 s. Retry: "Couldn't read that, try again".
+  the last contact with the database. A scan's result shows on the reader line (§6.2), not in the title (owner,
+  2026-10-29); the title still changes for its other news.
 - **Action menu** (R45). The employee's name, current state ("Clocked in since 8:02 AM"), hours this week,
   and one button per valid punch (§4.5), less a lunch or break start while `lunches_enabled` or
   `breaks_enabled` is off; an end button always shows (owner, 2026-10-27). Clock-in always takes a tap
@@ -513,6 +546,15 @@ paid break time (owner, 2026-10-27; §4.5).
   - no registered print → "Register your fingerprint" or "Manager override" (R23.2);
   - registered print → "Scan your finger" (confirm mode; must match this employee) or "Manager override"
     (R23.3).
+
+  **A finger on every PIN pad** (owner, 2026-10-29): on any PIN pad, a recognized finger does what it would have
+  done on the screen before Use PIN, discarding typed digits. The login pad opens that person's menu; the admin
+  reconfirm opens the admin menu for the admin's own finger, anyone else's menu otherwise; the rescan records the
+  punch for the person's own finger, anyone else's menu otherwise; the manager override and admin approval take a
+  manager's or admin's finger and otherwise go back to their prompt with "A manager must authorize this" or "An admin
+  must approve this", as a PIN would; the Fingerprints login opens that person's options (changes still need an
+  admin's approval). The new employee's PIN pad isn't a login and ignores a finger. An unrecognized finger leaves a
+  pad and its digits alone.
 - **Registration** (R23.4, R27.2). The employee picks which finger, then five presses with progress, 30 s
   without a press cancels. The new print is stored locally with a UUID, sent to the other clocks (§6.7),
   queued for sync, and added to the gallery; then the employee's action menu opens (spec call: they've just
@@ -531,8 +573,9 @@ paid break time (owner, 2026-10-27; §4.5).
   (per-clock settings) slot in later.
 - **Add employee** (owner, 2026-10-27), working online or offline. A clock that has never synced knows no
   admin, so it can't reach this; no extra rule is needed.
-  1. *Details:* first and last name (required), middle name (optional); phone (optional; any common US format, such as `(555) 123-4567`,
-     `555-123-4567`, `5551234567` or `+1 555…`, stored as `+15551234567`); email (optional, format checked,
+  1. *Details:* first and last name (required), middle name (optional); phone (optional; the field draws the mask
+     `(###) ###-####` and keeps the digits alone, at most ten, so backspace removes digits only; fewer than ten fails
+     Next, a leading `1` isn't special-cased (owner, 2026-10-29); stored as `+15551234567`); email (optional, format checked,
      §4.2); role, Employee or Manager; group, from the clock's mirrored groups. Errors show beside their field
      on submit; cancel discards the form.
   2. *PIN* (required): typed, then typed again to confirm (my call); digits only, any length. A mismatch
@@ -608,7 +651,7 @@ window that touches no open shift is ignored.
   recognised when the row returns through the mirror with the same `id` and a matching `pin_hash` (my call).
 - **Refused** (the number or username is taken): the refused-record rule above. The employee and everything
   held for them stay usable on that clock, which keeps the number until a resolution tool exists
-  (`docs/todo.md`); the database's employee with that number can use every other clock (my call). Holding
+  (`TODO.md`); the database's employee with that number can use every other clock (my call). Holding
   the dependants is what keeps the refused employee's hours from being filed under the database's owner of
   that number.
 
@@ -662,7 +705,7 @@ Known issues, accepted (owner, 2026-10-28), both from best effort with no catch-
 only clocks on one network share. The first production clocks sit behind two gateways in the same building,
 to be bridged or unified later; until then they don't share, and each works alone through a hub outage.
 Having the hub introduce clocks on different networks to each other (WireGuard NAT traversal) is deferred
-(`docs/todo.md`).
+(`TODO.md`).
 
 The other clocks and their tunnel addresses come from devkit-container's cached peer table
 (`persisted_data/wireguard/peers.toml`): every row sharing this clock's `lan` value, the clock finding its
@@ -1260,9 +1303,9 @@ installed before installing it):
 
 ## 14. Follow-ups and known issues
 
-Deferred features, each needing its own design before it's built, are listed in `docs/todo.md`; later fixes
-and checks (a crash record that names its error, the local store across schema changes, refusing a new print
-that matches one already on file) in `TODO.md`.
+`TODO.md` lists the deferred features, each needing its own design before it's built, and later fixes and checks
+(a crash record that names its error, the local store across schema changes, refusing a new print that matches one
+already on file).
 
 - **Notification system** (owner, 2026-10-27): the backend will need one for email and SMS, using the
   employees' optional `phone` and `email` (§4.2). Its first users are the weekly-hours alert and its early

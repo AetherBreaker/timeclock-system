@@ -21,3 +21,29 @@
   identify touches against the stored prints and build the template from them, or compile NBIS bozorth3 into a small C
   extension. Still open: which prints count (inactive employees, the person's own other fingers), what the refusal
   says, and whether it sends an alert.
+
+## Deferred features
+
+Each needs its own design before it's built.
+
+- [ ] **On-screen keyboard** for the clock's text fields (very low priority; a physical keyboard is plugged in when
+  needed).
+- [ ] **Per-clock settings** in the admin menu, starting with UI scaling.
+- [ ] **Toggle PIN-only login** for an employee from the clock (for now it's set only in the database).
+- [ ] **Resolution tool** for a clock-created employee the database refused: renumber the employee and their records on
+  the unsynced clock so they go through.
+- [ ] **Hub introduction for LAN sharing:** clocks on different networks (separate gateways) can't find each other by
+  broadcast. The hub sees each clock's public address and could tell clocks with the same `lan` value where the others
+  are, so they connect directly through their gateways (WireGuard NAT traversal) and keep sharing through a hub outage.
+  Needs both routers to cooperate and both internet connections up; a clock restarted during a hub outage loses the
+  link. Shelved 2026-10-28 for a future upgrade.
+- [ ] **Per-group lunch and break switches**, possibly before the first release, depending on the owner's boss.
+- [ ] **PIN length rule**, if one is wanted later.
+- [ ] **Testing and debug menus.** For example, tapping the reader icon a few times opens a verbose log of the reader's
+  scans, for troubleshooting someone's fingerprint. It can include a capture mode showing each press's picture with the
+  matcher's detail points circled (failed presses included), in memory only, never saved or logged. Samples on
+  2026-10-29 showed ridge cut-offs at the window's left edge counted as detail points, and a faint line across the
+  middle of every press.
+- [ ] **A "being updated" screen while the app is down.** When Coolify stops the app to deploy an update, a placeholder
+  screen takes over saying the clock is being updated, so people don't panic when the menu drops. Which part shows it
+  is to be designed: if the kiosk container restarts too, something outside it has to.
