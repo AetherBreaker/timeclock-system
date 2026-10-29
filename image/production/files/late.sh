@@ -98,5 +98,9 @@ if [ -d /sys/firmware/efi ] && [ -n "$own_esps" ]; then
     done
 fi
 
+# The standby screen, screen watcher and boot splash: after the logo, which the splash shows, and the second EFI
+# partition, which install.sh's GRUB update syncs.
+sh "$S/install-standby.sh"
+
 # The setup files include the remote-access client; only the copies installed above stay.
 rm -rf "$S"

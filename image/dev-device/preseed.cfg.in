@@ -63,7 +63,9 @@ tasksel tasksel/first multiselect standard, ssh-server
 # network-manager, its connectivity check and the firmware: wifi, built in or a USB dongle, joins the network baked in at
 # build (late.sh) or one set up afterwards with nmcli. With it installed, the installer hands the wired port to
 # NetworkManager too (DHCP, as before).
-d-i pkgsel/include string sudo avahi-daemon usbutils curl systemd-timesyncd libinput-tools fprintd libfprint-2-2 gir1.2-fprint-2.0 python3-gi rsync efibootmgr dosfstools unattended-upgrades network-manager network-manager-config-connectivity-debian wpasupplicant firmware-realtek firmware-iwlwifi firmware-mediatek firmware-atheros
+# python3, cage, seatd, firefox-esr, plymouth and its themes, librsvg2-bin (the splash's logo): the standby screen and boot splash
+# (timeclock-standby's install.sh, run by late.sh).
+d-i pkgsel/include string sudo avahi-daemon usbutils curl systemd-timesyncd libinput-tools fprintd libfprint-2-2 gir1.2-fprint-2.0 python3-gi rsync efibootmgr dosfstools unattended-upgrades network-manager network-manager-config-connectivity-debian wpasupplicant firmware-realtek firmware-iwlwifi firmware-mediatek firmware-atheros python3 cage seatd firefox-esr plymouth plymouth-themes librsvg2-bin
 d-i pkgsel/update-policy select unattended-upgrades
 d-i pkgsel/upgrade select full-upgrade
 popularity-contest popularity-contest/participate boolean false

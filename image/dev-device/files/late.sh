@@ -60,3 +60,7 @@ if [ -d /sys/firmware/efi ]; then
       blkid -t PARTUUID="$partuuid" >/dev/null 2>&1 || efibootmgr -q -b "$num" -B
     done
 fi
+
+# The standby screen, screen watcher and boot splash: after the second EFI partition, which install.sh's GRUB update
+# syncs.
+sh "$S/install-standby.sh"

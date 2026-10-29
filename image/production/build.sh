@@ -23,6 +23,8 @@ cp /keys/authorized_keys build/timeclock/authorized_keys
 sed -i 's/\r$//' build/timeclock/*
 cp /private/SFT-Logo-June-2022-color.svg /private/sweetfiresupportdesk.deb build/timeclock/
 sed 's/\r$//' "$DEV/wifi-profile.sh" | sh -s build/timeclock
+# The standby screen's latest release, after the line-ending fix above (it's binary).
+sed 's/\r$//' "$DEV/fetch-standby.sh" | sh -s build/timeclock
 # Docker's repository key, checked against the fingerprint Docker publishes.
 wget -q -O build/timeclock/docker.asc https://download.docker.com/linux/debian/gpg
 gpg --show-keys --with-colons build/timeclock/docker.asc | grep -qx 'fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:'
