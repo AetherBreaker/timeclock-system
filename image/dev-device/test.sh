@@ -44,6 +44,10 @@ $SSH '
   dpkg-query -W -f="\${Package} \${Version} \${Status}\n" fprintd libfprint-2-2 gir1.2-fprint-2.0 python3-gi avahi-daemon systemd-timesyncd libinput-tools usbutils unattended-upgrades
   python3 -c "import gi; gi.require_version(\"FPrint\", \"2.0\"); from gi.repository import FPrint; print(\"FPrint import: OK\")"
   systemctl is-active avahi-daemon ssh systemd-timesyncd
+  dpkg-query -W -f="\${Package} \${Status}\n" network-manager network-manager-config-connectivity-debian
+  sudo /usr/sbin/NetworkManager --print-config | grep -A2 "^\[connectivity\]"
+  nmcli -t -f NAME,TYPE con; sudo nmcli -g connection.interface-name,802-11-wireless.ssid con show "$(nmcli -t -f NAME,TYPE con | sed -n "s/:802-11-wireless\$//p")" 2>&1
+  sudo ls /root/timeclock-setup
   timedatectl | grep -E "Time zone|NTP service"
   apt-config dump | grep -E "Automatic-Reboot|Origins-Pattern"
 '

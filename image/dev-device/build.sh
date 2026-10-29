@@ -1,7 +1,8 @@
 #!/bin/sh
 # Remaster the verified Debian netinst (fetch.sh) into the timeclock test-device installer.
 # Mounts: /src (this folder, read-only), /work (downloads and scratch), /out (the finished ISO),
-# /keys/authorized_keys (the development public key). TC_PASSWORD sets tcadmin's password.
+# /keys/authorized_keys (the development public key). TC_PASSWORD sets tcadmin's password; WIFI_SSID and WIFI_PASSWORD
+# the wifi network it joins (wifi-profile.sh).
 set -eu
 SRC=/src
 cd /work
@@ -17,6 +18,7 @@ mkdir -p build/x build/timeclock build/initrd
 cp "$SRC"/files/* build/timeclock/
 cp /keys/authorized_keys build/timeclock/authorized_keys
 sed -i 's/\r$//' build/timeclock/*
+sed 's/\r$//' "$SRC/wifi-profile.sh" | sh -s build/timeclock
 
 # The answer file, with tcadmin's password hashed in, checked by debconf's own parser.
 HASH=$(openssl passwd -6 "${TC_PASSWORD:-timeclock}")

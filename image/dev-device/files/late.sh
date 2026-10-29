@@ -19,6 +19,14 @@ visudo -cf /etc/sudoers.d/90-tcadmin
 # A clock never sleeps.
 systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
 
+# Wifi beside the wired port (preseed installs NetworkManager, its connectivity check and the firmware): the check every
+# minute, and the network baked in at build time, if any, on any wifi device. Both links stay up; NetworkManager routes
+# over the wired port (metric 100 against wifi's 600) and moves to wifi when the port loses its link or its internet.
+# The setup folder stays on this image, so the password's only copy is NetworkManager's root-only profile.
+install -m 644 "$S/30-connectivity-interval.conf" /etc/NetworkManager/conf.d/30-connectivity-interval.conf
+[ ! -f "$S/wifi.nmconnection" ] || install -m 600 "$S/wifi.nmconnection" /etc/NetworkManager/system-connections/wifi.nmconnection
+rm -f "$S/wifi.nmconnection"
+
 # The Coolify tunnel helper (docs/dev-device-setup.md, step 5).
 install -m 755 "$S/coolify-tunnel-setup" /usr/local/sbin/coolify-tunnel-setup
 

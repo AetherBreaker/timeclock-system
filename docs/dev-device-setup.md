@@ -107,9 +107,11 @@ Coolify renames the container (`coolify-tunnel-<id>`) but keeps `coolify-tunnel`
 
 ## 6. Afterwards
 
-- **Wifi** (built in, or a USB dongle such as the TP-Link Archer T3U), over SSH while wired:
-  `sudo nmcli dev wifi connect "<network>" password "<password>"`. It reconnects after every reboot; `nmcli dev` shows the
-  state. The cable keeps working alongside.
+- **Wifi** (built in, or a USB dongle such as the TP-Link Archer T3U): the device joins the network the image was built
+  with (`WIFI_SSID`, below) on whichever wifi device it has. Wired and wifi stay up together: traffic goes over the
+  cable, and moves to wifi when the cable loses its link or its internet (checked every minute). For another network,
+  over SSH while wired: `sudo nmcli dev wifi connect "<network>" password "<password>"`. It reconnects after every
+  reboot; `nmcli dev` shows the state.
 - To run Docker as `tcadmin` once Coolify has installed it: `sudo usermod -aG docker tcadmin`, then log in again.
 - Before the time clock app is deployed here, make sure nothing is using the reader: fprintd only claims it while a command like `fprintd-verify` is running.
 
@@ -143,5 +145,5 @@ Once per clock, after the install. timeclock-dev's values are in parentheses.
 The image is built from [`image/dev-device/`](../image/dev-device/) in a `debian:trixie` container (Docker Desktop):
 
 1. `fetch.sh` downloads the current Debian 13 netinst, and verifies it against Debian's signed checksums.
-2. `build.sh` adds the answer file (`preseed.cfg.in`) and the setup files (`files/`), and writes the new ISO to `/out`: mount the gitignored `image/dev-device/out/` there.
+2. `build.sh` adds the answer file (`preseed.cfg.in`) and the setup files (`files/`), and writes the new ISO to `/out`: mount the gitignored `image/dev-device/out/` there. Set `TC_PASSWORD` (tcadmin's password), and `WIFI_SSID` and `WIFI_PASSWORD` (the wifi network the device joins; kept out of git, since the repository is public; unset, the image joins none).
 3. `test.sh` installs it in a QEMU VM and checks the result over SSH.

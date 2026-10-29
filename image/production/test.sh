@@ -68,6 +68,9 @@ $SSH '
   dpkg-query -W -f="\${Package} \${Status}\n" network-manager wpasupplicant firmware-realtek firmware-iwlwifi firmware-mediatek firmware-atheros
   systemctl is-active NetworkManager
   nmcli -t -f DEVICE,TYPE,STATE dev | grep -Ev "^(veth|br-|docker)"
+  dpkg-query -W -f="\${Package} \${Status}\n" network-manager-config-connectivity-debian
+  sudo /usr/sbin/NetworkManager --print-config | grep -A2 "^\[connectivity\]"
+  nmcli -t -f NAME,TYPE con; sudo nmcli -g connection.interface-name,802-11-wireless.ssid con show "$(nmcli -t -f NAME,TYPE con | sed -n "s/:802-11-wireless\$//p")" 2>&1
   timedatectl | grep -E "Time zone|NTP service"
   apt-config dump | grep -E "Automatic-Reboot|Origins-Pattern"
   grep -n OS_PROBER /etc/default/grub; sudo grep -c osprober /boot/grub/grub.cfg || true
