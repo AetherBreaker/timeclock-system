@@ -106,7 +106,9 @@ The visible cost is a blink: from the switch in step 1 to the switch back in ste
   didn't change it. A switch between two running displays shows no black at all, so the final switch to the loaded
   clock is clean.
 
-The kiosk image gains `kbd` for `chvt`.
+The terminal switches are Perl one-liners (`perl-base` is in every Debian, the kiosk image included), not `chvt`:
+no new package, and the hand-back doesn't wait for the other display to let go. Debian's `seatd.service` is
+disabled on the host: it holds `/run/seatd.sock`, and `seatd-launch` refuses to start beside it.
 
 ### 3.4 Boot order
 
@@ -145,7 +147,9 @@ image name. All of them are settings in its config file, so a change never needs
   otherwise.
 - **Debounce:** the clock must be not-live for 3 s before the watcher flips to the standby, so a connection blip
   doesn't flicker. A deploy starting (deploy-start mode) flips at once. Going to the clock is immediate.
-- **Never switch to an unclaimed terminal.** If the wanted terminal isn't claimed, leave the screen alone.
+- **Never switch to an unclaimed terminal.** If the wanted terminal isn't claimed, leave the screen alone. One
+  exception: from a console (2–6) to the standby's terminal. A standby display restarted while a console showed
+  checks in only from 1 or 7, so without it each would wait for the other (found on main-warehouse, 2026-10-29).
 - **The watcher's own switches** use `VT_ACTIVATE` + `VT_WAITACTIVE`; it remembers them so it never mistakes them for
   anyone else's.
 - **A user's switch:** the terminal changed, Ctrl+Alt+F*n* was pressed within the last 0.5 s, and *n* is the new
