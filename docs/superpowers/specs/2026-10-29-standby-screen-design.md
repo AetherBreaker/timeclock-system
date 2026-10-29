@@ -94,15 +94,17 @@ in on its terminal and hands the screen back as soon as its devices are open:
 
 The visible cost is a blink: from the switch in step 1 to the switch back in step 3. Keeping it short (owner agreed):
 
-- **No monitor resync.** Everything uses the panel's native mode (cage and the console both default to it), and the
-  kernel command line gets `i915.fastboot=1`, so a switch between same-mode terminals skips the full modeset. Haswell
-  (the G1) may not default to it. Likely the largest part of the blink.
+- **No monitor resync.** Everything uses the panel's native mode (cage and the console both default to it). The kernel
+  command line gets `i915.fastboot=1` for a seamless handover from the firmware's screen at boot; it made no
+  difference to the check-in blink.
 - **Switch as late as possible.** Everything that doesn't need the screen happens before step 1: udev, the Firefox
   profile, the remote-access install. `remote.sh` starts just before cage; its wait for cage's Wayland socket ends as
   soon as cage is up, so remote access is available during the favicon wait.
 - **Hand back at once.** The wrapper (step 3) needs no polling; cage itself signals the moment.
-- **Measure it** on main-warehouse, by phone video and timestamps, before tuning further. My estimate, 0.3–0.7 s without a
-  resync, is a guess.
+- **Measured** on main-warehouse (2026-10-29, screen captures at 30 fps): the blink is about 1.1 s, almost all of it
+  cage starting on terminal 1 (0.6 s from check-in to hand-back, 1 s on the first start after boot); `i915.fastboot=1`
+  didn't change it. A switch between two running displays shows no black at all, so the final switch to the loaded
+  clock is clean.
 
 The kiosk image gains `kbd` for `chvt`.
 
