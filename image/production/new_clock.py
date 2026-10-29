@@ -19,7 +19,8 @@ Every step checks what's already done, so a rerun after a failure carries on whe
    port, and an ssh rule in Coolify's container sends every *-tunnel name to coolify-tunnel, see its README), validated;
 5. the clock's database login, timeclock_clock_<name> in timeclock_clocks, with a random password;
 6. the Coolify application (docker/compose.yaml of this repository, beside timeclock-dev's), its variables filled in:
-   the clock's own from the steps above, the shared ones copied from timeclock-dev's application; named exactly as the
+   the clock's own from the steps above, the shared ones copied from timeclock-dev's application (not PINGKEY or the
+   Pushover pair, which the owner sets by hand); named exactly as the
    hostname, through timeclock-dev's GitHub App, watching docker/**, on the predefined network. Not deployed: Coolify's API can't turn on Consistent
    Container Names, so that's done in Coolify (Advanced > Container) before the first deploy.
 The variables stay editable in Coolify; nothing here sets them again once the application exists.
@@ -51,6 +52,7 @@ TUNNEL = WORKSPACE / "coolify-tunnel"
 HUB_REPO = "AetherBreaker/wireguard-hub"
 COOLIFY = "https://coolify.sweetfiretobacco.com/api/v1"
 TEMPLATE_INSTANCE = "dev"  # timeclock-dev's application: where the new one goes, and the shared variables' source
+OWNER_ONLY = {"PINGKEY", "ALERTS_PUSHOVER_TOKEN", "ALERTS_PUSHOVER_USER_KEY"}  # never copied; the owner sets them
 LOG_SERVER, BACKEND = "central-log-server", "timeclock-backend"
 
 
@@ -276,13 +278,15 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
     "TIMECLOCK_DB_USER": role,
     "TIMECLOCK_DB_PASSWORD": password,
   }
-  # The rest are the same for every clock (alerts, heartbeat, hub): copied from timeclock-dev's.
-  values = {k: e["value"] for k, e in template_envs.items() if k not in values} | values
+  # The rest are the same for every clock (alerts, hub): copied from timeclock-dev's. The owner's own channels (PINGKEY,
+  # Pushover) are set by hand.
+  values = {k: e["value"] for k, e in template_envs.items() if k not in values and k not in OWNER_ONLY} | values
   api(
     "PATCH", f"/applications/{app_uuid}/envs/bulk", {"data": [{"key": k, "value": v, "is_preview": False} for k, v in values.items()]}
   )
   print(f"  application: {peer} created ({', '.join(values)})")
-  print(f"done. In Coolify, turn on {peer}'s Advanced > Container > Consistent Container Names, then deploy it.")
+  print(f"done. In Coolify, set {peer}'s {', '.join(sorted(OWNER_ONLY))} if wanted, turn on its Advanced > Container >")
+  print("Consistent Container Names, then deploy it.")
 
 
 if __name__ == "__main__":

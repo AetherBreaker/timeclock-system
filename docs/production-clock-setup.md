@@ -57,9 +57,11 @@ coolify-tunnel README, "Coolify's ssh rule".
    It checks the hub enrolment against the pinned release (the row, its key, both forwards), opens its Coolify tunnel
    (its key line in coolify-tunnel, which it redeploys), adds and validates the Coolify
    server, creates its database login, then creates the Coolify application: named exactly as the hostname, every
-   variable filled in, watch paths `docker/**`, on the predefined network. It takes up to twenty minutes, mostly
-   Coolify's validation. If a step fails, fix the cause and run it again: done steps are skipped.
-6. **In Coolify**, on the new application: **Advanced → Container → Consistent Container Names** on (the API can't
+   variable filled in except `PINGKEY`, `ALERTS_PUSHOVER_TOKEN` and `ALERTS_PUSHOVER_USER_KEY`, watch paths
+   `docker/**`, on the predefined network. It takes up to twenty minutes, mostly Coolify's validation. If a step fails,
+   fix the cause and run it again: done steps are skipped.
+6. **In Coolify**, on the new application: set `PINGKEY` (the healthchecks.io ping key; empty means no heartbeat
+   ping) and the Pushover pair if wanted, turn **Advanced → Container → Consistent Container Names** on (the API can't
    set it), then **Deploy**.
 
    The variables stay editable in the application's settings in Coolify.
