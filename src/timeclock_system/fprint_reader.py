@@ -21,6 +21,7 @@ from gi.repository import FPrint, Gio, GLib  # after require_version, or gi pick
 
 # First party imports
 from timeclock_system.scanner import (
+  FingerStatus,
   GalleryPrint,
   ReaderFailure,
   ReaderGone,
@@ -98,39 +99,62 @@ class FprintReader:
     except GLib.Error as e:
       raise _reader_error(e) from e
 
-  def identify(self, gallery: Sequence[GalleryPrint], cancel: Gio.Cancellable, on_finger: Callable[[], None]) -> UUID | None:
-    """Capture one print and match it against `gallery` in order; return the matched print id or None."""
+  def _watch_finger(self, on_status: Callable[[FingerStatus], None]) -> int:
+    """Report every finger-status change to `on_status`; returns the handler id to disconnect."""
+
+    def changed(device: FPrint.Device, _pspec: object) -> None:
+      flags = device.get_finger_status()
+      present, needed = FPrint.FingerStatusFlags.PRESENT, FPrint.FingerStatusFlags.NEEDED
+      on_status(FingerStatus(present=bool(flags & present), waiting=bool(flags & needed)))
+
+    return self._device.connect("notify::finger-status", changed)
+
+  def identify(
+    self,
+    gallery: Sequence[GalleryPrint],
+    cancel: Gio.Cancellable,
+    on_status: Callable[[FingerStatus], None],
+    on_result: Callable[[UUID | None], None],
+  ) -> UUID | None:
+    """Capture one print and match it against `gallery` in order; return the matched print id or None.
+
+    `on_result` gets the match from libfprint's match callback, which `fpi_device_identify_report` calls the moment the
+    scan is matched; `identify_sync` returns only after the finger lifts (the device deactivates on finger-off).
+    """
     try:
       self._prints = {p.print_id: self._prints.get(p.print_id) or FPrint.Print.deserialize(p.template) for p in gallery}
     except GLib.Error as e:
       raise _reader_error(e) from e
 
-    def on_status(device: FPrint.Device, _pspec: object) -> None:
-      if device.get_finger_status() & FPrint.FingerStatusFlags.PRESENT:
-        on_finger()
+    def matched(_device: FPrint.Device, match: FPrint.Print | None, _probe: object, _user_data: object, error: object) -> None:
+      if error is None:  # a retry reports its error here too, and the call then raises it
+        # libfprint hands back the gallery object it matched, so identity finds its id.
+        on_result(next((print_id for print_id, print_ in self._prints.items() if print_ is match), None))
 
-    handler = self._device.connect("notify::finger-status", on_status)
+    handler = self._watch_finger(on_status)
     try:
-      match, _probe = self._device.identify_sync(list(self._prints.values()), cancel, None, None)
+      match, _probe = self._device.identify_sync(list(self._prints.values()), cancel, matched, None)
     except GLib.Error as e:
       raise _reader_error(e) from e
     finally:
       self._device.disconnect(handler)
-    if match is None:
-      return None
-    # libfprint hands back the gallery object it matched, so identity finds its id.
-    return next(print_id for print_id, print_ in self._prints.items() if print_ is match)
+    return next((print_id for print_id, print_ in self._prints.items() if print_ is match), None)
 
-  def enroll(self, cancel: Gio.Cancellable, on_stage: Callable[[int, int], None]) -> bytes:
-    """Run every enrollment stage; return the serialized template."""
+  def enroll(
+    self, cancel: Gio.Cancellable, on_stage: Callable[[int, int, bool], None], on_status: Callable[[FingerStatus], None]
+  ) -> bytes:
+    """Run every enrollment stage; return the serialized template. A press with an error (a retry) isn't counted."""
 
-    def progress(device: FPrint.Device, completed_stages: int, _print: object, _user_data: object, _error: object) -> None:
-      on_stage(completed_stages, device.get_nr_enroll_stages())
+    def progress(device: FPrint.Device, completed_stages: int, _print: object, _user_data: object, error: object) -> None:
+      on_stage(completed_stages, device.get_nr_enroll_stages(), error is None)
 
+    handler = self._watch_finger(on_status)
     try:
       enrolled = self._device.enroll_sync(FPrint.Print.new(self._device), cancel, progress, None)
     except GLib.Error as e:
       raise _reader_error(e) from e
+    finally:
+      self._device.disconnect(handler)
     return bytes(enrolled.serialize())
 
 
@@ -139,7 +163,9 @@ def _probe_identify(reader: FprintReader) -> None:
   reader.open()
   try:
     print("enroll: press the same finger 5 times")
-    template = reader.enroll(reader.new_cancel(), lambda done, total: print(f"stage {done}/{total}"))
+    template = reader.enroll(
+      reader.new_cancel(), lambda done, total, ok: print(f"stage {done}/{total}{'' if ok else ' (retry)'}"), lambda _status: None
+    )
     print(f"template_bytes={len(template)}")
     gallery = [GalleryPrint(uuid4(), 0, template)]
     for attempt in range(1, 4):
@@ -147,7 +173,8 @@ def _probe_identify(reader: FprintReader) -> None:
       print(f"identify {attempt}: press the finger")
       started = time.monotonic()
       try:
-        result = "match" if reader.identify(gallery, reader.new_cancel(), lambda: None) else "no match"
+        matched = reader.identify(gallery, reader.new_cancel(), lambda _status: None, lambda _result: None)
+        result = "match" if matched else "no match"
       except RetryScan as e:
         result = f"retry ({e})"
       print(f"identify {attempt}: {result} in {time.monotonic() - started:.2f} s")
@@ -167,7 +194,7 @@ def _soak(reader: FprintReader, minutes: float) -> None:
       rearm.start()
       try:
         # An empty gallery still captures (§6.2's version-2 path), so no enrollment is needed to soak.
-        reader.identify([], token, lambda: None)
+        reader.identify([], token, lambda _status: None, lambda _result: None)
         print(f"{time.strftime('%H:%M:%S')} capture")
         time.sleep(1.0)  # the scanner's finger_off_pause
       except ScanCancelled:
