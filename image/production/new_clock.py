@@ -116,7 +116,7 @@ def deploy_app_named(name: str) -> None:
   apps = [a for a in api("GET", "/applications") if a["name"] == name]  # pyright: ignore[reportGeneralTypeIssues]
   if len(apps) != 1:
     sys.exit(f"expected one Coolify application named {name!r}, found {len(apps)}")
-  api("GET", f"/deploy?uuid={apps[0]['uuid']}")
+  api("POST", f"/deploy?uuid={apps[0]['uuid']}")
   print(f"  deploying {name} in Coolify")
 
 
