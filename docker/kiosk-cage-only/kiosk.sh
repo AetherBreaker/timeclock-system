@@ -11,4 +11,7 @@ mkdir -p -m 700 "$XDG_RUNTIME_DIR"
 PROFILE=/tmp/kiosk-profile
 rm -rf "$PROFILE"
 mkdir -p "$PROFILE"
+# The number pad types digits whatever Num Lock says: cage starts every keyboard with Num Lock off, including one that
+# drops off USB and comes back (main-office's did, 2026-10-29).
+export XKB_DEFAULT_OPTIONS=numpad:mac
 exec seatd-launch -- cage -- firefox-esr --profile "$PROFILE" --kiosk "${KIOSK_URL}"
