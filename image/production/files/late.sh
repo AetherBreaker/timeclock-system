@@ -25,6 +25,7 @@ systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
 # over the wired port (metric 100 against wifi's 600) and moves to wifi when the port loses its link or its internet.
 install -m 644 "$S/30-connectivity-interval.conf" /etc/NetworkManager/conf.d/30-connectivity-interval.conf
 [ ! -f "$S/wifi.nmconnection" ] || install -m 600 "$S/wifi.nmconnection" /etc/NetworkManager/system-connections/wifi.nmconnection
+install -m 644 "$S/rtw88-usb.conf" /etc/modprobe.d/rtw88-usb.conf
 
 # The Coolify tunnel helper, with the tunnel's host key already trusted so it runs without asking.
 install -m 755 "$S/coolify-tunnel-setup" /usr/local/sbin/coolify-tunnel-setup
