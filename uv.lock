@@ -1528,7 +1528,7 @@ wheels = [
 
 [[package]]
 name = "timeclock-backend"
-version = "0.3.0"
+version = "0.5.0"
 source = { editable = "backend" }
 dependencies = [
     { name = "aeth-ext", extra = ["async"] },
@@ -1545,7 +1545,7 @@ requires-dist = [
     { name = "apscheduler", specifier = ">=3.11.2,<4" },
     { name = "devkit-container", specifier = ">=2.3.1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.10" },
-    { name = "timeclock-schema", specifier = ">=0.4.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "timeclock-schema", specifier = ">=0.6.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "tzdata", specifier = ">=2026.5" },
 ]
 
