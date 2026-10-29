@@ -111,6 +111,9 @@ COPY --from=builder /opt/libfprint /opt/libfprint
 # The linker and PyGObject find the patched library and its FPrint-2.0 typelib.
 RUN echo /opt/libfprint/lib > /etc/ld.so.conf.d/libfprint.conf && ldconfig
 ENV GI_TYPELIB_PATH=/opt/libfprint/lib/girepository-1.0
+# The host's standby screen names the incoming version from this label during a deploy (standby-screen spec §6.3).
+ARG GIT_TAG
+LABEL org.opencontainers.image.version=$GIT_TAG
 # !end final
 
 WORKDIR /app

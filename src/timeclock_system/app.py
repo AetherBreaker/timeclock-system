@@ -17,6 +17,7 @@ from aeth_ext.errors.shutdown import ShutdownPhase, register_for_shutdown
 from nicegui import app, ui
 
 # First party imports
+from timeclock_system.app_status import write_status
 from timeclock_system.clock import Clock
 from timeclock_system.crash_alerts import CrashAlertWriter, register_crash_alert_writer
 from timeclock_system.fprint_reader import FprintReader
@@ -108,16 +109,19 @@ def serve(project_name: str) -> None:
     nonlocal loop
     install_loop_exception_handler()
     loop = asyncio.get_running_loop()
+    write_status(settings.status_dir, "Loading employees and punches")  # shown on the host's standby page
     await clock.load()
     clock.add_record_listener(lambda _record: sync.wake())
     clock.add_change_listener(lambda tables: keep("Gallery refresh", refresh_gallery()) if tables & _GALLERY_TABLES else None)
     await refresh_gallery()
+    write_status(settings.status_dir, "Starting the fingerprint reader")
     scanner.start()  # here, not before ui.run: `post` needs the running loop
     await controller.tick()  # sets the first reader mode
     keep("Database sync", sync.run())
     keep("Heartbeat", heartbeat_loop(settings.heartbeat_path, scanner.busy_seconds, tz=settings.tz))
     keep("Week rollover", clock.run_week_rollover())
     keep("Screen timer", tick_forever())
+    write_status(settings.status_dir, "Ready")
 
   # Through keep, like every task: NiceGUI would run the coroutine itself and only log its exception (§6.9).
   app.on_startup(lambda: keep("Startup", startup()))
