@@ -129,7 +129,8 @@ Once per clock, after the install. timeclock-dev's values are in parentheses.
    | --- | --- |
    | `INSTANCE_ID` | names the clock and its location in alerts, logs and the database (`dev`) |
    | `CLOCK_NUMBER` | a whole number from 1 to 99, unique per clock: clock *n* numbers the employees it adds n×10000+1 to n×10000+9999 (timeclock-dev: an unused one, e.g. `99`) |
-   | `ALERTS_EMAIL_PWD`, `PINGKEY` | as on other projects |
+   | `ALERTS_EMAIL_PWD` | as on other projects |
+   | `PINGKEY` | optional: the healthchecks.io ping key, as on other projects; empty means no heartbeat ping (timeclock-dev leaves it empty) |
    | `WG_PRIVATE_KEY` | the contents of `timeclock-system-<INSTANCE_ID>.key` in the wireguard-hub checkout (gitignored) |
    | `WG_HUB_URL`, `WG_HUB_REPO`, `WG_HUB_TOKEN` | the hub's fetched-mode values |
    | `TIMECLOCK_DB_NAME` | `timeclock` (`timeclock_test`) |

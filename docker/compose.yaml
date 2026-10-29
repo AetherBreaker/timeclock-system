@@ -29,7 +29,7 @@ services:
       - ALERTS_EMAIL=info@sweetfiretobacco.com
       - ALERTS_EMAIL_PWD=${ALERTS_EMAIL_PWD:?}
       - ALERTS_RECIPIENTS=["jacob.ogden@sweetfiretobacco.com"]
-      - PINGKEY=${PINGKEY:?}
+      - PINGKEY=${PINGKEY:-}
       - WG_PRIVATE_KEY=${WG_PRIVATE_KEY:?}
       - WG_HUB_URL=${WG_HUB_URL:?}
       - WG_HUB_REPO=${WG_HUB_REPO:?}
