@@ -15,3 +15,9 @@
   (employees, groups, rules, business hours, settings, punch corrections, and synced punches and fingerprints). If an
   unsynced row (pending employee, unsynced punch, fingerprint or bypass) still can't be read, stop with an error naming
   that row; a breaking change to those models needs a conversion step.
+- [ ] **Refuse a print that's already registered.** At registration, check the new print against every stored print
+  except the one it replaces, and refuse a match. Deferred 2026-10-28: admin approval of adds and re-registrations
+  mostly covers it. libfprint doesn't expose its matcher (`fpi_print_bz3_match`) to Python. Either register with five
+  identify touches against the stored prints and build the template from them, or compile NBIS bozorth3 into a small C
+  extension. Still open: which prints count (inactive employees, the person's own other fingers), what the refusal
+  says, and whether it sends an alert.
