@@ -29,6 +29,7 @@ Each needs its own design before it's built.
 - [ ] **On-screen keyboard** for the clock's text fields (very low priority; a physical keyboard is plugged in when
   needed).
 - [ ] **Per-clock settings** in the admin menu, starting with UI scaling.
+- [ ] **UI Mirror Mode** Relies upon the item above coming first. Mirrors the position of everything in the UI, so objects on the left and right sides swap places.
 - [ ] **Toggle PIN-only login** for an employee from the clock (for now it's set only in the database).
 - [ ] **Resolution tool** for a clock-created employee the database refused: renumber the employee and their records on
   the unsynced clock so they go through.
