@@ -1,5 +1,6 @@
 # Standard library imports
 import asyncio
+import json
 from datetime import UTC, datetime, time
 from importlib.metadata import version
 from typing import TYPE_CHECKING, cast
@@ -74,7 +75,7 @@ async def controller(tmp_path: Path) -> AsyncIterator[KioskController]:
     )
   clock = Clock(store, instance_id="1", clock_number=1, tz=NY, alert=lambda _s, _b: None)
   await clock.load()
-  yield KioskController(clock, RecordingReader(), tz=NY)
+  yield KioskController(clock, RecordingReader(), tz=NY, status_dir=tmp_path / "status")
   store.close()
 
 
@@ -441,3 +442,18 @@ async def test_approval_prompt_names_the_change(controller: KioskController, tmp
     await user.should_see("Admin: approve removing Ann Lee's left index print")
     await user.should_see(text.APPROVE_HOW)
     await user.should_see(kind=ui.button, content=text.USE_PIN)
+
+
+async def test_banner_shown_on_idle_and_menu(controller: KioskController, tmp_path: Path) -> None:
+  # The host's standby screen puts it up during a deploy's build (standby-screen spec §6.2).
+  banner = "An update is being installed. The clock will restart in about a minute."
+  (tmp_path / "status").mkdir()
+  (tmp_path / "status" / "banner.json").write_text(json.dumps({"text": banner}))
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await user.should_not_see(banner)
+    await controller.tick()
+    await user.should_see(banner)
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_not_see(text.IDLE_READY)
+    await user.should_see(banner)

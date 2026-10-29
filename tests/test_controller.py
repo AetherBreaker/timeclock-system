@@ -1,4 +1,6 @@
 # Standard library imports
+import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
@@ -161,7 +163,7 @@ async def kiosk(tmp_path: Path) -> AsyncIterator[Kiosk]:
   clock = Clock(store, instance_id="1", clock_number=1, tz=NY, alert=lambda _s, _b: None, now=lambda: t.wall)
   await clock.load()
   reader = FakeReaderPort()
-  ctl = KioskController(clock, reader, tz=NY, monotonic=lambda: t.mono, wall_now=lambda: t.wall)
+  ctl = KioskController(clock, reader, tz=NY, monotonic=lambda: t.mono, wall_now=lambda: t.wall, status_dir=tmp_path / "status")
   yield Kiosk(ctl, clock, store, t, reader)
   store.close()
 
@@ -1336,3 +1338,43 @@ async def test_a_registration_press_keeps_the_reader_enrolling(kiosk: Kiosk) -> 
   assert kiosk.reader.modes[-1] is ReaderMode.ENROLL
   await kiosk.ctl.on_scanner_event(DOWN)
   assert kiosk.reader.modes[-1] is ReaderMode.ENROLL
+
+
+# -- the update banner, from the host's standby screen (standby-screen spec §6.2) ------------------------------------
+
+BANNER = "An update is being installed. The clock will restart in about a minute."
+
+
+def put_banner(status_dir: Path, wall: datetime, age: float = 0) -> None:
+  status_dir.mkdir(exist_ok=True)
+  path = status_dir / "banner.json"
+  path.write_text(json.dumps({"text": BANNER}))
+  stamp = wall.timestamp() - age
+  os.utime(path, (stamp, stamp))
+
+
+async def test_banner_appears_on_tick_and_notifies(kiosk: Kiosk, tmp_path: Path) -> None:
+  heard: list[str | None] = []
+  kiosk.ctl.add_listener(lambda: heard.append(kiosk.ctl.banner))
+  put_banner(tmp_path / "status", kiosk.t.wall)
+  assert kiosk.ctl.banner is None
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.banner == BANNER
+  assert heard[-1] == BANNER
+
+
+async def test_banner_expires_after_10_minutes(kiosk: Kiosk, tmp_path: Path) -> None:
+  put_banner(tmp_path / "status", kiosk.t.wall, age=599)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.banner == BANNER
+  kiosk.t.advance(1)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.banner is None
+
+
+async def test_banner_removed_with_its_file(kiosk: Kiosk, tmp_path: Path) -> None:
+  put_banner(tmp_path / "status", kiosk.t.wall)
+  await kiosk.ctl.tick()
+  (tmp_path / "status" / "banner.json").unlink()
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.banner is None
