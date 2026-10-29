@@ -147,12 +147,15 @@ class _KioskPage:
     self._branding_dir = branding_dir
     self._logo_checked = False
     self._shown: Screen | None = None  # what `screen` last drew; one page instance serves every client
+    self._banner_shown: str | None = None
     controller.add_listener(self._on_change)
 
   def _on_change(self) -> None:
     # The indicator always; the screen only when it compares unequal to what's drawn, so the add-employee form's typing
     # (left out of its equality) never redraws it and drops the input's focus.
     self.indicator.refresh()
+    if self._controller.banner != self._banner_shown:
+      self.banner.refresh()
     if self._controller.screen != self._shown:
       self.screen.refresh()
 
@@ -176,6 +179,7 @@ class _KioskPage:
     # the reader line.
     ui.label(f"v{version('timeclock-system')}").classes("fixed bottom-2 left-4 text-sm opacity-50").mark("version")
     self.indicator()
+    self.banner()
     self.screen()
     with ui.row().classes("fixed bottom-2 right-4 items-center gap-2 text-base"):
       dot = ui.icon("circle").classes("text-sm")
@@ -235,6 +239,15 @@ class _KioskPage:
           self._fingerprint_screen(s)
 
   # The per-screen renderers below are split out of `screen` for C901/PLR0912.
+
+  @ui.refreshable_method
+  def banner(self) -> None:
+    # While a deploy builds (the host's standby screen writes it): centered under the date line, over every screen.
+    self._banner_shown = self._controller.banner
+    if self._banner_shown:
+      ui.label(self._banner_shown).classes(
+        "fixed top-12 left-1/2 -translate-x-1/2 z-30 px-6 py-2 rounded-lg text-lg font-medium bg-amber-600 text-black shadow-lg"
+      ).mark("update-banner")
 
   @ui.refreshable_method
   def indicator(self) -> None:

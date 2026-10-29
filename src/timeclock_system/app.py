@@ -87,7 +87,7 @@ def serve(project_name: str) -> None:
 
   scanner = Scanner(reader, post, lambda m: trigger_shutdown("Fingerprint reader lost", m))
   sync = DatabaseSync(clock, store, settings.conninfo(), alert=_send_alert)
-  controller = KioskController(clock, scanner, tz=settings.tz)
+  controller = KioskController(clock, scanner, tz=settings.tz, status_dir=settings.status_dir)
 
   register_crash_alert_writer(
     CrashAlertWriter(settings.crash_alerts_dir, program=f"{project_name}-{settings.instance_id}", host=socket.gethostname())

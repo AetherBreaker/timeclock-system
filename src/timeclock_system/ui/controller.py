@@ -20,6 +20,7 @@ from timeclock_schema.enums import BypassReason, EmployeeRole, Finger
 from timeclock_schema.models import EMAIL_PATTERN
 
 # First party imports
+from timeclock_system.app_status import read_banner
 from timeclock_system.clock import (
   Approval,
   EmployeeBlockFull,
@@ -47,6 +48,7 @@ from timeclock_system.ui import text
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import AsyncGenerator, Callable
+  from pathlib import Path
   from uuid import UUID
   from zoneinfo import ZoneInfo
 
@@ -387,6 +389,7 @@ class KioskController:
     tz: ZoneInfo,
     monotonic: Callable[[], float] = time.monotonic,
     wall_now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    status_dir: Path | None = None,
   ) -> None:
     """Start on the idle screen and set the reader's first mode.
 
@@ -395,7 +398,8 @@ class KioskController:
       reader: The scanner, driven through `set_mode`.
       tz: The business's zone, for business hours and displayed times.
       monotonic: Seconds for timeouts, injectable for tests.
-      wall_now: The wall clock for business hours, injectable for tests.
+      wall_now: The wall clock for business hours and the banner's age, injectable for tests.
+      status_dir: Where the host's standby screen leaves the update banner; None shows none.
     """
     self._clock = clock
     self._reader = reader
@@ -416,9 +420,11 @@ class KioskController:
     self._message: ReaderMessage | None = None
     self._paused_until = float("-inf")
     self._mode: ReaderMode | None = None
+    self._status_dir = status_dir
+    self._banner: str | None = None
     self._sync_reader()
     # What the listeners last heard: a change only time makes (an expired message) is found against this.
-    self._notified = (self._screen, self.reader_awake, self.reader_indicator, self.reader_message)
+    self._notified = (self._screen, self.reader_awake, self.reader_indicator, self.reader_message, self._banner)
 
   @property
   def screen(self) -> Screen:
@@ -456,8 +462,13 @@ class KioskController:
       return None  # the status says it until the red ends; then the text moves here
     return None if isinstance(s, Idle) and now - m.at >= IDLE_ERROR_SECS else m
 
+  @property
+  def banner(self) -> str | None:
+    """The update banner's text while the host's standby screen has one up (a deploy is building), as of the last tick."""
+    return self._banner
+
   def add_listener(self, cb: Callable[[], object]) -> None:
-    """Call `cb` after any entry point that changed `screen`, `reader_awake`, `reader_indicator` or `reader_message`."""
+    """Call `cb` after any entry point that changed what the page shows: the screen, the reader line, the banner."""
     self._listeners.append(cb)
 
   def _sync_reader(self) -> None:
@@ -492,7 +503,7 @@ class KioskController:
         self._message = None
       if self._failed_at is not None and self._waiting and self._mono() - self._failed_at >= FAILED_MIN_SECS:
         self._failed_at = None  # the red has ended; a later gap before the next scan mustn't bring it back
-      after = (self._screen, self.reader_awake, self.reader_indicator, self.reader_message)
+      after = (self._screen, self.reader_awake, self.reader_indicator, self.reader_message, self._banner)
       if after != self._notified:
         self._notified = after
         for cb in self._listeners:
@@ -953,8 +964,10 @@ class KioskController:
         self._screen = Idle()
 
   async def tick(self) -> None:
-    """Expire timed screens and messages, and follow business hours; the app calls it every 0.5 s (R5)."""
+    """Expire timed screens and messages, follow business hours, and read the update banner; every 0.5 s (R5)."""
     async with self._transition():
+      if self._status_dir is not None:
+        self._banner = read_banner(self._status_dir, self._wall().timestamp())
       now = self._mono()
       s = self._screen
       if isinstance(s, Idle | Confirmation):
