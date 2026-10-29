@@ -18,7 +18,8 @@ Everything the test image does except the test tools (fprintd, libinput-tools), 
 - NetworkManager and wifi firmware (Intel, Realtek, MediaTek, Atheros), for wifi built in or on a USB dongle. The clock
   joins the wifi network the image was built with (`WIFI_SSID`, below) on whichever wifi device it has. Wired and wifi
   stay up together: traffic goes over the cable, and moves to wifi when the cable loses its link or its internet
-  (NetworkManager checks each link every minute).
+  (NetworkManager checks each link every minute). A Realtek USB dongle stays in USB 2 mode on any port, since USB 3's
+  noise drowns 2.4 GHz wifi.
 - Coolify's key in root's `authorized_keys`, and the tunnel's host key already trusted, so `coolify-tunnel-setup` doesn't ask.
 - `/data/timeclock_system_files/` with the logo in `branding/` and the remote-access client in `remote/`.
 - `tcadmin` / `timeclock` at the console, SSH by the workstation's key (`~/.ssh/timeclock_dev`), passwordless sudo.

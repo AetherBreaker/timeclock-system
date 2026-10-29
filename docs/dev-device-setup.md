@@ -109,7 +109,8 @@ Coolify renames the container (`coolify-tunnel-<id>`) but keeps `coolify-tunnel`
 
 - **Wifi** (built in, or a USB dongle such as the TP-Link Archer T3U): the device joins the network the image was built
   with (`WIFI_SSID`, below) on whichever wifi device it has. Wired and wifi stay up together: traffic goes over the
-  cable, and moves to wifi when the cable loses its link or its internet (checked every minute). For another network,
+  cable, and moves to wifi when the cable loses its link or its internet (checked every minute). A Realtek USB dongle
+  stays in USB 2 mode on any port, since USB 3's noise drowns 2.4 GHz wifi. For another network,
   over SSH while wired: `sudo nmcli dev wifi connect "<network>" password "<password>"`. It reconnects after every
   reboot; `nmcli dev` shows the state.
 - To run Docker as `tcadmin` once Coolify has installed it: `sudo usermod -aG docker tcadmin`, then log in again.

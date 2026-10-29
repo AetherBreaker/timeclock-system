@@ -26,6 +26,7 @@ systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
 install -m 644 "$S/30-connectivity-interval.conf" /etc/NetworkManager/conf.d/30-connectivity-interval.conf
 [ ! -f "$S/wifi.nmconnection" ] || install -m 600 "$S/wifi.nmconnection" /etc/NetworkManager/system-connections/wifi.nmconnection
 rm -f "$S/wifi.nmconnection"
+install -m 644 "$S/rtw88-usb.conf" /etc/modprobe.d/rtw88-usb.conf
 
 # The Coolify tunnel helper (docs/dev-device-setup.md, step 5).
 install -m 755 "$S/coolify-tunnel-setup" /usr/local/sbin/coolify-tunnel-setup

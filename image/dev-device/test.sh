@@ -48,6 +48,7 @@ $SSH '
   sudo /usr/sbin/NetworkManager --print-config | grep -A2 "^\[connectivity\]"
   nmcli -t -f NAME,TYPE con; sudo nmcli -g connection.interface-name,802-11-wireless.ssid con show "$(nmcli -t -f NAME,TYPE con | sed -n "s/:802-11-wireless\$//p")" 2>&1
   sudo ls /root/timeclock-setup
+  sudo modprobe -c | grep "^options rtw88_usb"
   timedatectl | grep -E "Time zone|NTP service"
   apt-config dump | grep -E "Automatic-Reboot|Origins-Pattern"
 '
