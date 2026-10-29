@@ -960,8 +960,10 @@ published WireGuard port and `WG_LISTEN_PORT` arrive with LAN sharing (§13 step
   `condition: service_healthy` (R14.4), network `coolify`, `restart: unless-stopped`. The Dockerfile and
   `kiosk.sh` are the ones verified on the hardware (Appendix A); `policies.json` in
   `/usr/lib/firefox-esr/distribution/` turns off pinch zoom, swipe-back and the session-restore prompt
-  (R13.2), with Firefox autoconfig for any preference policies can't set. The kiosk builds from the deployed
-  checkout, not `GIT_TAG`.
+  (R13.2), with Firefox autoconfig (`kiosk.cfg`) for any preference policies can't set. `kiosk.cfg` also reloads a
+  Firefox error page every 5 s: after a reboot Docker starts the kiosk beside the app, ignoring `depends_on`, so
+  Firefox can load before the app serves. cage runs with `-s`, so Ctrl+Alt+F*n* reaches the host's text consoles for
+  debugging at the clock. The kiosk builds from the deployed checkout, not `GIT_TAG`.
 - **`discovery`** (unlisted): the app's `build:` block, same `GIT_REPO` / `GIT_TAG` (so `docker-pin` pins it
   too, and the build cache makes the second build cheap), `entrypoint: ["/app/.venv/bin/devkit-container",
   "discover"]`, `network_mode: host`, the same persisted bind mount, `WG_LISTEN_PORT`,
