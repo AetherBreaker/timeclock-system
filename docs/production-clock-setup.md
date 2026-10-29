@@ -19,6 +19,9 @@ Everything the test image does except the test tools (fprintd, libinput-tools), 
 - Coolify's key in root's `authorized_keys`, and the tunnel's host key already trusted, so `coolify-tunnel-setup` doesn't ask.
 - `/data/timeclock_system_files/` with the logo in `branding/` and the remote-access client in `remote/`.
 - `tcadmin` / `timeclock` at the console, SSH by the workstation's key (`~/.ssh/timeclock_dev`), passwordless sudo.
+  The workstation's `~/.ssh/config` has one entry for every clock, so `ssh timeclock-system-<name>` reaches any of them:
+  `Host timeclock-system-*` with `HostName %h.local`, `User tcadmin`, `IdentityFile ~/.ssh/timeclock_dev` and
+  `IdentitiesOnly yes`.
 
 The ISO holds the remote-access client, so it stays in the gitignored `image/production/out/`.
 
