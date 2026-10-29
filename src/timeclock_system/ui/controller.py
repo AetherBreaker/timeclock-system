@@ -169,7 +169,7 @@ class FingerChange:
   employee_id: int
   name: str
   action: FingerAction
-  finger: Finger
+  finger: Finger | None  # None for an add, approved before its finger is picked (owner, 2026-10-29)
   fingerprint_id: UUID | None  # the print replaced or removed
 
 
@@ -319,13 +319,17 @@ class FingerprintActions:
 
 @dataclass(frozen=True)
 class FingerPick:
-  """Choosing the finger: for a Fingerprints action, or (`action` None) a first registration, `added` as in Registering."""
+  """Choosing the finger: for a Fingerprints action, or (`action` None) a first registration, `added` as in Registering.
+
+  `approval` is the admin's for an add, which is approved before this screen; the pick then registers at once.
+  """
 
   employee_id: int
   action: FingerAction | None
   choices: tuple[Finger, ...]
   touched_at: float
   added: Employee | None = None
+  approval: Approval | None = None
 
 
 @dataclass(frozen=True)
@@ -531,8 +535,11 @@ class KioskController:
     return FingerprintActions(employee_id, name, tuple(f for f in Finger if f in on_file), self._mono(), message)
 
   async def _approved(self, change: FingerChange, approval: Approval) -> Screen:
-    """Run an approved change: a removal at once, a registration through its touches."""
+    """Run an approved change: a removal at once, a registration through its touches; an add first asks the finger."""
     now = self._mono()
+    if change.finger is None:
+      on_file = await self._clock.prints_by_finger(change.employee_id)
+      return FingerPick(change.employee_id, "add", tuple(f for f in Finger if f not in on_file), now, approval=approval)
     if change.action != "remove":
       return Registering(change.employee_id, 0, 5, now, change.finger, change=change, approval=approval)
     if change.fingerprint_id is not None:
@@ -810,7 +817,7 @@ class KioskController:
         self._screen = FingerPick(s.employee.id, None, tuple(Finger), touched_at=self._mono(), added=s.employee)
 
   async def pick_finger(self, finger: Finger) -> None:
-    """Pick the finger: a first registration starts at once; a Fingerprints action waits for an admin's approval."""
+    """Pick the finger: a first registration or an approved add starts at once; other changes wait for an approval."""
     async with self._transition():
       s, now = self._screen, self._mono()
       if not isinstance(s, FingerPick) or finger not in s.choices:
@@ -825,7 +832,8 @@ class KioskController:
         # Another clock changed this finger since the list was drawn.
         self._screen = await self._fingerprint_actions(s.employee_id, name)
       else:
-        self._screen = ApprovalPrompt(FingerChange(s.employee_id, name, s.action, finger, fingerprint_id), touched_at=now)
+        change = FingerChange(s.employee_id, name, s.action, finger, fingerprint_id)
+        self._screen = ApprovalPrompt(change, touched_at=now) if s.approval is None else await self._approved(change, s.approval)
 
   async def gear(self) -> None:
     """The gear, on the idle screen or a punch menu (which it leaves, as Cancel would): its menu."""
@@ -840,13 +848,17 @@ class KioskController:
         self._screen = PinEntry("username", "", SecretStr(""), FingerprintLogin(), touched_at=self._mono())
 
   async def choose_action(self, action: FingerAction) -> None:
-    """Choose a Fingerprints action, then a finger: one on file, or for add one that isn't."""
+    """Choose a Fingerprints action, then a finger on file; an add is approved first, then picks a finger that isn't."""
     async with self._transition():
       s = self._screen
       if not isinstance(s, FingerprintActions):
         return
       choices = tuple(f for f in Finger if (f in s.on_file) != (action == "add"))
-      if choices:
+      if not choices:
+        return
+      if action == "add":
+        self._screen = ApprovalPrompt(FingerChange(s.employee_id, s.name, "add", None, None), touched_at=self._mono())
+      else:
         self._screen = FingerPick(s.employee_id, action, choices, touched_at=self._mono())
 
   async def admin(self) -> None:

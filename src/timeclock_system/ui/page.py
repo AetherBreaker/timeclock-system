@@ -358,7 +358,11 @@ class _KioskPage:
         self._finger_pick(s)
       case ApprovalPrompt():
         c = s.change
-        ui.label(text.APPROVE_CHANGE[c.action].format(name=c.name, finger=text.FINGER_LABELS[c.finger].lower())).classes("sft-title")
+        if c.finger is None:
+          title = text.APPROVE_ADD.format(name=c.name)
+        else:
+          title = text.APPROVE_CHANGE[c.action].format(name=c.name, finger=text.FINGER_LABELS[c.finger].lower())
+        ui.label(title).classes("sft-title")
         ui.label(text.APPROVE_HOW)
         if s.message:
           ui.label(s.message).classes("sft-error")

@@ -91,9 +91,9 @@ PICK_FINGER: Final[Mapping[str | None, str]] = MappingProxyType(
     "remove": "Which finger to remove?",
   }
 )
+APPROVE_ADD: Final = "Admin: approve adding a fingerprint for {name}"  # before the finger is picked
 APPROVE_CHANGE: Final[Mapping[str, str]] = MappingProxyType(  # {finger}: the label, lower-cased
   {
-    "add": "Admin: approve adding {name}'s {finger} print",
     "replace": "Admin: approve re-registering {name}'s {finger} print",
     "remove": "Admin: approve removing {name}'s {finger} print",
   }

@@ -1036,15 +1036,18 @@ async def test_a_deactivated_admin_cannot_approve(kiosk: Kiosk) -> None:
 async def test_an_admin_approves_their_own_change_at_the_approval_step(kiosk: Kiosk) -> None:
   await fingerprints_login(kiosk, ADA)
   await kiosk.ctl.choose_action("add")
-  await kiosk.ctl.pick_finger(Finger.RIGHT_INDEX)
-  change = FingerChange(ADA, "Ada Lee", "add", Finger.RIGHT_INDEX, None)
-  assert kiosk.ctl.screen == ApprovalPrompt(change, touched_at=kiosk.t.mono)
+  request = FingerChange(ADA, "Ada Lee", "add", None, None)
+  assert kiosk.ctl.screen == ApprovalPrompt(request, touched_at=kiosk.t.mono)
   await kiosk.ctl.use_pin()
-  assert kiosk.ctl.screen == PinEntry("username", "", SecretStr(""), change, touched_at=kiosk.t.mono)
+  assert kiosk.ctl.screen == PinEntry("username", "", SecretStr(""), request, touched_at=kiosk.t.mono)
   await kiosk.type_and_enter(PINS[ADA])
   await kiosk.type_and_enter("1234")
+  approval = Approval(ADA, pin_only=True)
+  assert kiosk.ctl.screen == FingerPick(ADA, "add", tuple(Finger), touched_at=kiosk.t.mono, approval=approval)
+  await kiosk.ctl.pick_finger(Finger.RIGHT_INDEX)
+  change = FingerChange(ADA, "Ada Lee", "add", Finger.RIGHT_INDEX, None)
   assert kiosk.ctl.screen == Registering(
-    ADA, 0, 5, touched_at=kiosk.t.mono, finger=Finger.RIGHT_INDEX, change=change, approval=Approval(ADA, pin_only=True)
+    ADA, 0, 5, touched_at=kiosk.t.mono, finger=Finger.RIGHT_INDEX, change=change, approval=approval
   )
   assert kiosk.reader.modes[-1] is ReaderMode.ENROLL
   await kiosk.ctl.on_scanner_event(Enrolled(b"ada"))
@@ -1097,9 +1100,42 @@ async def test_abandoning_approval_or_touches_changes_nothing(kiosk: Kiosk) -> N
   assert kiosk.store.unsynced_fingerprint_changes() == []
 
 
+async def test_add_is_approved_before_the_finger_is_picked(kiosk: Kiosk) -> None:
+  # Owner, 2026-10-29: the admin approves adding a print first; the employee then picks the finger and registers.
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("add")
+  assert kiosk.ctl.screen == ApprovalPrompt(FingerChange(ANN, "Ann Lee", "add", None, None), touched_at=kiosk.t.mono)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  approval = Approval(ADA, pin_only=False)
+  choices = tuple(f for f in Finger if f is not Finger.LEFT_INDEX)
+  assert kiosk.ctl.screen == FingerPick(ANN, "add", choices, touched_at=kiosk.t.mono, approval=approval)
+  await kiosk.ctl.pick_finger(Finger.RIGHT_INDEX)
+  change = FingerChange(ANN, "Ann Lee", "add", Finger.RIGHT_INDEX, None)
+  assert kiosk.ctl.screen == Registering(
+    ANN, 0, 5, touched_at=kiosk.t.mono, finger=Finger.RIGHT_INDEX, change=change, approval=approval
+  )
+  await kiosk.ctl.on_scanner_event(Enrolled(b"ann2"))
+  assert kiosk.ctl.screen == Idle(text.FINGERPRINT_SAVED, until=kiosk.t.mono + 3)
+  assert set(await kiosk.clock.prints_by_finger(ANN)) == {Finger.LEFT_INDEX, Finger.RIGHT_INDEX}
+  [c] = kiosk.store.unsynced_fingerprint_changes()
+  assert (c.action, c.approved_by, c.pin_only) == (FingerprintChangeAction.ADD, ADA, False)
+
+
+async def test_cancelling_an_approved_add_at_the_finger_pick_changes_nothing(kiosk: Kiosk) -> None:
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("add")
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  assert isinstance(kiosk.ctl.screen, FingerPick)
+  await kiosk.ctl.cancel()
+  assert kiosk.ctl.screen == Idle()
+  assert await kiosk.clock.prints_by_finger(ANN) == {Finger.LEFT_INDEX: ANN_PRINT}
+  assert kiosk.store.unsynced_fingerprint_changes() == []
+
+
 async def test_add_offers_only_fingers_not_on_file(kiosk: Kiosk) -> None:
   await fingerprints_login(kiosk, ANN)
   await kiosk.ctl.choose_action("add")
+  await kiosk.ctl.on_scanner_event(matched(ADA))
   pick = kiosk.ctl.screen
   assert isinstance(pick, FingerPick)
   assert pick.choices == tuple(f for f in Finger if f is not Finger.LEFT_INDEX)
@@ -1214,20 +1250,28 @@ async def test_a_non_managers_finger_on_the_override_pad_returns_to_the_prompt(k
 
 async def approval_pad(kiosk: Kiosk) -> FingerChange:
   await fingerprints_login(kiosk, ANN)
-  await kiosk.ctl.choose_action("add")
-  await kiosk.ctl.pick_finger(Finger.RIGHT_INDEX)
+  await kiosk.ctl.choose_action("remove")
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   await kiosk.ctl.use_pin()
-  change = FingerChange(ANN, "Ann Lee", "add", Finger.RIGHT_INDEX, None)
+  change = FingerChange(ANN, "Ann Lee", "remove", Finger.LEFT_INDEX, ANN_PRINT)
   assert kiosk.ctl.screen == PinEntry("username", "", SecretStr(""), change, touched_at=kiosk.t.mono)
   return change
 
 
 async def test_an_admins_finger_on_the_approval_pad_approves(kiosk: Kiosk) -> None:
-  change = await approval_pad(kiosk)
+  await approval_pad(kiosk)
   await kiosk.ctl.on_scanner_event(matched(ADA))
-  assert kiosk.ctl.screen == Registering(
-    ANN, 0, 5, touched_at=kiosk.t.mono, finger=Finger.RIGHT_INDEX, change=change, approval=Approval(ADA, pin_only=False)
-  )
+  assert kiosk.ctl.screen == Idle(text.FINGERPRINT_REMOVED, until=kiosk.t.mono + 3)
+  assert await kiosk.clock.prints_by_finger(ANN) == {}
+
+
+async def test_an_admins_finger_on_the_add_approval_pad_opens_the_finger_pick(kiosk: Kiosk) -> None:
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("add")
+  await kiosk.ctl.use_pin()
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  pick = kiosk.ctl.screen
+  assert isinstance(pick, FingerPick) and pick.approval == Approval(ADA, pin_only=False)
 
 
 async def test_a_non_admins_finger_on_the_approval_pad_returns_to_the_prompt(kiosk: Kiosk) -> None:
@@ -1275,8 +1319,8 @@ async def test_an_unrecognized_finger_leaves_the_pad_alone(kiosk: Kiosk) -> None
 async def test_registration_waits_for_the_approvers_finger_to_lift(kiosk: Kiosk) -> None:
   # The admin's finger approves while still down; enrolling then would read it as the employee's first press.
   await fingerprints_login(kiosk, ANN)
-  await kiosk.ctl.choose_action("add")
-  await kiosk.ctl.pick_finger(Finger.RIGHT_INDEX)
+  await kiosk.ctl.choose_action("replace")
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   await kiosk.ctl.on_scanner_event(DOWN)
   await kiosk.ctl.on_scanner_event(matched(ADA))
   assert isinstance(kiosk.ctl.screen, Registering)

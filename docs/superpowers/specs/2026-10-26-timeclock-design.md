@@ -563,8 +563,10 @@ paid break time (owner, 2026-10-27; §4.5).
   proven the finger).
 - **Fingerprint menu** (owner, 2026-10-28; [its design](2026-10-28-fingerprint-menu-design.md)): a gear on the
   idle screen and the action menu opens it. After a PIN login, a person re-registers, adds or removes one of
-  their own prints, each change approved by an admin's finger or PIN just before it runs and logged in
-  `fingerprint_changes`. A re-register removes the old print only once the new one has enrolled.
+  their own prints, each change approved by an admin's finger or PIN and logged in `fingerprint_changes`. A
+  re-register or removal is approved just before it runs, after its finger is picked; an add is approved before
+  its finger is picked, and the pick then starts registering (owner, 2026-10-29). A re-register removes the old
+  print only once the new one has enrolled.
 - **Manager override** (R23.5). An active manager or admin scans, or enters their PIN login, which doesn't
   also need their fingerprint. Nobody overrides for themselves (owner, 2026-10-27; a manager without a print
   registers one instead). A manager added on a clock can't approve overrides until the database has

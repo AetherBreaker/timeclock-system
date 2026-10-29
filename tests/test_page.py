@@ -419,6 +419,9 @@ async def test_finger_pick_shows_one_button_per_choice(controller: KioskControll
     await fingerprints_as(controller, "12")
     await user.should_see(kind=ui.button, content=text.ADD_FINGER)
     user.find(kind=ui.button, content=text.ADD_FINGER).click()
+    await user.should_see("Admin: approve adding a fingerprint for Ann Lee")  # before the finger is picked
+    await user.should_not_see(text.PICK_FINGER["add"])
+    await controller.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
     await user.should_see(text.PICK_FINGER["add"])
     for finger in Finger:
       if finger is Finger.LEFT_INDEX:
