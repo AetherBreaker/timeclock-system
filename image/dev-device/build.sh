@@ -19,6 +19,8 @@ cp "$SRC"/files/* build/timeclock/
 cp /keys/authorized_keys build/timeclock/authorized_keys
 sed -i 's/\r$//' build/timeclock/*
 sed 's/\r$//' "$SRC/wifi-profile.sh" | sh -s build/timeclock
+# The standby screen's latest release, after the line-ending fix above (it's binary).
+sed 's/\r$//' "$SRC/fetch-standby.sh" | sh -s build/timeclock
 
 # The answer file, with tcadmin's password hashed in, checked by debconf's own parser.
 HASH=$(openssl passwd -6 "${TC_PASSWORD:-timeclock}")
