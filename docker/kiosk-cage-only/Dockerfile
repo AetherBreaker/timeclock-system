@@ -2,7 +2,7 @@
 # `dockerfile` here. The Firefox settings are shared with docker/kiosk.
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    cage seatd udev firefox-esr libgl1-mesa-dri libegl-mesa0 fonts-dejavu-core ca-certificates \
+    cage seatd udev firefox-esr libgl1-mesa-dri libegl-mesa0 fonts-dejavu-core ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
 COPY docker/kiosk-cage-only/kiosk.sh /kiosk.sh
 COPY docker/kiosk/policies.json /usr/lib/firefox-esr/distribution/policies.json

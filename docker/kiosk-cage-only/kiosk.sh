@@ -11,6 +11,15 @@ mkdir -p -m 700 "$XDG_RUNTIME_DIR"
 PROFILE=/tmp/kiosk-profile
 rm -rf "$PROFILE"
 mkdir -p "$PROFILE"
+# Wait for the app, or Firefox's first load shows an error page: after a reboot Docker starts both containers at once,
+# ignoring depends_on. At most 60 s, then open anyway; kiosk.cfg reloads an error page once the app serves.
+ORIGIN=$(printf '%s\n' "$KIOSK_URL" | sed -E 's|^([a-z]+://[^/?]+).*|\1|')
+i=0
+until curl -fso /dev/null --max-time 2 "$ORIGIN/favicon.ico"; do
+  i=$((i + 1))
+  [ "$i" -lt 60 ] || break
+  sleep 1
+done
 # The number pad types digits whatever Num Lock says: cage starts every keyboard with Num Lock off, including one that
 # drops off USB and comes back (main-office's did, 2026-10-29).
 export XKB_DEFAULT_OPTIONS=numpad:mac

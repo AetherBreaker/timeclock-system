@@ -44,15 +44,16 @@ services:
       - NET_ADMIN
     networks:
       - coolify
+    # Fresh heartbeats and the web server answering. The heartbeat files persist across containers, so alone they pass
+    # before a new container serves, and the kiosk (depends_on: service_healthy) would open Firefox too early.
     healthcheck:
       test:
-        - CMD
-        - /app/.venv/bin/devkit-container
-        - healthcheck
-        - --file
-        - /app/persisted_data/logs/heartbeat.txt
-        - --file
-        - /app/persisted_data/logs/wireguard-heartbeat.txt
+        - CMD-SHELL
+        - >-
+          /app/.venv/bin/devkit-container healthcheck
+          --file /app/persisted_data/logs/heartbeat.txt --file /app/persisted_data/logs/wireguard-heartbeat.txt
+          && /app/.venv/bin/python -c "import urllib.request;
+          urllib.request.urlopen('http://localhost:8080/favicon.ico', timeout=3)"
       start_period: 90s
       interval: 30s
       timeout: 5s

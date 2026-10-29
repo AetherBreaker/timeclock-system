@@ -956,15 +956,17 @@ published WireGuard port and `WG_LISTEN_PORT` arrive with LAN sharing (§13 step
   `restart: unless-stopped`, `hostname: timeclock-system-${INSTANCE_ID:?}` (the alert host name),
   `/data/timeclock_system_files` → `/app/persisted_data`, `/dev/bus/usb` mounted with
   `device_cgroup_rules: ["c 189:* rmw"]` (R14.7), `ports: ["51821:51821/udp"]` (the WireGuard listen port,
-  R28.2; the only published port), network `coolify`, and the template's `cap_add` and health check.
+  R28.2; the only published port), network `coolify`, and the template's `cap_add` and health check, which
+  also needs the web server to answer `/favicon.ico`: the heartbeat files persist across containers, so alone
+  they pass before a new container serves, and the kiosk would start too early (main-office, 2026-10-29).
 - **`kiosk`** (unlisted): `build: {context: ., dockerfile: docker/kiosk/Dockerfile}`, `privileged: true`,
   `/dev:/dev`, `KIOSK_URL=http://timeclock-system:8080`, `depends_on` the app with
   `condition: service_healthy` (R14.4), network `coolify`, `restart: unless-stopped`. The Dockerfile and
   `kiosk.sh` are the ones verified on the hardware (Appendix A); `policies.json` in
   `/usr/lib/firefox-esr/distribution/` turns off pinch zoom, swipe-back and the session-restore prompt
-  (R13.2), with Firefox autoconfig (`kiosk.cfg`) for any preference policies can't set. `kiosk.cfg` also reloads a
-  Firefox error page once the app serves (it asks for `/favicon.ico` every 30 s): after a reboot Docker starts the kiosk
-  beside the app, ignoring `depends_on`, so Firefox can load before the app serves. cage runs with `-s`, so Ctrl+Alt+F*n* reaches the host's text consoles for
+  (R13.2), with Firefox autoconfig (`kiosk.cfg`) for any preference policies can't set. After a reboot Docker starts
+  the kiosk beside the app, ignoring `depends_on`, so `kiosk.sh` waits up to 60 s for the app's `/favicon.ico`
+  before starting Firefox, and `kiosk.cfg` reloads a Firefox error page once the app serves (asking every 30 s). cage runs with `-s`, so Ctrl+Alt+F*n* reaches the host's text consoles for
   debugging at the clock. The kiosk builds from the deployed checkout, not `GIT_TAG`.
 - **`discovery`** (unlisted): the app's `build:` block, same `GIT_REPO` / `GIT_TAG` (so `docker-pin` pins it
   too, and the build cache makes the second build cheap), `entrypoint: ["/app/.venv/bin/devkit-container",
