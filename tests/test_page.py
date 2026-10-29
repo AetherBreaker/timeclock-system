@@ -18,7 +18,7 @@ from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group
 
 # First party imports
 from timeclock_system.clock import Clock
-from timeclock_system.scanner import FingerDown, Matched, ReaderMode, ReaderPaused
+from timeclock_system.scanner import FingerStatus, Matched, ReaderMode, ReaderPaused
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
 from timeclock_system.ui import page, text
@@ -30,10 +30,17 @@ if TYPE_CHECKING:
   from collections.abc import AsyncIterator
   from pathlib import Path
 
+  # Third party imports
+  from nicegui.testing import User
+
 
 NY = ZoneInfo("America/New_York")
 NOW = datetime(2026, 10, 27, 12, 2, tzinfo=UTC)
 ANN_PRINT, ADA_PRINT = uuid4(), uuid4()
+# The reader's finger signal as the scanner posts it.
+WAITING = FingerStatus(present=False, waiting=True)
+DOWN = FingerStatus(present=True, waiting=False)
+LIFTED = FingerStatus(present=False, waiting=False)
 
 
 class RecordingReader:
@@ -168,20 +175,43 @@ async def test_a_double_tap_anywhere_ends_the_confirmation(controller: KioskCont
     await user.should_see(text.IDLE_READY)
 
 
-async def test_the_reader_indicator_shows_on_every_screen_and_follows_the_scan(controller: KioskController, tmp_path: Path) -> None:
+def shown_text(user: User, marker: str) -> str:
+  [label] = user.find(marker=marker).elements
+  return cast("ui.label", label).text
+
+
+async def test_the_reader_line_shows_live_status_and_messages(controller: KioskController, tmp_path: Path) -> None:
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")
-    [icon] = user.find(marker="reader-indicator").elements
-    assert {"fixed", "bottom-2", "left-4"} <= set(icon.classes)
-    assert "reader-ready" in icon.classes
-    await controller.on_scanner_event(FingerDown())
+    await controller.on_scanner_event(WAITING)
+    await user.should_see(marker="reader-ready")
+    assert shown_text(user, "reader-status") == "Ready"
+    await controller.on_scanner_event(DOWN)
     await user.should_see(marker="reader-scanning")
+    assert shown_text(user, "reader-status") == "Keep your finger down"
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see(marker="reader-read")
+    assert shown_text(user, "reader-status") == "Lift your finger"
+    assert shown_text(user, "reader-message-success") == "Scan successful"
+    await controller.on_scanner_event(LIFTED)
+    await user.should_see(marker="reader-busy")
+    await user.should_not_see(marker="reader-status")
+    assert shown_text(user, "reader-message") == "Scan successful", "the message lingers past the live status"
+
+
+async def test_the_reader_line_shows_on_every_screen(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(WAITING)
     await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
     await user.should_see("Ann")
-    await user.should_see(marker="reader-ready")  # on the menu too
+    await user.should_see(marker="reader-ready")
+    await controller.cancel()
+    await controller.use_pin()
+    await user.should_see(text.ENTER_USERNAME)
     await controller.on_scanner_event(ReaderPaused(60.0))
     await user.should_see(marker="reader-paused")
-    await user.should_not_see("Scanning")
+    assert shown_text(user, "reader-status") == "Reader paused"
 
 
 async def test_the_reader_indicator_says_how_to_wake_a_sleeping_reader(tmp_path: Path) -> None:
@@ -228,7 +258,8 @@ async def test_typed_form_text_survives_a_finger_touch_and_errors(controller: Ki
         break
       await asyncio.sleep(0.02)
     phone = next(iter(user.find(marker="field-phone").elements))
-    await ctl.on_scanner_event(FingerDown())  # the indicator changes; the form must not be redrawn
+    # Review Focus 5: the reader line changes; the form must not be redrawn.
+    await ctl.on_scanner_event(DOWN)
     await user.should_see(marker="reader-scanning")
     assert next(iter(user.find(marker="field-phone").elements)) is phone
     user.find(kind=ui.button, content=text.NEXT).click()
@@ -349,13 +380,16 @@ async def test_gear_shows_on_idle_and_menu_only(controller: KioskController, tmp
     await user.should_not_see(marker="gear")
 
 
-async def test_version_sits_right_of_the_gear(controller: KioskController, tmp_path: Path) -> None:
+async def test_the_version_sits_below_the_reader_line(controller: KioskController, tmp_path: Path) -> None:
+  # In the very bottom-left corner, the reader line about 12 px above it; both 16 px from the left edge.
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")
-    [gear] = user.find(marker="gear").elements
     [label] = user.find(marker="version").elements
-    assert {"fixed", "top-2", "left-4", "z-20"} <= set(gear.classes)
-    assert {"fixed", "left-16"} <= set(label.classes)
+    [row] = user.find(marker="reader-indicator").elements
+    [icon] = user.find(marker="reader-icon").elements
+    assert {"fixed", "bottom-2", "left-4", "text-sm", "opacity-50"} <= set(label.classes)
+    assert {"fixed", "bottom-10", "left-4"} <= set(row.classes)
+    assert "text-5xl" in icon.classes
 
 
 @pytest.mark.parametrize(

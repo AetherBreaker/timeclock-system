@@ -36,7 +36,6 @@ from timeclock_system.ui.controller import (
   OverridePrompt,
   PinEntry,
   PinScan,
-  ReaderIndicator,
   Registering,
   RegisterPrompt,
   Rescan,
@@ -59,7 +58,8 @@ logger = logging.getLogger(__name__)
 
 LOGO_FILE = "SFT-Logo-June-2022-color.svg"
 _THEME_CSS = """
-:root { --sft-yellow: #F9E60D; --sft-red: #ED1A2C; --sft-black: #161514; --sft-white: #FFFFFF; --sft-green: #2E7D32; }
+:root { --sft-yellow: #F9E60D; --sft-red: #ED1A2C; --sft-black: #161514; --sft-white: #FFFFFF; --sft-green: #2E7D32;
+  --sft-blue: #298DF0; --sft-orange: #FB8C00; --sft-read-green: #43A047; }
 body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem; }
 .sft-button { min-height: 64px; min-width: 160px; font-size: 1.5rem; }
 .sft-punch { background: var(--sft-yellow) !important; color: var(--sft-black) !important; }
@@ -68,10 +68,15 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
   color: var(--sft-black) !important; }
 .sft-error { color: var(--sft-red); }
 .sft-title { font-size: 2.5rem; font-weight: 600; }
-.reader-ready { color: var(--sft-white); opacity: 0.35; }
-.reader-scanning { color: var(--sft-yellow); }
-.reader-paused { color: var(--sft-red); }
-.reader-asleep { color: var(--sft-white); opacity: 0.35; }
+.reader-ready { color: var(--sft-yellow); }
+.reader-scanning { color: var(--sft-blue); }
+.reader-read { color: var(--sft-read-green); }
+.reader-unrecognized { color: var(--sft-orange); }
+.reader-failed, .reader-paused { color: var(--sft-red); }
+.reader-busy, .reader-asleep { color: var(--sft-white); opacity: 0.35; }
+.reader-message-error { color: var(--sft-red); }
+.reader-message-success { color: var(--sft-read-green); }
+.reader-message-unrecognized { color: var(--sft-orange); }
 """
 # R13.2: no text selection, no long-press menu.
 _NO_SELECT_CSS = "body { user-select: none; -webkit-user-select: none; touch-action: manipulation; }"
@@ -167,9 +172,9 @@ class _KioskPage:
     ui.keyboard(on_key=self._on_key)
 
     clock_label = ui.label().classes("fixed top-2 right-4 text-xl")
-    # Small and dim: for whoever services the clock, telling which release it runs.
-    # Right of the gear, which the idle screen and punch menu draw in the corner.
-    ui.label(f"v{version('timeclock-system')}").classes("fixed top-4 left-16 text-sm opacity-50").mark("version")
+    # Small and dim: for whoever services the clock, telling which release it runs. The very bottom-left corner, below
+    # the reader line.
+    ui.label(f"v{version('timeclock-system')}").classes("fixed bottom-2 left-4 text-sm opacity-50").mark("version")
     self.indicator()
     self.screen()
     with ui.row().classes("fixed bottom-2 right-4 items-center gap-2 text-base"):
@@ -233,16 +238,16 @@ class _KioskPage:
 
   @ui.refreshable_method
   def indicator(self) -> None:
-    # The reader icon, on every screen, redrawn on its own so a change doesn't redraw the screen under it.
+    # The reader line, on every screen: icon, live status, lingering message. Redrawn on its own so a change doesn't
+    # redraw the screen under it. Color and dimness go on the icon and status, so a BUSY icon doesn't dim the message.
     indicator = self._controller.reader_indicator
-    with (
-      ui.row()
-      .classes(f"fixed bottom-2 left-4 z-20 items-center gap-2 text-base reader-{indicator}")
-      .mark("reader-indicator", f"reader-{indicator}")
-    ):
-      ui.icon("fingerprint").classes("text-4xl")
-      if indicator is ReaderIndicator.ASLEEP:
-        ui.label(text.READER_ASLEEP)
+    with ui.row().classes("fixed bottom-10 left-4 z-20 items-center gap-2").mark("reader-indicator", f"reader-{indicator}"):
+      ui.icon("fingerprint").classes(f"text-5xl reader-{indicator}").mark("reader-icon")
+      if status := text.READER_STATUS[indicator]:
+        ui.label(status).classes(f"text-xl reader-{indicator}").mark("reader-status")
+      if (message := self._controller.reader_message) is not None:
+        tone = f"reader-message-{message.tone}"
+        ui.label(message.text).classes(f"text-xl {tone}").mark("reader-message", tone)
 
   async def _guarded(self, call: Callable[[], object]) -> None:
     # Every button, tap and key runs through here, so their exceptions reach on_error; NiceGUI's own errors (a send to a
