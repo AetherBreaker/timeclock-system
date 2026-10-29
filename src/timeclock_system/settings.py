@@ -47,6 +47,11 @@ class ClockSettings(BaseSettings):
     return self.persisted_dir_loc / "crash_alerts"
 
   @property
+  def status_dir(self) -> Path:
+    """Where the app reports its startup steps and finds the update banner (the host's standby screen)."""
+    return self.persisted_dir_loc / "status"
+
+  @property
   def heartbeat_path(self) -> Path:
     """The file the supervisor reads to judge liveness."""
     return self.log_loc_folder / "heartbeat.txt"
