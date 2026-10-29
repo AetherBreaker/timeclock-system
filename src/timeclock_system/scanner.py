@@ -54,8 +54,14 @@ class Retry:
 
 
 @dataclass(frozen=True)
-class FingerDown:
-  """A finger touched the reader; the screen's reader indicator lights at once."""
+class FingerStatus:
+  """libfprint's finger-status flags: `present` (FP_FINGER_STATUS_PRESENT), `waiting` (FP_FINGER_STATUS_NEEDED)."""
+
+  present: bool
+  waiting: bool
+
+
+_NO_FINGER = FingerStatus(present=False, waiting=False)
 
 
 @dataclass(frozen=True)
@@ -67,10 +73,11 @@ class ReaderPaused:
 
 @dataclass(frozen=True)
 class EnrollStage:
-  """An enrollment stage completed."""
+  """An enrollment press: `done` of `total` stages counted so far."""
 
   done: int
   total: int
+  ok: bool = True  # False: libfprint reported a retry; the press wasn't counted
 
 
 @dataclass(frozen=True)
@@ -87,7 +94,7 @@ class EnrollFailed:
   reason: Literal["timeout", "error"]
 
 
-type ScannerEvent = Matched | NoMatch | Retry | FingerDown | ReaderPaused | EnrollStage | Enrolled | EnrollFailed
+type ScannerEvent = Matched | NoMatch | Retry | FingerStatus | ReaderPaused | EnrollStage | Enrolled | EnrollFailed
 
 
 class ReaderMode(StrEnum):
@@ -139,12 +146,27 @@ class Reader(Protocol):
   def close(self) -> None:
     """Close the device, letting it autosuspend (R40.1)."""
 
-  def identify(self, gallery: Sequence[GalleryPrint], cancel: CancelToken, on_finger: Callable[[], None]) -> UUID | None:
-    """Capture one print and match it against `gallery`; return the matched print id or None."""
+  def identify(
+    self,
+    gallery: Sequence[GalleryPrint],
+    cancel: CancelToken,
+    on_status: Callable[[FingerStatus], None],
+    on_result: Callable[[UUID | None], None],
+  ) -> UUID | None:
+    """Capture one print and match it against `gallery`; return the matched print id or None.
+
+    `on_status` gets every finger-status change. `on_result` gets the match the moment it's made, while the finger may
+    still be down; the call itself returns only after the lift.
+    """
     ...
 
-  def enroll(self, cancel: CancelToken, on_stage: Callable[[int, int], None]) -> bytes:
-    """Run every enrollment stage; return the serialized template."""
+  def enroll(
+    self, cancel: CancelToken, on_stage: Callable[[int, int, bool], None], on_status: Callable[[FingerStatus], None]
+  ) -> bytes:
+    """Run every enrollment stage; return the serialized template.
+
+    `on_stage(done, total, ok)` gets every press, `ok` False for one the reader couldn't use (not counted).
+    """
     ...
 
 
@@ -181,7 +203,8 @@ class Scanner:
     self._timings = timings
     self._monotonic = monotonic
     self._thread = threading.Thread(target=self._run, name="scanner", daemon=True)
-    self._opened = False  # scanner thread only, like _backoff
+    self._opened = False  # scanner thread only, like _backoff and _last_status
+    self._last_status: FingerStatus | None = None  # the current call's last posted status; None once it ends
     self._backoff = timings.backoff_start  # doubles per ReaderFailure, reset by a completed capture
     self._failing_since: float | None = None  # start of the current ReaderFailure streak, reset with _backoff
     self._lock = threading.Lock()
@@ -311,25 +334,34 @@ class Scanner:
     self._wake.wait(self._backoff)
     self._backoff = min(self._backoff * 2, self._timings.backoff_max)
 
+  def _on_status(self, status: FingerStatus) -> None:
+    # Scanner thread only: libfprint calls back from inside the blocking call.
+    self._last_status = status
+    self._post(status)
+
   def _ready_once(self) -> None:
     # Split out of _loop only for C901.
-    result = self._identify_once()
-    self._post(result)
+    result, posted = self._identify_once()
+    if not posted:
+      self._post(result)
     if isinstance(result, Retry):
       self._wake.wait(self._timings.retry_pause)
       return
     self._backoff = self._timings.backoff_start
     self._failing_since = None
-    # §6.2: no re-capture until the finger lifts or 2 s pass. libfprint resets the finger status to none as a capture
-    # completes, so the lift can't be seen and the bound is a plain pause; it keeps a bounce or a resting finger from
-    # being read as the next press.
+    # §6.2: no re-capture straight away. identify returns after the lift, but a call cancelled while the finger rests
+    # (the re-arm, a gallery change) returns before it; the pause keeps a bounce or that resting finger from being read
+    # as the next press.
     self._wake.wait(self._timings.finger_off_pause)
 
-  def _identify_once(self) -> Matched | NoMatch | Retry:
+  def _identify_once(self) -> tuple[Matched | NoMatch | Retry, bool]:
     """The one matcher boundary (R36.3): the only `reader.identify` call, which version 2 replaces.
 
+    Returns the result and whether it was already posted: libfprint reports a match while the finger is still down,
+    and it's posted then, so the screen acts before the lift.
+
     Raises:
-      ScanCancelled: the mode changed before the call, or its token was cancelled.
+      ScanCancelled: the mode changed before the call, or its token was cancelled before a result.
     """
     token = self._reader.new_cancel()
     with self._lock:
@@ -337,20 +369,38 @@ class Scanner:
         raise ScanCancelled
       self._token = token
       gallery = self._gallery
+
+    def result_of(print_id: UUID | None) -> Matched | NoMatch:
+      match = next((p for p in gallery if p.print_id == print_id), None)
+      return NoMatch() if match is None else Matched(match.print_id, match.employee_id)
+
+    early: list[Matched | NoMatch] = []  # a list, not a nonlocal: pyright doesn't see a closure assign a local
+
+    def on_result(print_id: UUID | None) -> None:
+      early.append(result_of(print_id))
+      self._post(early[-1])
+
     # The periodic re-arm bounds every identify, so a call that outlives it is hung (busy_seconds, §6.2).
     rearm = threading.Timer(self._timings.rearm_every, token.cancel)
     rearm.daemon = True
     rearm.start()
     try:
-      print_id = self._blocking(self._reader.identify, gallery, token, lambda: self._post(FingerDown()))
+      print_id = self._blocking(self._reader.identify, gallery, token, self._on_status, on_result)
     except RetryScan as e:
-      return Retry(str(e))
+      return Retry(str(e)), False
+    except ScanCancelled:
+      # A cancel after the result (a mode change, closing time, the re-arm) only stopped the wait for the lift.
+      if not early:
+        raise
+      return early[-1], True
     finally:
       rearm.cancel()
       with self._lock:
         self._token = None
-    match = next((p for p in gallery if p.print_id == print_id), None)
-    return NoMatch() if match is None else Matched(match.print_id, match.employee_id)
+      if self._last_status not in {None, _NO_FINGER}:
+        self._post(_NO_FINGER)  # a cancelled call may never report the lift
+      self._last_status = None
+    return (early[-1], True) if early else (result_of(print_id), False)
 
   def _enroll_once(self, mode_changes: int) -> None:
     token = self._reader.new_cancel()
@@ -366,25 +416,28 @@ class Scanner:
 
     idle = threading.Timer(self._timings.enroll_idle_timeout, expire)
 
-    def on_stage(done: int, total: int) -> None:
+    def on_stage(done: int, total: int, ok: bool) -> None:
       nonlocal idle
-      idle.cancel()
+      idle.cancel()  # any press, counted or not, shows someone is there
       idle = threading.Timer(self._timings.enroll_idle_timeout, expire)
       idle.daemon = True
       idle.start()
-      self._post(EnrollStage(done, total))
+      self._post(EnrollStage(done, total, ok))
 
     idle.daemon = True
     idle.start()
     outcome: ScannerEvent | None
     try:
-      outcome = Enrolled(self._blocking(self._reader.enroll, token, on_stage))
+      outcome = Enrolled(self._blocking(self._reader.enroll, token, on_stage, self._on_status))
     except ScanCancelled:
       outcome = EnrollFailed("timeout") if timed_out.is_set() else None
     except RetryScan, ReaderTooHot, ReaderFailure:
       outcome = EnrollFailed("error")
     finally:
       idle.cancel()
+      if self._last_status not in {None, _NO_FINGER}:
+        self._post(_NO_FINGER)  # libfprint completes before the last press lifts and doesn't report that lift
+      self._last_status = None
     with self._lock:
       self._token = None
       # A set_mode or stop during the call supersedes it: its cancel is the user's Cancel, not a failure (R16).
