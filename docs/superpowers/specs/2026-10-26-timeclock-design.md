@@ -620,16 +620,49 @@ a valid one either way); test strategy.
 
 ### 6.7 LAN sharing (R28)
 
-On each punch and each fingerprint registration, the clock sends the record to every other clock, best
-effort, over WireGuard directly (§11.3). Transport (spec call): a small asyncio TCP server bound to the
-clock's tunnel address on port 8791, one JSON message per connection (a pydantic `LanRecord`: a punch or a
-fingerprint, with the sender's `INSTANCE_ID`). The sender opens a connection to each peer's tunnel address
+When the clock records a punch, a print, a print removal or an employee, it sends the record to every other
+clock, best effort, over WireGuard directly (§11.3). Transport (spec call): a small asyncio TCP server bound to the
+clock's tunnel address on port 8791, one JSON message per connection (a pydantic `LanRecord`, extending
+`timeclock_schema.wire`'s `LanPunch` and `LanFingerprint`, with the sender's `INSTANCE_ID`; the message
+shapes are the builder's, owner 2026-10-28). The sender opens a connection to each peer's tunnel address
 with a 2 s timeout and doesn't retry (no catch-up between clocks). A receiver inserts into SQLite ignoring
 duplicate UUIDs, marks it synced-elsewhere (only the recording clock syncs to PostgreSQL), and updates
 state and gallery. WireGuard authenticates the sender; the server also drops connections from addresses
-outside the clocks' tunnel addresses. Fingerprint bypasses aren't shared; they change no state.
-New employees aren't shared before LAN sharing exists; sharing them comes with it (§13 step 5) and needs
-its own design (owner, 2026-10-27; `docs/todo.md`).
+outside the clocks' tunnel addresses. A clock mid-deploy ignores a message kind it doesn't know.
+
+What's shared (owner, 2026-10-28):
+
+- **Punches.**
+- **New prints**, from every registration path; a re-register's new print names the print it replaces.
+- **Print removals.**
+- **Employees added at a clock** (§6.4), PIN hash included, never a PIN.
+- Not shared: fingerprint bypasses and `fingerprint_changes` rows. They change nothing another clock shows.
+
+How a receiver applies them (owner, 2026-10-28):
+
+- **A removal or replacement** drops the old print at once and leaves a note that it was removed elsewhere,
+  so a database refresh can't bring the print back before the recording clock pushes the change. The note
+  clears once the database no longer has the print. The receiver never pushes the removal itself.
+- **A shared employee** works on the receiver as on the clock that added them: usable at once, kept through
+  database refreshes, their records held until the database accepts them, and unable to approve overrides
+  until then (§6.4, §6.6). The receiver recognises acceptance as the adding clock recognises a lost
+  acknowledgement: the database holds that number with the same `pin_hash`. If it holds a different person
+  under the number, the receiver keeps holding, so its records for the shared employee are never filed
+  under that person.
+
+Known issues, accepted (owner, 2026-10-28), both from best effort with no catch-up:
+
+- A clock that missed a shared employee still takes their punches and prints, and shows them once the
+  database has the employee.
+- If clock A removes or replaces a print that clock B recorded but hasn't pushed, and B misses A's message,
+  B's late push brings a removed print back, or is refused for a replaced one (the finger is taken), leaving
+  the old print matching on B only. It takes a database outage and B down at the same moment.
+
+**Networks** (owner, 2026-10-28): the clocks find each other by broadcast on their local network (§11.3), so
+only clocks on one network share. The first production clocks sit behind two gateways in the same building,
+to be bridged or unified later; until then they don't share, and each works alone through a hub outage.
+Having the hub introduce clocks on different networks to each other (WireGuard NAT traversal) is deferred
+(`docs/todo.md`).
 
 The other clocks and their tunnel addresses come from devkit-container's cached peer table
 (`persisted_data/wireguard/peers.toml`): every row sharing this clock's `lan` value, the clock finding its
@@ -1262,7 +1295,9 @@ that matches one already on file) in `TODO.md`.
 
 ## 15. Open questions
 
-None.
+- Can the production clocks share one network before the gateways are bridged: the second clock on the first
+  gateway's network (cable, switch or wifi), or a private cable between the clocks' second network ports? Until
+  one of these, LAN sharing has nothing to share in production (§6.7).
 
 ## Appendix A. Files verified on the hardware (2026-10-26)
 
