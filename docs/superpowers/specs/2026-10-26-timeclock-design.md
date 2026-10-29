@@ -387,6 +387,11 @@ are tested with a test-only kind.
   future host image drops that package, autosuspend has to be enabled another way.
 - The systemd reverse tunnel to coolify-tunnel and its key are part of the one-time install (R29,
   `docs/dev-device-setup.md`).
+- The standby screen ([its design](2026-10-29-standby-screen-design.md), repo `timeclock-standby`, submodule
+  `standby/`), installed by both images: a frozen Rust screen watcher that shows terminal 1 (the kiosk) when the
+  clock is live and terminal 7 (the standby page, cage and Firefox on the host) otherwise, deciding only from what it
+  observes; a Python status app with live starting and updating steps and the update banner; a Plymouth splash, a
+  hidden GRUB menu and a quiet console, so users never see Linux text (owner, 2026-10-29).
 
 ## 6. Clock app (timeclock-system)
 
@@ -964,10 +969,13 @@ published WireGuard port and `WG_LISTEN_PORT` arrive with LAN sharing (§13 step
   `condition: service_healthy` (R14.4), network `coolify`, `restart: unless-stopped`. The Dockerfile and
   `kiosk.sh` are the ones verified on the hardware (Appendix A); `policies.json` in
   `/usr/lib/firefox-esr/distribution/` turns off pinch zoom, swipe-back and the session-restore prompt
-  (R13.2), with Firefox autoconfig (`kiosk.cfg`) for any preference policies can't set. After a reboot Docker starts
-  the kiosk beside the app, ignoring `depends_on`, so `kiosk.sh` waits up to 60 s for the app's `/favicon.ico`
-  before starting Firefox, and `kiosk.cfg` reloads a Firefox error page once the app serves (asking every 30 s). cage runs with `-s`, so Ctrl+Alt+F*n* reaches the host's text consoles for
-  debugging at the clock. The kiosk builds from the deployed checkout, not `GIT_TAG`.
+  (R13.2), with Firefox autoconfig (`kiosk.cfg`) for any preference policies can't set. The kiosk checks in on
+  terminal 1 to start cage and hands the screen back (`handback.sh`, which cage starts once its display is up), then
+  waits up to 60 s for the app's `/favicon.ico` before starting Firefox, which loads behind the standby screen until
+  the host's watcher shows it (standby-screen spec §3.3); `kiosk.cfg` also reloads a Firefox error page once the app
+  serves (asking every 30 s). `kiosk.sh` closes cage on SIGTERM, so a stop takes about a second and hands terminal 1
+  back. cage runs with `-s`, so Ctrl+Alt+F*n* reaches the host's text consoles for debugging at the clock. The kiosk
+  builds from the deployed checkout, not `GIT_TAG`.
 - **`discovery`** (unlisted): the app's `build:` block, same `GIT_REPO` / `GIT_TAG` (so `docker-pin` pins it
   too, and the build cache makes the second build cheap), `entrypoint: ["/app/.venv/bin/devkit-container",
   "discover"]`, `network_mode: host`, the same persisted bind mount, `WG_LISTEN_PORT`,

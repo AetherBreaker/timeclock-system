@@ -18,6 +18,10 @@ The installer image does most of the setup. Its source is [`image/dev-device/`](
 - Security updates installed automatically (`unattended-upgrades`, Debian-Security only), rebooting at 03:00 when one needs it.
 - Hardware-testing tools: `usbutils`, `libinput-tools`, `fprintd`, and libfprint's Python bindings (`gir1.2-fprint-2.0`, `python3-gi`).
 - `coolify-tunnel-setup`, which sets up the tunnel for Coolify (step 5).
+- The standby screen, screen watcher and boot splash ([timeclock-standby](https://github.com/AetherBreaker/timeclock-standby),
+  [design](superpowers/specs/2026-10-29-standby-screen-design.md)): a splash with the logo from power-on, no boot
+  menu, no login prompt on the kiosk's terminal, and a standby page with live steps on terminal 7 whenever the clock
+  can't show (booting, a deploy, a kiosk restart). See [Servicing](#servicing) for the consoles.
 
 ## 1. Write the USB stick
 
@@ -116,6 +120,22 @@ Coolify renames the container (`coolify-tunnel-<id>`) but keeps `coolify-tunnel`
 - To run Docker as `tcadmin` once Coolify has installed it: `sudo usermod -aG docker tcadmin`, then log in again.
 - Before the time clock app is deployed here, make sure nothing is using the reader: fprintd only claims it while a command like `fprintd-verify` is running.
 
+## Servicing
+
+- **A console at the clock:** Ctrl+Alt+F2 (to F6) gives a login prompt. The screen watcher leaves it alone until
+  2 minutes pass with no keyboard or touch input, then puts back the clock or the standby page; Ctrl+Alt+F1 returns
+  to the clock at once. A console login logs out by itself after 5 minutes idle. Ctrl+Alt+F7 shows the standby page,
+  for watching a deploy's steps.
+- **The boot menu:** hold Esc while the clock boots.
+- **The standby page from the workstation:** `ssh -L 8091:127.0.0.1:8091 timeclock-system-<name>`, then
+  `http://localhost:8091/`.
+- **Settings:** `/etc/timeclock/watcher.conf` (the screen watcher; `flip = deploy-start` shows the standby as soon as
+  a deploy starts, not when the old app stops) and `/etc/timeclock/standby.conf` (the status app); every key and its
+  default is in each file. Restart `timeclock-watcher` or `timeclock-status` after a change.
+- **Updating the standby on a clock:** replace a file under `/opt/timeclock-standby/` over SSH and restart its unit
+  (`timeclock-status` for `status.py` and the page, `timeclock-standby` for the display), or unpack a newer
+  timeclock-standby release and run its `install.sh` as root (safe to run again; it keeps the settings).
+
 ## Deploying the clock
 
 Once per clock, after the install. timeclock-dev's values are in parentheses.
@@ -146,5 +166,5 @@ Once per clock, after the install. timeclock-dev's values are in parentheses.
 The image is built from [`image/dev-device/`](../image/dev-device/) in a `debian:trixie` container (Docker Desktop):
 
 1. `fetch.sh` downloads the current Debian 13 netinst, and verifies it against Debian's signed checksums.
-2. `build.sh` adds the answer file (`preseed.cfg.in`) and the setup files (`files/`), and writes the new ISO to `/out`: mount the gitignored `image/dev-device/out/` there. Set `TC_PASSWORD` (tcadmin's password), and `WIFI_SSID` and `WIFI_PASSWORD` (the wifi network the device joins; kept out of git, since the repository is public; unset, the image joins none).
+2. `build.sh` adds the answer file (`preseed.cfg.in`) and the setup files (`files/`), and writes the new ISO to `/out`: mount the gitignored `image/dev-device/out/` there. Set `TC_PASSWORD` (tcadmin's password), and `WIFI_SSID` and `WIFI_PASSWORD` (the wifi network the device joins; kept out of git, since the repository is public; unset, the image joins none). It bakes in timeclock-standby's latest release (`fetch-standby.sh`); the installer downloads the latest again when it can and falls back to that copy.
 3. `test.sh` installs it in a QEMU VM and checks the result over SSH.

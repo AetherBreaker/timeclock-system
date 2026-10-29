@@ -22,6 +22,8 @@ Everything the test image does except the test tools (fprintd, libinput-tools), 
   noise drowns 2.4 GHz wifi.
 - Coolify's key in root's `authorized_keys`, and the tunnel's host key already trusted, so `coolify-tunnel-setup` doesn't ask.
 - `/data/timeclock_system_files/` with the logo in `branding/` and the remote-access client in `remote/`.
+- The standby screen, screen watcher and boot splash, as on the test device (dev-device-setup.md, "What the image
+  sets up" and "Servicing"): the splash shows the logo, and nobody using the clock sees Linux text.
 - `tcadmin` / `timeclock` at the console, SSH by the workstation's key (`~/.ssh/timeclock_dev`), passwordless sudo.
   The workstation's `~/.ssh/config` has one entry for every clock, so `ssh timeclock-system-<name>` reaches any of them:
   `Host timeclock-system-*` with `HostName %h.local`, `User tcadmin`, `IdentityFile ~/.ssh/timeclock_dev` and
@@ -83,7 +85,8 @@ In a `debian:trixie` container (Docker Desktop), with `image/` at `/src` (read-o
 `sweetfiresupportdesk.deb`, kept out of git), and the workstation's `timeclock_dev.pub` at `/keys/authorized_keys`:
 `dev-device/fetch.sh`, then `production/build.sh`, with `TC_PASSWORD` (tcadmin's password) and `WIFI_SSID` and
 `WIFI_PASSWORD` (the wifi network every clock joins; kept out of git, since the repository is public; unset, the image
-joins none) set in the container. `production/test.sh` installs the result in a QEMU VM on one blank
+joins none) set in the container. The build bakes in timeclock-standby's latest release, which the installer replaces
+with the latest at install time when it can. `production/test.sh` installs the result in a QEMU VM on one blank
 drive (with the private key at `/keys/id`) and checks it over SSH; `production/test-raid.sh` (container run with
 `--privileged`, and `python3-virt-firmware` for its firmware boot entries) does the two-drive RAID1 install under UEFI
 on drives holding old systems with stale boot entries, then boots all drives and the second alone. Both fail if the installer asks anything beyond what the kernel command line answers (the name and
