@@ -4,3 +4,6 @@
 [submodule "schema"]
 	path = schema
 	url = https://github.com/AetherBreaker/timeclock-schema.git
+[submodule "standby"]
+	path = standby
+	url = https://github.com/AetherBreaker/timeclock-standby
