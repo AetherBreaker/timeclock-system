@@ -112,9 +112,9 @@
 
   executionEnvironments = [{ root = "src", extraPaths = ["src"] }]
 
-  # backend/ and schema/ are submodules with their own environments and checks. Setting exclude replaces
+  # backend/, schema/ and standby/ are submodules with their own environments and checks. Setting exclude replaces
   # pyright's defaults, so they're restated.
-  exclude = ["backend", "schema", "**/node_modules", "**/__pycache__", "**/.*"]
+  exclude = ["backend", "schema", "standby", "**/node_modules", "**/__pycache__", "**/.*"]
 
 [tool.pytest.ini_options]
   addopts      = [

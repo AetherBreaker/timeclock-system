@@ -51,6 +51,7 @@ def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str,
     conninfo=lambda: "host=127.0.0.1",
     crash_alerts_dir=tmp_path / "crash",
     heartbeat_path=tmp_path / "heartbeat.txt",
+    status_dir=tmp_path / "status",
     branding_dir=tmp_path,
   )
   captured: dict[str, Any] = {"shutdowns": [], "startup": [], "run": {}}
