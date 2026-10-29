@@ -73,9 +73,10 @@ d-i apt-setup/non-free-firmware boolean true
 d-i apt-setup/contrib boolean false
 
 tasksel tasksel/first multiselect standard, ssh-server
-# network-manager and the firmware: wifi, built in or a USB dongle, set up afterwards with nmcli. With it installed, the
-# installer hands the wired port to NetworkManager too (DHCP, as before).
-d-i pkgsel/include string sudo avahi-daemon usbutils curl ca-certificates systemd-timesyncd rsync efibootmgr dosfstools unattended-upgrades network-manager wpasupplicant firmware-realtek firmware-iwlwifi firmware-mediatek firmware-atheros
+# network-manager, its connectivity check and the firmware: wifi, built in or a USB dongle, joins the network baked in at
+# build (late.sh) or one set up afterwards with nmcli. With it installed, the installer hands the wired port to
+# NetworkManager too (DHCP, as before).
+d-i pkgsel/include string sudo avahi-daemon usbutils curl ca-certificates systemd-timesyncd rsync efibootmgr dosfstools unattended-upgrades network-manager network-manager-config-connectivity-debian wpasupplicant firmware-realtek firmware-iwlwifi firmware-mediatek firmware-atheros
 d-i pkgsel/update-policy select unattended-upgrades
 d-i pkgsel/upgrade select full-upgrade
 popularity-contest popularity-contest/participate boolean false

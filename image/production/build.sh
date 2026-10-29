@@ -3,7 +3,7 @@
 # dev image's setup files and RAID recipe; production/files (its own late.sh) goes over them.
 # Mounts: /src (image/, read-only), /work (downloads and scratch), /out (the finished ISO), /private (the logo and the
 # remote-access client, kept out of git), /keys/authorized_keys (the workstation's public key, for tcadmin).
-# TC_PASSWORD sets tcadmin's password.
+# TC_PASSWORD sets tcadmin's password; WIFI_SSID and WIFI_PASSWORD the wifi network it joins (dev-device/wifi-profile.sh).
 set -eu
 DEV=/src/dev-device
 SRC=/src/production
@@ -22,6 +22,7 @@ cp "$SRC"/files/* build/timeclock/
 cp /keys/authorized_keys build/timeclock/authorized_keys
 sed -i 's/\r$//' build/timeclock/*
 cp /private/SFT-Logo-June-2022-color.svg /private/sweetfiresupportdesk.deb build/timeclock/
+sed 's/\r$//' "$DEV/wifi-profile.sh" | sh -s build/timeclock
 # Docker's repository key, checked against the fingerprint Docker publishes.
 wget -q -O build/timeclock/docker.asc https://download.docker.com/linux/debian/gpg
 gpg --show-keys --with-colons build/timeclock/docker.asc | grep -qx 'fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:'
