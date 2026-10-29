@@ -1129,3 +1129,144 @@ async def test_add_employee_step_asks_the_finger(kiosk: Kiosk) -> None:
   assert isinstance(pick, FingerPick) and pick.action is None and pick.added is not None
   await kiosk.ctl.cancel()
   assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)
+
+
+# -- a finger on every PIN pad: it does what it would have done on the screen before Use PIN ----------------------------
+
+
+async def test_a_finger_on_the_login_pad_opens_the_menu(kiosk: Kiosk) -> None:
+  await kiosk.ctl.use_pin()
+  await kiosk.ctl.digit("1")  # typed digits are discarded
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu) and screen.info.employee_id == ANN and screen.auth is None
+
+
+async def reconfirm_pad(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  await kiosk.ctl.admin()
+  await kiosk.ctl.use_pin()
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, PinEntry) and screen.purpose == PinRecheck(ADA, None)
+
+
+async def test_an_admins_finger_on_the_reconfirm_pad_opens_the_admin_menu(kiosk: Kiosk) -> None:
+  await reconfirm_pad(kiosk)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  assert kiosk.ctl.screen == AdminMenu(ADA, touched_at=kiosk.t.mono)
+  assert kiosk.store.unsynced_bypasses() == []  # a fingerprint bypasses nothing
+
+
+async def test_someone_elses_finger_on_the_reconfirm_pad_opens_their_menu(kiosk: Kiosk) -> None:
+  await reconfirm_pad(kiosk)
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu) and screen.info.employee_id == ANN
+
+
+async def rescan_pad(kiosk: Kiosk) -> None:
+  await kiosk.pin_login(ADA)
+  kiosk.t.advance(31)
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  await kiosk.ctl.use_pin()
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, PinEntry) and screen.purpose == PinRecheck(ADA, PunchKind.CLOCK_IN)
+
+
+async def test_a_finger_on_the_rescan_pad_records_the_punch(kiosk: Kiosk) -> None:
+  await rescan_pad(kiosk)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  assert isinstance(kiosk.ctl.screen, Confirmation)
+  [(punch, bypass)] = kiosk.store.unsynced_punches()
+  assert (punch.employee_id, punch.kind, bypass) == (ADA, PunchKind.CLOCK_IN, None)  # a finger, not a PIN
+
+
+async def test_someone_elses_finger_on_the_rescan_pad_opens_their_menu(kiosk: Kiosk) -> None:
+  await rescan_pad(kiosk)
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu) and screen.info.employee_id == ANN
+  assert kiosk.store.punches() == []
+
+
+async def override_pad(kiosk: Kiosk) -> OverrideRequest:
+  await kiosk.pin_login(BOB)
+  await kiosk.ctl.request_override()
+  await kiosk.ctl.use_pin()
+  request = OverrideRequest(BOB, BypassReason.OVERRIDE_NO_FINGERPRINT, None)
+  assert kiosk.ctl.screen == PinEntry("username", "", SecretStr(""), request, touched_at=kiosk.t.mono)
+  return request
+
+
+async def test_a_managers_finger_on_the_override_pad_grants_it(kiosk: Kiosk) -> None:
+  await override_pad(kiosk)
+  await kiosk.ctl.on_scanner_event(matched(MIA))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu) and screen.info.employee_id == BOB
+  assert screen.auth == OverrideGrant(MIA, BypassReason.OVERRIDE_NO_FINGERPRINT, pin_only=False)
+
+
+async def test_a_non_managers_finger_on_the_override_pad_returns_to_the_prompt(kiosk: Kiosk) -> None:
+  request = await override_pad(kiosk)
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  assert kiosk.ctl.screen == OverridePrompt(request, touched_at=kiosk.t.mono, message=text.NOT_A_MANAGER)
+
+
+async def approval_pad(kiosk: Kiosk) -> FingerChange:
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("add")
+  await kiosk.ctl.pick_finger(Finger.RIGHT_INDEX)
+  await kiosk.ctl.use_pin()
+  change = FingerChange(ANN, "Ann Lee", "add", Finger.RIGHT_INDEX, None)
+  assert kiosk.ctl.screen == PinEntry("username", "", SecretStr(""), change, touched_at=kiosk.t.mono)
+  return change
+
+
+async def test_an_admins_finger_on_the_approval_pad_approves(kiosk: Kiosk) -> None:
+  change = await approval_pad(kiosk)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  assert kiosk.ctl.screen == Registering(
+    ANN, 0, 5, touched_at=kiosk.t.mono, finger=Finger.RIGHT_INDEX, change=change, approval=Approval(ADA, pin_only=False)
+  )
+
+
+async def test_a_non_admins_finger_on_the_approval_pad_returns_to_the_prompt(kiosk: Kiosk) -> None:
+  change = await approval_pad(kiosk)
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  assert kiosk.ctl.screen == ApprovalPrompt(change, touched_at=kiosk.t.mono, message=text.NOT_AN_ADMIN)
+
+
+async def test_a_finger_on_the_fingerprints_login_pad_opens_their_options(kiosk: Kiosk) -> None:
+  await kiosk.ctl.gear()
+  await kiosk.ctl.open_fingerprints()
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  assert kiosk.ctl.screen == FingerprintActions(ANN, "Ann Lee", (Finger.LEFT_INDEX,), touched_at=kiosk.t.mono)
+
+
+async def test_an_unknown_employees_finger_on_the_fingerprints_login_pad_changes_nothing(kiosk: Kiosk) -> None:
+  await kiosk.ctl.gear()
+  await kiosk.ctl.open_fingerprints()
+  pad = kiosk.ctl.screen
+  await kiosk.ctl.on_scanner_event(Matched(print_id=uuid4(), employee_id=99))
+  assert kiosk.ctl.screen == pad
+
+
+async def test_a_finger_on_the_new_employees_pin_pad_is_ignored(kiosk: Kiosk) -> None:
+  # Not a login: the new employee's PIN is being chosen.
+  await fill_details(kiosk)
+  await kiosk.ctl.digit("2")
+  pad = kiosk.ctl.screen
+  assert isinstance(pad, NewPin)
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  assert kiosk.ctl.screen == pad
+
+
+async def test_an_unrecognized_finger_leaves_the_pad_alone(kiosk: Kiosk) -> None:
+  # Review Focus 4.
+  await kiosk.ctl.use_pin()
+  await kiosk.ctl.digit("1")
+  await kiosk.ctl.digit("0")
+  pad = kiosk.ctl.screen
+  await kiosk.ctl.on_scanner_event(NoMatch())
+  assert kiosk.ctl.screen == pad
+  assert isinstance(pad, PinEntry) and pad.username == "10"
