@@ -614,9 +614,32 @@ class KioskController:
           # In the add-employee flow the employee is already saved: back to the optional step, to retry or skip.
           self._screen = Idle(message, until=now + MESSAGE_SECS) if s.added is None else NewFingerprint(s.added, now, message)
 
+  async def _on_pad_match(self, pad: PinEntry, employee_id: int) -> None:
+    """A finger on a PIN pad does what it would have done on the screen before Use PIN; typed digits are discarded.
+
+    The new employee's pad (NewPin) isn't a login, so a finger there stays ignored. Split out of `_on_match` for PLR0912.
+    """
+    now, p = self._mono(), pad.purpose
+    match p:
+      case None:
+        before: Screen = Idle()
+      case PinRecheck(employee_id=owner, kind=kind):
+        before = AdminReconfirm(owner, now) if kind is None else Rescan(owner, kind, None, now, pin_ok=True)
+      case OverrideRequest():
+        before = OverridePrompt(p, now)
+      case FingerChange():
+        before = ApprovalPrompt(p, now)
+      case FingerprintLogin():
+        if (employee := self._clock.employee(employee_id)) is not None:
+          self._screen = await self._fingerprint_actions(employee.id, employee.display_name)
+        return
+    await self._on_match(before, employee_id)
+
   async def _on_match(self, s: Screen, employee_id: int) -> None:
     # Split out of on_scanner_event for C901.
-    if isinstance(s, Idle | Menu | Confirmation):
+    if isinstance(s, PinEntry):
+      await self._on_pad_match(s, employee_id)
+    elif isinstance(s, Idle | Menu | Confirmation):
       self._screen = await self._open_menu(employee_id)  # a new scan switches the menu (R45.4)
     elif isinstance(s, AdminReconfirm):
       # The admin's own finger opens the admin menu; anyone else's opens their punch menu, as a rescan does.
