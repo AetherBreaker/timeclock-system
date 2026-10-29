@@ -16,4 +16,5 @@ mkdir -p "$PROFILE"
 # The number pad types digits whatever Num Lock says: cage starts every keyboard with Num Lock off, including one that
 # drops off USB and comes back (main-office's did, 2026-10-29).
 export XKB_DEFAULT_OPTIONS=numpad:mac
-exec seatd-launch -- cage -- firefox-esr --profile "$PROFILE" --kiosk "${KIOSK_URL}"
+# -s: Ctrl+Alt+F<n> switches to the host's text consoles, for a shell at the clock while debugging.
+exec seatd-launch -- cage -s -- firefox-esr --profile "$PROFILE" --kiosk "${KIOSK_URL}"
