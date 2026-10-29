@@ -2,7 +2,8 @@
 
 Concurrency: `_lock` guards the fields `set_mode`/`set_gallery`/`stop`/`busy_seconds` share with the thread. It is never
 held across a blocking reader call or a `post`/`on_fatal` call. Every pause waits on `_wake`, which a mode change or
-`stop` sets, so pauses end early.
+`stop` sets, so pauses end early; the one exception, the pause after an early result, waits on `_stopped` (see
+`_ready_once`).
 """
 
 # Standard library imports
@@ -209,6 +210,7 @@ class Scanner:
     self._failing_since: float | None = None  # start of the current ReaderFailure streak, reset with _backoff
     self._lock = threading.Lock()
     self._wake = threading.Event()
+    self._stopped = threading.Event()  # set only by stop
     # Guarded by _lock:
     self._mode = ReaderMode.CLOSED
     self._mode_changes = 0  # lets an enrollment tell a set_mode cancel from its own idle timeout
@@ -232,6 +234,7 @@ class Scanner:
     with self._lock:
       self._stopping = True
       token = self._token
+    self._stopped.set()
     self._wake.set()
     if token is not None:
       token.cancel()
@@ -350,9 +353,10 @@ class Scanner:
     self._backoff = self._timings.backoff_start
     self._failing_since = None
     # §6.2: no re-capture straight away. identify returns after the lift, but a call cancelled while the finger rests
-    # (the re-arm, a gallery change) returns before it; the pause keeps a bounce or that resting finger from being read
-    # as the next press.
-    self._wake.wait(self._timings.finger_off_pause)
+    # (the re-arm, a gallery or mode change) returns before it; the pause keeps a bounce or that resting finger from
+    # being read as the next press. After an early result only stop ends it: a mode change then (registration after an
+    # admin's approving finger) must not start reading while that finger may still rest.
+    (self._stopped if posted else self._wake).wait(self._timings.finger_off_pause)
 
   def _identify_once(self) -> tuple[Matched | NoMatch | Retry, bool]:
     """The one matcher boundary (R36.3): the only `reader.identify` call, which version 2 replaces.

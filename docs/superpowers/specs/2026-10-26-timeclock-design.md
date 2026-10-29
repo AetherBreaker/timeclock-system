@@ -432,8 +432,10 @@ Rules every path follows:
   with the patch) → 60 s, the reader line red with "Reader paused", and an alert, since it means the patch isn't
   working on that clock (owner, 2026-10-27). After any capture, pause 1 s before re-arming (owner, 2026-10-27: down
   from 2 s), so the tail of one press isn't read as the next (seen at 0.54 s in the spike). `identify_sync` returns
-  only after the finger lifts, but a call cancelled while a finger rests after its match (the re-arm, a gallery
-  change) returns before the lift; the pause keeps that finger from being read again at once.
+  only after the finger lifts, but a call cancelled while a finger rests after its match (the re-arm, a gallery or
+  mode change) returns before the lift; the pause keeps that finger from being read again at once. After an early
+  result (below) a mode change doesn't cut the pause short, and registration waits for a finger already down (the
+  approving admin's) to lift before it starts, so that finger is never enrolled as the new print's first press.
 - **Finger status** (`notify::finger-status`, identify and enroll alike): libfprint's flags, finger present and
   waiting for a finger, are posted on every change; a call that ends with a finger still reported clears it. In
   libfprint 1.94.100 an enroll waits for the lift between presses and reports it, but completes before the last

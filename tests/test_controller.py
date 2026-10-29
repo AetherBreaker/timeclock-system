@@ -1270,3 +1270,25 @@ async def test_an_unrecognized_finger_leaves_the_pad_alone(kiosk: Kiosk) -> None
   await kiosk.ctl.on_scanner_event(NoMatch())
   assert kiosk.ctl.screen == pad
   assert isinstance(pad, PinEntry) and pad.username == "10"
+
+
+async def test_registration_waits_for_the_approvers_finger_to_lift(kiosk: Kiosk) -> None:
+  # The admin's finger approves while still down; enrolling then would read it as the employee's first press.
+  await fingerprints_login(kiosk, ANN)
+  await kiosk.ctl.choose_action("add")
+  await kiosk.ctl.pick_finger(Finger.RIGHT_INDEX)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  assert isinstance(kiosk.ctl.screen, Registering)
+  assert kiosk.reader.modes[-1] is ReaderMode.READY
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  assert kiosk.reader.modes[-1] is ReaderMode.ENROLL
+
+
+async def test_a_registration_press_keeps_the_reader_enrolling(kiosk: Kiosk) -> None:
+  await kiosk.pin_login(BOB)
+  await kiosk.ctl.register()
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
+  assert kiosk.reader.modes[-1] is ReaderMode.ENROLL
+  await kiosk.ctl.on_scanner_event(DOWN)
+  assert kiosk.reader.modes[-1] is ReaderMode.ENROLL

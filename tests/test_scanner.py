@@ -470,11 +470,31 @@ def test_a_cancel_after_an_early_result_is_no_failure_and_still_pauses(make: Cal
 
 
 def test_a_mode_change_after_an_early_result_posts_nothing_more(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader([Early(A), BLOCK]))
+  h = make(FakeReader([Early(A), BLOCK]), PAUSE)
   assert h.event() == Matched(print_id=A, employee_id=1)
   h.scanner.set_mode(ReaderMode.ENROLL)
   h.reader.next_call("enroll")
   assert [h.event() for _ in range(6)] == [*(EnrollStage(i, 5, ok=True) for i in range(1, 6)), Enrolled(b"template")]
+
+
+def test_a_mode_change_after_an_early_result_waits_out_the_pause(make: Callable[..., Harness]) -> None:
+  # An admin's approving finger may still be down: enrolling at once would read it as the new print's first press.
+  h = make(FakeReader([Early(A), BLOCK]), PAUSE)
+  assert h.event() == Matched(print_id=A, employee_id=1)
+  changed = time.monotonic()
+  h.scanner.set_mode(ReaderMode.ENROLL)
+  started, _ = h.reader.next_call("enroll")
+  assert started - changed >= PAUSE.finger_off_pause - TICK
+
+
+def test_stop_ends_the_pause_after_an_early_result(make: Callable[..., Harness]) -> None:
+  h = make(FakeReader([Early(A), BLOCK]), ScannerTimings(finger_off_pause=10.0))
+  assert h.event() == Matched(print_id=A, employee_id=1)
+  h.scanner.set_mode(ReaderMode.CLOSED)  # cancels the call; the pause that follows ignores mode changes
+  [thread] = [t for t in threading.enumerate() if t.name == "scanner"]
+  h.scanner.stop()
+  thread.join(1.0)
+  assert not thread.is_alive()
 
 
 def test_enroll_posts_uncounted_presses(make: Callable[..., Harness]) -> None:

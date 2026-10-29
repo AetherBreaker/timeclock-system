@@ -459,7 +459,9 @@ class KioskController:
   def _sync_reader(self) -> None:
     now = self._mono()
     if isinstance(self._screen, Registering):
-      mode = ReaderMode.ENROLL
+      # Not while a finger from before is down: it's the approving admin's, and enrolling would read it as the first
+      # press. Once enrolling, the presses are the registration's own.
+      mode = ReaderMode.ENROLL if self._mode is ReaderMode.ENROLL or not self._present else ReaderMode.READY
     elif (
       is_open(self._clock.business_hours(), self._wall(), self._tz)
       or now < self._wake_until
