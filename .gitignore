@@ -241,3 +241,5 @@ image/production/out/
 image/production/work/
 image/production/private/
 /docs/superpowers/plans
+# Fingerprint images captured for review; never committed
+fingerprint-samples/
