@@ -332,13 +332,14 @@ shows the clock. The banner file is deleted.
   Firefox policies / `kiosk.cfg`), `systemd/` (the units and the Docker drop-in), `plymouth/` (the theme). Releases
   are tags; a GitHub Actions workflow builds the watcher on a tag and attaches it with the other files (my call;
   names follow AGENTS.md's workflow naming).
-- **This repo:** the submodule at `standby/`; §6's app changes; the kiosk check-in (`kiosk.sh`, the wrapper, `kbd`), in
-  the backup kiosk (`docker/kiosk-cage-only/`) too; both images.
+- **This repo:** the submodule at `standby/`; §6's app changes; the kiosk check-in (`kiosk.sh`, the wrapper), in the
+  backup kiosk (`docker/kiosk-cage-only/`) too; both images.
 - **ISO build** (both images: the dev device runs the same compose, owner): downloads the new repo's latest release
-  and bakes in the watcher and a fallback copy of the status app (owner: both baked in).
-- **Install** (`late.sh`): installs the host packages (`python3` explicitly, `cage`, `seatd`, `firefox-esr`, `kbd`,
-  `plymouth`), the units and config; **fetches the status app from the new repo's latest release** if the network
-  allows, else uses the baked copy (owner: from its repo at first install if possible; "latest release" my call).
+  (`fetch-standby.sh`) and bakes it in, watcher included (owner: both baked in).
+- **Install** (`late.sh` runs `install-standby.sh`): the preseed adds the host packages (`python3` explicitly, `cage`,
+  `seatd`, `firefox-esr`, `plymouth`, `plymouth-themes`, `librsvg2-bin` for the splash's logo); **the latest release is
+  fetched again** if the network allows, else the baked copy is used (owner: from its repo at first install if
+  possible; "latest release" my call), and its `install.sh` installs the rest.
 - **Updating a clock:** replace a file over SSH and restart its unit (owner). The watcher, frozen, normally never.
 - **Existing clocks** (main-office, timeclock-dev): a one-off install script over SSH from this repo, or a reinstall
   (my call; to settle when it's time).
