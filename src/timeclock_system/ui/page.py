@@ -399,7 +399,12 @@ class _KioskPage:
         ("email", text.FIELD_EMAIL, s.email),
       )
       for name, label, value in texts:
-        ui.input(label, value=value, on_change=edited(name)).classes("w-full text-2xl").props("dark outlined").mark(f"field-{name}")
+        field = (
+          ui.input(label, value=value, on_change=edited(name)).classes("w-full text-2xl").props("dark outlined").mark(f"field-{name}")
+        )
+        if name == "phone":
+          # The brackets, space and dash are drawn by the field and never part of the value.
+          field.props('mask="(###) ###-####" unmasked-value')
         if name in errors:
           ui.label(errors[name]).classes("sft-error text-base").mark(f"error-{name}")
       ui.select(dict(text.ROLE_LABELS), label=text.FIELD_ROLE, value=s.role, on_change=edited("role")).classes("w-full").props(
