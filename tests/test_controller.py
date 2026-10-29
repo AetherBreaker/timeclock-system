@@ -16,7 +16,17 @@ from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group,
 
 # First party imports
 from timeclock_system.clock import Approval, Clock, NewEmployee, OverrideGrant
-from timeclock_system.scanner import Enrolled, EnrollFailed, EnrollStage, FingerDown, Matched, NoMatch, ReaderMode, ReaderPaused
+from timeclock_system.scanner import (
+  Enrolled,
+  EnrollFailed,
+  EnrollStage,
+  FingerStatus,
+  Matched,
+  NoMatch,
+  ReaderMode,
+  ReaderPaused,
+  Retry,
+)
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
 from timeclock_system.ui import text
@@ -44,6 +54,7 @@ from timeclock_system.ui.controller import (
   PinRecheck,
   PinScan,
   ReaderIndicator,
+  ReaderMessage,
   Registering,
   RegisterPrompt,
   Rescan,
@@ -159,6 +170,12 @@ def matched(employee_id: int) -> Matched:
   return Matched(print_id=MIA_PRINT if employee_id == MIA else ANN_PRINT, employee_id=employee_id)
 
 
+# The reader's finger signal as the scanner posts it.
+WAITING = FingerStatus(present=False, waiting=True)
+DOWN = FingerStatus(present=True, waiting=False)
+LIFTED = FingerStatus(present=False, waiting=False)
+
+
 def test_format_clock_time() -> None:
   assert text.format_clock_time(START, NY) == "8:02 AM"
   assert text.format_clock_time(datetime(2026, 10, 27, 4, 5, tzinfo=UTC), NY) == "12:05 AM"
@@ -183,14 +200,6 @@ async def test_match_opens_the_menu(kiosk: Kiosk) -> None:
   assert screen.info.name == "Ann Lee"
   assert screen.auth is None
   assert screen.info.valid_next == (PunchKind.CLOCK_IN,)
-
-
-async def test_no_match_shows_message_then_clears(kiosk: Kiosk) -> None:
-  await kiosk.ctl.on_scanner_event(NoMatch())
-  assert kiosk.ctl.screen == Idle(text.NOT_RECOGNIZED, until=kiosk.t.mono + 3)
-  kiosk.t.advance(3.1)
-  await kiosk.ctl.tick()
-  assert kiosk.ctl.screen == Idle()
 
 
 async def test_punch_within_30s_records_and_confirms(kiosk: Kiosk) -> None:
@@ -437,17 +446,21 @@ async def test_after_hours_idle_is_asleep_until_tapped(kiosk: Kiosk) -> None:
 
 
 async def test_reader_closes_only_when_idle_after_hours(kiosk: Kiosk) -> None:
-  # Review Focus 5: closing time doesn't cut a screen that's open or a scan in progress.
-  await kiosk.ctl.on_scanner_event(FingerDown())
+  # Closing time doesn't cut a screen that's open.
   await kiosk.ctl.on_scanner_event(matched(ANN))
   await kiosk.no_hours()
   assert kiosk.reader.modes[-1] is ReaderMode.READY
-  kiosk.t.advance(5)
   await kiosk.ctl.cancel()
   assert kiosk.ctl.screen == Idle()
-  assert kiosk.reader.modes[-1] is ReaderMode.READY, "a finger touched 5 s ago; the 16 s hold isn't over"
-  kiosk.t.advance(11.5)
-  await kiosk.ctl.tick()
+  assert kiosk.reader.modes[-1] is ReaderMode.CLOSED
+
+
+async def test_the_reader_stays_open_at_closing_while_a_finger_is_down(kiosk: Kiosk) -> None:
+  # Review Focus 2: a scan in progress at closing finishes first (R40.2).
+  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.no_hours()
+  assert kiosk.reader.modes[-1] is ReaderMode.READY
+  await kiosk.ctl.on_scanner_event(LIFTED)
   assert kiosk.reader.modes[-1] is ReaderMode.CLOSED
 
 
@@ -465,45 +478,223 @@ async def test_set_mode_is_called_only_on_a_change(kiosk: Kiosk) -> None:
   assert kiosk.reader.modes == [ReaderMode.READY]
 
 
-async def test_the_indicator_lights_while_a_finger_is_down(kiosk: Kiosk) -> None:
+# -- the reader line: live indicator and lingering message (QoL design §4) -------------------------------------------
+
+
+async def test_the_indicator_is_dim_until_the_reader_waits(kiosk: Kiosk) -> None:
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.BUSY
+  await kiosk.ctl.on_scanner_event(WAITING)
   assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
-  await kiosk.ctl.on_scanner_event(FingerDown())
+
+
+async def test_a_finger_down_shows_scanning(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(WAITING)
+  await kiosk.ctl.on_scanner_event(DOWN)
   assert kiosk.ctl.reader_indicator is ReaderIndicator.SCANNING
-  assert kiosk.ctl.screen == Idle(), "no Scanning… message any more"
-  await kiosk.ctl.on_scanner_event(NoMatch())
+  assert kiosk.ctl.screen == Idle()
+
+
+async def test_a_match_shows_read_until_the_lift(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(WAITING)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READ
+  assert isinstance(kiosk.ctl.screen, Menu)
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.BUSY
+  await kiosk.ctl.on_scanner_event(WAITING)
   assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
 
 
-async def test_the_indicator_drops_back_if_a_scan_never_finishes(kiosk: Kiosk) -> None:
-  await kiosk.ctl.on_scanner_event(FingerDown())
-  kiosk.t.advance(16.5)
+async def test_no_match_is_orange_until_the_lift_and_lingers(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(WAITING)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  read_at = kiosk.t.mono
+  await kiosk.ctl.on_scanner_event(NoMatch())
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.UNRECOGNIZED
+  assert kiosk.ctl.screen == Idle(), "the idle title no longer changes for reader messages"
+  assert kiosk.ctl.reader_message == ReaderMessage("Not recognized, try again", "unrecognized", read_at)
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.BUSY
+  assert kiosk.ctl.reader_message == ReaderMessage("Not recognized, try again", "unrecognized", read_at)
+  kiosk.t.advance(3.1)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.reader_message is None
+
+
+async def test_a_failed_read_is_red_for_at_least_a_second(kiosk: Kiosk) -> None:
+  # The scanner's order: the finger goes down, the call ends (clearing it), then the retry.
+  await kiosk.ctl.on_scanner_event(WAITING)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  failed_at = kiosk.t.mono
+  await kiosk.ctl.on_scanner_event(Retry("x"))
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.FAILED
+  assert kiosk.ctl.reader_message is None, "the status already says it"
+  kiosk.t.advance(0.5)
+  await kiosk.ctl.on_scanner_event(WAITING)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.FAILED
+  kiosk.t.advance(0.6)
   await kiosk.ctl.tick()
   assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+  assert kiosk.ctl.reader_message == ReaderMessage("Couldn't read that, try again", "error", failed_at)
 
 
-async def test_a_match_ends_the_scanning_indicator(kiosk: Kiosk) -> None:
-  await kiosk.ctl.on_scanner_event(FingerDown())
+async def test_a_new_finger_ends_the_red_at_once(kiosk: Kiosk) -> None:
+  # Review Focus 3.
+  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  await kiosk.ctl.on_scanner_event(Retry("x"))
+  kiosk.t.advance(0.3)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.SCANNING
+
+
+async def test_red_holds_until_the_reader_waits_again(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  await kiosk.ctl.on_scanner_event(Retry("x"))
+  kiosk.t.advance(5)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.FAILED
+  await kiosk.ctl.on_scanner_event(WAITING)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+  await kiosk.ctl.on_scanner_event(LIFTED)  # the gap after the next scan
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.BUSY
+
+
+async def fail_a_read_and_settle(kiosk: Kiosk) -> float:
+  """A failed read, then the reader waiting again past the red's floor; returns when it failed."""
+  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  failed_at = kiosk.t.mono
+  await kiosk.ctl.on_scanner_event(Retry("x"))
+  kiosk.t.advance(1.1)
+  await kiosk.ctl.on_scanner_event(WAITING)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+  return failed_at
+
+
+async def test_an_error_message_clears_on_a_screen_change(kiosk: Kiosk) -> None:
+  await fail_a_read_and_settle(kiosk)
+  assert kiosk.ctl.reader_message is not None
+  await kiosk.ctl.use_pin()
+  assert kiosk.ctl.reader_message is None
+
+
+async def test_typing_on_a_pad_keeps_the_message(kiosk: Kiosk) -> None:
+  await kiosk.ctl.use_pin()
+  await fail_a_read_and_settle(kiosk)
+  await kiosk.type_and_enter(PINS[ANN])  # username to PIN: the same screen
+  assert isinstance(kiosk.ctl.screen, PinEntry)
+  assert kiosk.ctl.reader_message is not None
+
+
+async def test_an_error_message_on_idle_times_out_after_15_s(kiosk: Kiosk) -> None:
+  failed_at = await fail_a_read_and_settle(kiosk)
+  kiosk.t.advance(failed_at + 14.9 - kiosk.t.mono)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.reader_message is not None
+  kiosk.t.advance(0.2)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.reader_message is None
+
+
+async def test_an_error_message_elsewhere_has_no_timeout(kiosk: Kiosk) -> None:
+  await kiosk.ctl.use_pin()
+  await fail_a_read_and_settle(kiosk)
+  kiosk.t.advance(60)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.reader_message is not None
+
+
+async def test_a_success_message_carries_into_the_menu_and_lasts_3_s(kiosk: Kiosk) -> None:
+  read_at = kiosk.t.mono
   await kiosk.ctl.on_scanner_event(matched(ANN))
   assert isinstance(kiosk.ctl.screen, Menu)
-  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+  assert kiosk.ctl.reader_message == ReaderMessage("Scan successful", "success", read_at)
+  kiosk.t.advance(3.1)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.reader_message is None
+
+
+async def test_the_page_hears_a_message_expire(kiosk: Kiosk) -> None:
+  # Nothing but time changes: the tick must still tell the page to redraw the reader line.
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  heard: list[None] = []
+  kiosk.ctl.add_listener(lambda: heard.append(None))
+  kiosk.t.advance(3.1)
+  await kiosk.ctl.tick()
+  assert heard
+
+
+async def test_a_success_message_clears_on_a_screen_asking_for_a_finger(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  assert kiosk.ctl.reader_message is not None
+  await kiosk.ctl.admin()
+  assert isinstance(kiosk.ctl.screen, AdminReconfirm)
+  assert kiosk.ctl.reader_message is None
+
+
+async def test_no_messages_where_a_finger_does_nothing(kiosk: Kiosk) -> None:
+  await kiosk.ctl.gear()
+  assert isinstance(kiosk.ctl.screen, GearMenu)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(NoMatch())
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.UNRECOGNIZED
+  assert kiosk.ctl.reader_message is None
+  await kiosk.ctl.cancel()
+  assert kiosk.ctl.screen == Idle()
+  assert kiosk.ctl.reader_message is None
+
+
+async def test_registration_presses_are_green_or_red_never_orange(kiosk: Kiosk) -> None:
+  await kiosk.pin_login(BOB)
+  await kiosk.ctl.register()
+  await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
+  assert isinstance(kiosk.ctl.screen, Registering)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  read_at = kiosk.t.mono
+  await kiosk.ctl.on_scanner_event(EnrollStage(1, 5, ok=True))
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READ
+  assert kiosk.ctl.reader_message == ReaderMessage("Scan successful", "success", read_at)
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Registering) and screen.done == 1
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  await kiosk.ctl.on_scanner_event(WAITING)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  failed_at = kiosk.t.mono
+  await kiosk.ctl.on_scanner_event(EnrollStage(1, 5, ok=False))
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.FAILED
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Registering) and screen.done == 1
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  kiosk.t.advance(1.1)
+  await kiosk.ctl.on_scanner_event(WAITING)
+  assert kiosk.ctl.reader_message == ReaderMessage("Couldn't read that, try again", "error", failed_at)
 
 
 async def test_a_paused_reader_shows_red_for_its_pause_then_recovers(kiosk: Kiosk) -> None:
   heard: list[None] = []
   kiosk.ctl.add_listener(lambda: heard.append(None))
+  await kiosk.ctl.on_scanner_event(WAITING)
   await kiosk.ctl.on_scanner_event(ReaderPaused(60.0))
   assert kiosk.ctl.reader_indicator is ReaderIndicator.PAUSED
   assert kiosk.ctl.screen == Idle(), "nothing on screen to wait for"
   assert heard, "the page redraws for an indicator change"
+  heard.clear()
   kiosk.t.advance(60.5)
   await kiosk.ctl.tick()
   assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+  assert heard, "the pause ending is a change too, though only time moved"
 
 
 async def test_the_indicator_shows_the_reader_asleep_after_hours(kiosk: Kiosk) -> None:
   await kiosk.no_hours()
   assert kiosk.ctl.reader_indicator is ReaderIndicator.ASLEEP
   await kiosk.ctl.tap()
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.BUSY, "open, but not yet waiting for a finger"
+  await kiosk.ctl.on_scanner_event(WAITING)
   assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
 
 

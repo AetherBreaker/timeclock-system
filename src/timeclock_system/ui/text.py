@@ -25,8 +25,26 @@ if TYPE_CHECKING:
 IDLE_READY: Final = "Place your finger on the reader"
 IDLE_ASLEEP: Final = "Tap to scan"
 READER_ASLEEP: Final = "Tap to wake the reader"
-NOT_RECOGNIZED: Final = "Not recognized: try again or use your PIN"
+NOT_RECOGNIZED: Final = "Not recognized, try again"
 RETRY: Final = "Couldn't read that, try again"
+READER_READY: Final = "Ready"
+READER_SCANNING: Final = "Keep your finger down"
+READER_LIFT: Final = "Lift your finger"
+READER_PAUSED: Final = "Reader paused"
+SCAN_SUCCESSFUL: Final = "Scan successful"
+# The reader line's status, by the controller's ReaderIndicator value.
+READER_STATUS: Final[Mapping[str, str]] = MappingProxyType(
+  {
+    "ready": READER_READY,
+    "scanning": READER_SCANNING,
+    "read": READER_LIFT,
+    "unrecognized": READER_LIFT,
+    "failed": RETRY,
+    "paused": READER_PAUSED,
+    "busy": "",
+    "asleep": READER_ASLEEP,
+  }
+)
 USE_PIN: Final = "Use PIN"
 ENTER_USERNAME: Final = "Enter your PIN username"
 ENTER_PIN: Final = "Enter your PIN"

@@ -35,7 +35,7 @@ from timeclock_system.scanner import (
   Enrolled,
   EnrollFailed,
   EnrollStage,
-  FingerDown,
+  FingerStatus,
   Matched,
   NoMatch,
   ReaderMode,
@@ -61,21 +61,35 @@ if TYPE_CHECKING:
 RESCAN_AFTER_SECS = 30  # R45.2
 IDLE_CLOSE_SECS = 120  # R45.4, for every non-idle screen
 CONFIRM_SECS = 5
-MESSAGE_SECS = 3
+MESSAGE_SECS = 3  # also how long a success or unrecognized reader message lingers
+FAILED_MIN_SECS = 1.0  # the failed read's red never shows shorter
+IDLE_ERROR_SECS = 15  # a reader error message on the idle screen
 WAKE_SECS = 30  # R40.2
 DOUBLE_TAP_SECS = 0.5  # two taps this close end a confirmation early
-SCAN_IN_PROGRESS_SECS = 16  # the spike's slowest resting thumb
 _MAX_DIGITS = 12
 _ADDABLE_ROLES = (EmployeeRole.EMPLOYEE, EmployeeRole.MANAGER)  # never admin (§2)
 
 
 class ReaderIndicator(StrEnum):
-  """The reader icon in the screen's corner, on every screen."""
+  """The reader line's icon and status, on every screen; live from the reader, never on a timer but the red's floor."""
 
-  READY = "ready"  # waiting for a finger
-  SCANNING = "scanning"  # a finger is down and its scan hasn't finished
-  PAUSED = "paused"  # the reader paused itself (too hot), which the patched reader shouldn't do
-  ASLEEP = "asleep"  # closed outside business hours until a tap
+  READY = "ready"  # waiting for a finger: yellow, "Ready"
+  SCANNING = "scanning"  # finger down, being read: blue, "Keep your finger down"
+  READ = "read"  # read succeeded, finger still down: green, "Lift your finger"
+  UNRECOGNIZED = "unrecognized"  # login read, matched nobody, finger still down: orange, "Lift your finger"
+  FAILED = "failed"  # read failed: red, "Couldn't read that, try again"
+  PAUSED = "paused"  # paused itself (too hot), which the patched reader shouldn't do: red, "Reader paused"
+  BUSY = "busy"  # not taking scans (the gap after a scan): dim, no text
+  ASLEEP = "asleep"  # closed after hours until a tap: dim, "Tap to wake the reader"
+
+
+@dataclass(frozen=True)
+class ReaderMessage:
+  """What lingers on the reader line after the live status moves on (QoL design §4)."""
+
+  text: str
+  tone: Literal["error", "success", "unrecognized"]
+  at: float  # monotonic time it was raised
 
 
 @dataclass(frozen=True)
@@ -345,6 +359,11 @@ type Screen = (
   | ApprovalPrompt
 )
 
+# Where a finger does something: reader messages are raised and shown only here.
+_FINGER_SCREENS = (Idle, Menu, Confirmation, PinScan, Rescan, OverridePrompt, AdminReconfirm, ApprovalPrompt, PinEntry, Registering)
+# Arriving at a screen that asks for a finger clears a success or unrecognized message; others carry it.
+_ASKING_SCREENS = (Idle, PinScan, Rescan, OverridePrompt, AdminReconfirm, ApprovalPrompt, Registering)
+
 
 class ReaderPort(Protocol):
   """The part of the scanner the controller drives."""
@@ -385,11 +404,17 @@ class KioskController:
     self._wake_until = float("-inf")
     # The confirmation and time of its last tap, kept off the screen so the first tap of a double tap doesn't redraw it.
     self._confirmation_tap: tuple[Confirmation, float] | None = None
-    self._last_finger = float("-inf")
-    self._scanning = False  # a FingerDown not yet followed by its scan's outcome
+    # The reader's latest finger-status flags, as the scanner posted them.
+    self._present = False
+    self._waiting = False
+    self._outcome: ReaderIndicator | None = None  # the press's READ or UNRECOGNIZED; cleared by a new press or the lift
+    self._failed_at: float | None = None  # the last failed read, until a new press or its red ends
+    self._message: ReaderMessage | None = None
     self._paused_until = float("-inf")
     self._mode: ReaderMode | None = None
     self._sync_reader()
+    # What the listeners last heard: a change only time makes (an expired message) is found against this.
+    self._notified = (self._screen, self.reader_awake, self.reader_indicator, self.reader_message)
 
   @property
   def screen(self) -> Screen:
@@ -403,18 +428,32 @@ class KioskController:
 
   @property
   def reader_indicator(self) -> ReaderIndicator:
-    """What the reader icon shows; a scan with no outcome within the slowest scan's time stops counting."""
+    """What the reader line's icon and status show, in precedence order."""
     now = self._mono()
     if not self.reader_awake:
       return ReaderIndicator.ASLEEP
     if now < self._paused_until:
       return ReaderIndicator.PAUSED
-    if self._scanning and now - self._last_finger < SCAN_IN_PROGRESS_SECS:
-      return ReaderIndicator.SCANNING
-    return ReaderIndicator.READY
+    if self._failed_at is not None and (not self._waiting or now - self._failed_at < FAILED_MIN_SECS):
+      return ReaderIndicator.FAILED
+    if self._present:
+      return self._outcome or ReaderIndicator.SCANNING
+    return ReaderIndicator.READY if self._waiting else ReaderIndicator.BUSY
+
+  @property
+  def reader_message(self) -> ReaderMessage | None:
+    """The reader line's lingering message, if it shows on this screen now."""
+    m, s, now = self._message, self._screen, self._mono()
+    if m is None or not isinstance(s, _FINGER_SCREENS):
+      return None
+    if m.tone != "error":
+      return m if now - m.at < MESSAGE_SECS else None
+    if self.reader_indicator is ReaderIndicator.FAILED:
+      return None  # the status says it until the red ends; then the text moves here
+    return None if isinstance(s, Idle) and now - m.at >= IDLE_ERROR_SECS else m
 
   def add_listener(self, cb: Callable[[], object]) -> None:
-    """Call `cb` after any entry point that changed `screen`, `reader_awake` or `reader_indicator`."""
+    """Call `cb` after any entry point that changed `screen`, `reader_awake`, `reader_indicator` or `reader_message`."""
     self._listeners.append(cb)
 
   def _sync_reader(self) -> None:
@@ -425,7 +464,7 @@ class KioskController:
       is_open(self._clock.business_hours(), self._wall(), self._tz)
       or now < self._wake_until
       or self._screen != Idle()
-      or now - self._last_finger < SCAN_IN_PROGRESS_SECS  # a scan in progress at closing finishes first (R40.2)
+      or self._present  # a scan in progress at closing finishes first (R40.2)
     ):
       mode = ReaderMode.READY
     else:
@@ -438,10 +477,18 @@ class KioskController:
   async def _transition(self) -> AsyncGenerator[None]:
     """Run one entry point under the lock, then set the reader's mode and tell the listeners of any change."""
     async with self._lock:
-      before = (self._screen, self.reader_awake, self.reader_indicator)
+      before = self._screen
       yield
       self._sync_reader()
-      if (self._screen, self.reader_awake, self.reader_indicator) != before:
+      # A screen change is a change of screen type: typing on a pad or in the form, or a new scan's menu, isn't one.
+      m, changed = self._message, type(self._screen) is not type(before)
+      if m is not None and changed and (m.tone == "error" or isinstance(self._screen, _ASKING_SCREENS)):
+        self._message = None
+      if self._failed_at is not None and self._waiting and self._mono() - self._failed_at >= FAILED_MIN_SECS:
+        self._failed_at = None  # the red has ended; a later gap before the next scan mustn't bring it back
+      after = (self._screen, self.reader_awake, self.reader_indicator, self.reader_message)
+      if after != self._notified:
+        self._notified = after
         for cb in self._listeners:
           cb()
 
@@ -498,39 +545,58 @@ class KioskController:
   # -- entry points ---------------------------------------------------------------------------------------------
 
   async def on_scanner_event(self, ev: ScannerEvent) -> None:
-    """Apply one event the scanner posted."""
+    """Apply one event the scanner posted.
+
+    The reader line reports the reader alone; each screen keeps its own error line for who scanned, roles and PINs.
+    """
     async with self._transition():
       now = self._mono()
       s = self._screen
-      # Every outcome below ends the scan the indicator shows; only FingerDown starts one.
-      self._scanning = isinstance(ev, FingerDown)
+      message: ReaderMessage | None = None
       match ev:
-        case FingerDown():
-          self._last_finger = now
-          if not isinstance(s, Idle | Confirmation):
-            self._screen = replace(s, touched_at=now)
+        case FingerStatus():
+          self._on_finger_status(s, ev)
         case ReaderPaused(seconds=seconds):
           self._paused_until = now + seconds
-        case NoMatch() | Retry():
-          message = text.NOT_RECOGNIZED if isinstance(ev, NoMatch) else text.RETRY
-          if isinstance(s, Idle):
-            self._screen = Idle(message, until=now + MESSAGE_SECS)
-          elif isinstance(s, Rescan | PinScan | OverridePrompt | AdminReconfirm | ApprovalPrompt):
-            self._screen = replace(s, message=message)
+        case NoMatch():
+          self._outcome = ReaderIndicator.UNRECOGNIZED
+          message = ReaderMessage(text.NOT_RECOGNIZED, "unrecognized", now)
+        case Retry():
+          self._failed_at = now
+          message = ReaderMessage(text.RETRY, "error", now)
         case Matched(employee_id=employee_id):
+          self._outcome = ReaderIndicator.READ
+          message = ReaderMessage(text.SCAN_SUCCESSFUL, "success", now)
           await self._on_match(s, employee_id)
         case EnrollStage() | Enrolled() | EnrollFailed() if isinstance(s, Registering):
-          await self._on_enroll(s, ev)
+          message = await self._on_enroll(s, ev)
         case _:
           pass  # every (screen, event) pair the table doesn't list is ignored (R7f)
+      if message is not None and isinstance(s, _FINGER_SCREENS):
+        self._message = message  # a newer message replaces the old, so a success also clears an error
 
-  async def _on_enroll(self, s: Registering, ev: EnrollStage | Enrolled | EnrollFailed) -> None:
+  def _on_finger_status(self, s: Screen, ev: FingerStatus) -> None:
     # Split out of on_scanner_event for C901.
+    if ev.present != self._present:
+      self._outcome = None  # a new press has none yet; the lift ends the last one's
+    if ev.present and not self._present:
+      self._failed_at = None  # a new finger ends the red at once
+      if not isinstance(s, Idle | Confirmation):
+        self._screen = replace(s, touched_at=self._mono())
+    self._present, self._waiting = ev.present, ev.waiting
+
+  async def _on_enroll(self, s: Registering, ev: EnrollStage | Enrolled | EnrollFailed) -> ReaderMessage | None:
+    # Split out of on_scanner_event for C901. Returns a press's reader message; registration never shows unrecognized:
+    # the indicator doesn't tell a new print from a known one, which is the screen's job.
     now = self._mono()
     match ev:
-      case EnrollStage(done=done, total=total):
-        self._last_finger = now  # a press, like a FingerDown, holds the reader open at closing
+      case EnrollStage(done=done, total=total, ok=ok):
         self._screen = replace(s, done=done, total=total, touched_at=now)
+        if ok:
+          self._outcome = ReaderIndicator.READ
+          return ReaderMessage(text.SCAN_SUCCESSFUL, "success", now)
+        self._failed_at = now
+        return ReaderMessage(text.RETRY, "error", now)
       case Enrolled(template=template) if s.change is not None:
         replaces = s.change.fingerprint_id
         await self._clock.register_fingerprint(s.employee_id, template, s.finger, approval=s.approval, replaces=replaces)
