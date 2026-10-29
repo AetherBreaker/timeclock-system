@@ -10,11 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 COPY docker/kiosk/kiosk.sh /kiosk.sh
 COPY docker/kiosk/remote.sh /remote.sh
+COPY docker/kiosk/handback.sh /handback.sh
 # Over systemd's own (pulled in above), which finds no session without logind; see the file.
 COPY docker/kiosk/loginctl /usr/bin/loginctl
 COPY docker/kiosk/xdpw.conf /root/.config/xdg-desktop-portal-wlr/config
 COPY docker/kiosk/policies.json /usr/lib/firefox-esr/distribution/policies.json
 COPY docker/kiosk/autoconfig.js /usr/lib/firefox-esr/defaults/pref/autoconfig.js
 COPY docker/kiosk/kiosk.cfg /usr/lib/firefox-esr/kiosk.cfg
-RUN chmod 755 /kiosk.sh /remote.sh /usr/bin/loginctl
+RUN chmod 755 /kiosk.sh /remote.sh /handback.sh /usr/bin/loginctl
 ENTRYPOINT ["/kiosk.sh"]

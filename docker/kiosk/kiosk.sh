@@ -12,19 +12,28 @@ mkdir -p -m 700 "$XDG_RUNTIME_DIR"
 PROFILE=/tmp/kiosk-profile
 rm -rf "$PROFILE"
 mkdir -p "$PROFILE"
-# Wait for the app, or Firefox's first load shows an error page: after a reboot Docker starts both containers at once,
-# ignoring depends_on. At most 60 s, then open anyway; kiosk.cfg reloads an error page once the app serves. remote.sh
-# waits for cage's screen, so it starts after this.
-ORIGIN=$(printf '%s\n' "$KIOSK_URL" | sed -E 's|^([a-z]+://[^/?]+).*|\1|')
-i=0
-until curl -fso /dev/null --max-time 2 "$ORIGIN/favicon.ico"; do
-  i=$((i + 1))
-  [ "$i" -lt 60 ] || break
+# Check in on terminal 1 (standby-screen spec §3.3): a display binds to whichever terminal shows when it starts, so
+# switch there first, but only from 1 or the standby's 7; a console in use (2-6) is waited out, never switched away from.
+while :; do
+  prev=$(sed 's/^tty//' /sys/class/tty/tty0/active)
+  case "$prev" in 1 | 7) break ;; esac
   sleep 1
 done
+perl -e 'open(T, "<", "/dev/tty0") or die "tty0: $!"; ioctl(T, 0x5606, 1) or die "VT_ACTIVATE: $!";
+  ioctl(T, 0x5607, 1) or die "VT_WAITACTIVE: $!"'
+# Remote access waits for cage's Wayland socket, up within a second of this.
 /remote.sh &
 # The number pad types digits whatever Num Lock says: cage starts every keyboard with Num Lock off, including one that
 # drops off USB and comes back (main-office's did, 2026-10-29).
 export XKB_DEFAULT_OPTIONS=numpad:mac
-# -s: Ctrl+Alt+F<n> switches to the host's text consoles, for a shell at the clock while debugging.
-exec seatd-launch -- cage -s -- firefox-esr --profile "$PROFILE" --kiosk "${KIOSK_URL}"
+# -s: Ctrl+Alt+F<n> switches to the host's text consoles, for a shell at the clock while debugging. cage starts
+# handback.sh once its display is up: it hands the screen back, waits for the app, then runs Firefox.
+seatd-launch -- cage -s -- /handback.sh 1 "$prev" firefox-esr --profile "$PROFILE" --kiosk "${KIOSK_URL}" &
+launch=$!
+# Not exec'd: as the container's PID 1, seatd-launch would ignore docker stop's SIGTERM (it has no handler), so every
+# stop waited 10 s for a kill, which also left terminal 1 marked in use. Closing cage instead lets seatd-launch stop
+# seatd, which hands terminal 1 back in text mode, within a second.
+trap 'pkill -TERM -x cage' TERM INT
+while kill -0 "$launch" 2>/dev/null; do
+  wait "$launch" || true # a trapped signal ends the wait early; wait again for the exit
+done
