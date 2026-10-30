@@ -84,7 +84,7 @@ share a phone or email).
 ```text
  Office LAN (one or more clocks)                         VPS (Coolify)
  ┌──────────────── clock host (Debian 13) ─────────┐     ┌──────────────────────────────────────────┐
- │ kiosk   cage + Firefox ── http://app:8080 ──┐   │     │ Coolify ── coolify network ──┐           │
+ │ display sway + cog, host ── 127.0.0.1:8080 ─┐   │     │ Coolify ── coolify network ──┐           │
  │ app     NiceGUI, scanner thread, SQLite  ◄──┘   │     │ coolify-tunnel (sshd, :2223) ◄─┼── ssh -R  │
  │         WireGuard spoke (fixed port, R28.2) ════╪═════╪═► WireGuard hub                │           │
  │ discovery  host network, LAN broadcast (R28.3)  │     │   ├─ central log server (spoke, :9020)     │
@@ -96,7 +96,7 @@ share a phone or email).
 
 | Repository | Role |
 | --- | --- |
-| `timeclock-system` (this one) | The clock: app container, kiosk container, discovery service, libfprint patch, install image. |
+| `timeclock-system` (this one) | The clock: app container, discovery service, libfprint patch, install image. |
 | `timeclock-backend` (submodule at `backend/`) | Relay, PostgreSQL sidecar, migrations on startup, scheduler (R37). |
 | `timeclock-schema` (new; submodule at `schema/`) | Shared pydantic models, shift logic, SQL migrations; published to SFTPyPI (R37.2, R37.5). |
 | `aeth_ext` | Logging, alerts, shutdown; changes in §10. |
@@ -387,11 +387,12 @@ are tested with a test-only kind.
   future host image drops that package, autosuspend has to be enabled another way.
 - The systemd reverse tunnel to coolify-tunnel and its key are part of the one-time install (R29,
   `docs/dev-device-setup.md`).
-- The standby screen ([its design](2026-10-29-standby-screen-design.md), repo `timeclock-standby`, submodule
-  `standby/`), installed by both images: a frozen Rust screen watcher that shows terminal 1 (the kiosk) when the
-  clock is live and terminal 7 (the standby page, cage and Firefox on the host) otherwise, deciding only from what it
-  observes; a Python status app with live starting and updating steps and the update banner; a Plymouth splash, a
-  hidden GRUB menu and a quiet console, so users never see Linux text (owner, 2026-10-29).
+- The display ([its design](2026-10-29-standby-screen-design.md), repo `timeclock-standby`, submodule `standby/`),
+  installed by both images: sway on terminal 7 with two cog windows, the clock (the app at `127.0.0.1:8080`) and the
+  standby page; a frozen Rust screen watcher that shows the clock's window when the clock is live and the standby
+  otherwise, deciding only from what it observes; a Python status app with live starting and updating steps and the
+  update banner; RustDesk on the host; a Plymouth splash, a hidden GRUB menu and a quiet console, so users never see
+  Linux text (owner, 2026-10-29; the kiosk container and Firefox went with the display's move to the host).
 
 ## 6. Clock app (timeclock-system)
 
@@ -510,13 +511,12 @@ The UI is one NiceGUI page for the kiosk; it carries the company's colors (yello
 warning; spec call). Large touch targets, landscape layout from 1024×600 up; no particular screen model
 (R7.1). Typed input uses an on-page number pad that also accepts keyboard input (R25); text (the add-employee
 form) is typed on a plugged-in keyboard, which must work when plugged in at any time, with no restart of the
-app or the kiosk (owner, 2026-10-27; verified on the clock, and the kiosk image fixed if hotplugged input
-isn't picked up). A keyboard's number pad always types digits: the kiosk sets the XKB option `numpad:mac`, since cage
-starts every keyboard with Num Lock off, including one that drops off USB and comes back (owner, 2026-10-29; the Num
-Lock key and light still toggle but no longer matter). The on-screen keyboard is deferred (`TODO.md`). The release
+app or the display (owner, 2026-10-27). A keyboard's number pad always types digits: sway sets the XKB option
+`numpad:mac` on every keyboard, including one that drops off USB and comes back (owner, 2026-10-29; the Num Lock key
+and light still toggle but no longer matter). The on-screen keyboard is deferred (`TODO.md`). The release
 version shows small and dim in the very bottom-left corner, under the reader line (owner, 2026-10-29). The page
 turns off text selection and
-the long-press menu (R13.2). On the kiosk only (`KIOSK_URL` carries `?kiosk`), it hides the mouse cursor until a
+the long-press menu (R13.2). On the clock's own browser only (its URL carries `?kiosk`), it hides the mouse cursor until a
 mouse moves, and again on a touch or after a minute without mouse movement; touch never shows it. Other browsers,
 such as one through an SSH tunnel, always show it (owner, 2026-10-27). Every screen but idle returns to
 idle after 2 minutes without a touch or keystroke, discarding anything unsaved (R45.4). Hours are shown
@@ -769,8 +769,8 @@ No aeth_ext change is needed. Replaced later by aeth_ext's hold-and-resend (TODO
   scripts must be `[project.scripts]` names, so it's a Python port of the spike's shell version (Appendix A):
   find `05ba:000a` in `/sys/bus/usb/devices`, chown its `/dev/bus/usb/BBB/DDD` node to
   999:999, exit nonzero if it isn't there. The supervisor sends healthchecks.io's `/fail` ping when a startup
-  script fails (devkit-container `src/run.rs:111-114`), so a missing reader alerts someone. The screen stays
-  blank meanwhile (the kiosk waits on the app's health check; accepted, R14.7).
+  script fails (devkit-container `src/run.rs:111-114`), so a missing reader alerts someone. The standby page shows
+  meanwhile, stuck on the app's starting steps (accepted, R14.7).
 - Builder-setup window: `gcc pkg-config libgirepository-2.0-dev libcairo2-dev` for PyGObject/pycairo, and
   libfprint's build (§7). Final window: libfprint's runtime dependencies, the built library and
   `FPrint-2.0` typelib (§7), `libgirepository-2.0-0`, `libcairo2`. PyGObject comes from PyPI (R11.2).
@@ -954,28 +954,18 @@ to add the service and renders the Dockerfile from the template. The clock's `[t
 `services = ["timeclock-system"]`, `required_persisted_dirs = ["persisted_data"]`, `wireguard = true`,
 `startup_scripts = ["timeclock-reader-access"]`.
 
-Services (R14, as amended by R28). The compose file holds `timeclock-system` and `kiosk` today; `discovery`, the
-published WireGuard port and `WG_LISTEN_PORT` arrive with LAN sharing (§13 step 5).
+Services (R14, as amended by R28). The compose file holds `timeclock-system` today; `discovery`, the published
+WireGuard port and `WG_LISTEN_PORT` arrive with LAN sharing (§13 step 5). The kiosk service went with the display's
+move to the host (2026-10-29, standby-screen spec).
 
 - **`timeclock-system`** (listed; rendered by setup-project, edited by hand where noted):
   `restart: unless-stopped`, `hostname: timeclock-system-${INSTANCE_ID:?}` (the alert host name),
   `/data/timeclock_system_files` → `/app/persisted_data`, `/dev/bus/usb` mounted with
-  `device_cgroup_rules: ["c 189:* rmw"]` (R14.7), `ports: ["51821:51821/udp"]` (the WireGuard listen port,
-  R28.2; the only published port), network `coolify`, and the template's `cap_add` and health check, which
-  also needs the web server to answer `/favicon.ico`: the heartbeat files persist across containers, so alone
-  they pass before a new container serves, and the kiosk would start too early (main-office, 2026-10-29).
-- **`kiosk`** (unlisted): `build: {context: ., dockerfile: docker/kiosk/Dockerfile}`, `privileged: true`,
-  `/dev:/dev`, `KIOSK_URL=http://timeclock-system:8080`, `depends_on` the app with
-  `condition: service_healthy` (R14.4), network `coolify`, `restart: unless-stopped`. The Dockerfile and
-  `kiosk.sh` are the ones verified on the hardware (Appendix A); `policies.json` in
-  `/usr/lib/firefox-esr/distribution/` turns off pinch zoom, swipe-back and the session-restore prompt
-  (R13.2), with Firefox autoconfig (`kiosk.cfg`) for any preference policies can't set. The kiosk checks in on
-  terminal 1 to start cage and hands the screen back (`handback.sh`, which cage starts once its display is up), then
-  waits up to 60 s for the app's `/favicon.ico` before starting Firefox, which loads behind the standby screen until
-  the host's watcher shows it (standby-screen spec §3.3); `kiosk.cfg` also reloads a Firefox error page once the app
-  serves (asking every 30 s). `kiosk.sh` closes cage on SIGTERM, so a stop takes about a second and hands terminal 1
-  back. cage runs with `-s`, so Ctrl+Alt+F*n* reaches the host's text consoles for debugging at the clock. The kiosk
-  builds from the deployed checkout, not `GIT_TAG`.
+  `device_cgroup_rules: ["c 189:* rmw"]` (R14.7), `ports: ["127.0.0.1:8080:8080"]` (the clock's browser on the
+  host; loopback only) and, with LAN sharing, `51821:51821/udp` (the WireGuard listen port, R28.2), network
+  `coolify`, and the template's `cap_add` and health check, which also needs the web server to answer
+  `/favicon.ico`: the heartbeat files persist across containers, so alone they pass before a new container serves
+  (main-office, 2026-10-29).
 - **`discovery`** (unlisted): the app's `build:` block, same `GIT_REPO` / `GIT_TAG` (so `docker-pin` pins it
   too, and the build cache makes the second build cheap), `entrypoint: ["/app/.venv/bin/devkit-container",
   "discover"]`, `network_mode: host`, the same persisted bind mount, `WG_LISTEN_PORT`,
@@ -1360,8 +1350,9 @@ already on file).
 
 ## Appendix A. Files verified on the hardware (2026-10-26)
 
-From the spikes on timeclock-dev (EliteDesk 800 G3 Mini, Debian 13.7). The kiosk files are the starting point
-for `docker/kiosk/`; the reader script is the logic `timeclock-reader-access` ports to Python.
+From the spikes on timeclock-dev (EliteDesk 800 G3 Mini, Debian 13.7). The kiosk files were the starting point
+for `docker/kiosk/`, removed when the display moved to the host (2026-10-29); they stay here as the spike's record.
+The reader script is the logic `timeclock-reader-access` ports to Python.
 
 **Kiosk** (R13, R14.2). cage runs Firefox ESR alone under `seatd-launch`, in a privileged container with its
 own udevd; no host networking. Touch arrives as real touch events; a replugged touchscreen works again,

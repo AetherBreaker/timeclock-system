@@ -26,20 +26,20 @@ Short requirements list, to be expanded into a full design spec once the main de
 7. The touchscreen must be cheap.
     1. The design stays touchscreen-agnostic (any USB multitouch screen) until one turns up that doesn't work as is. No model is specified.
 8. Hardware: probably an HP EliteDesk 800 G3 or similar, wiped for Linux.
-9. Browser: Firefox.
-10. The device is a Docker host that our Coolify server deploys to. The whole stack, display included, runs in containers. Startup and maintenance are controlled from the repo, with no manual changes on the device.
+9. Browser: cog (WPE WebKit) (owner, 2026-10-29; was Firefox).
+10. The device is a Docker host that our Coolify server deploys to. The app runs in containers; the display (sway, the browsers, RustDesk) runs on the host, installed by the image and timeclock-standby's releases (owner, 2026-10-29: standby-screen spec). Startup and maintenance are controlled from the repos, with no manual changes on the device.
 11. Fingerprints through libfprint (open source; it has supported the 4500 for years), called from Python via PyGObject.
     1. All libfprint calls on one dedicated thread, using its blocking (`_sync`) calls. Nothing else in the process runs GLib's main loop.
     2. PyGObject is installed from PyPI for Python 3.14, not from a distro package, which is built for the distro's own Python.
-12. UI: NiceGUI served locally, shown full-screen in Firefox kiosk mode.
-13. Display: cage runs Firefox as the only app on screen, in a privileged container started with `seatd-launch`.
-    1. The kiosk is a compose service not listed in `[tool.docker].services`, with its own Dockerfile, so aeth_devkit and devkit-container leave it alone (the one exception to Decided 18). Only the kiosk is privileged; the app container stays minimal.
-    2. Lockdown: Firefox policies baked into the kiosk image turn off pinch zoom, swipe-back and the session-restore prompt; the page turns off text selection and the long-press (context) menu.
-14. Deployment: Coolify's Docker Compose type with three services: app, kiosk, and the discovery service (28.3).
-    1. All with `restart: unless-stopped`. Neither app nor kiosk uses host networking (only discovery does, 28.3): the app is on the `coolify` network as the template requires (and its WireGuard interface stays inside its own namespace); the kiosk joins the same network and opens the app by service name. The only port published to the host is the app's WireGuard listen port (28.2).
-    2. The kiosk runs its own `systemd-udevd` (default rules only) plus `udevadm trigger` before cage, so a replugged touchscreen is detected without host networking. Confirmed on the EliteDesk (2026-10-26): kernel device events reach the kiosk's namespace, and a replugged touchscreen works again, including on a different USB port.
+12. UI: NiceGUI served locally, shown full-screen in cog.
+13. Display: sway on the host shows the clock's browser and the standby page as windows; the screen watcher picks which (owner, 2026-10-29: standby-screen spec; was cage + Firefox in a privileged kiosk container).
+    1. No kiosk container any more; the app container stays minimal.
+    2. Lockdown: cog has no session restore or swipe navigation, and sway no key bindings; pinch zoom is checked on the touchscreen (the page turns it off if WebKit zooms); the page turns off text selection and the long-press (context) menu.
+14. Deployment: Coolify's Docker Compose type with the app and the discovery service (28.3); the kiosk service is gone (2026-10-29).
+    1. All with `restart: unless-stopped`. The app doesn't use host networking (only discovery does, 28.3): it's on the `coolify` network as the template requires (and its WireGuard interface stays inside its own namespace). Ports published to the host: the app's web port on the host's loopback only (`127.0.0.1:8080`, for the clock's browser on the host) and the app's WireGuard listen port (28.2).
+    2. A replugged touchscreen or keyboard: sway on the host picks it up through the host's udev (the kiosk container ran its own udevd for this until 2026-10-29).
     3. The app does not detect a replugged fingerprint reader: it exits when it loses the reader, and the restart picks it up. The same udevd approach can be added later if wanted.
-    4. The kiosk waits for the app's health check.
+    4. The clock's browser waits for the app to serve (its start page), and the screen watcher shows it only once it's connected.
     5. Coolify's proxy set to None on this server.
     6. Each machine's compose environment sets `HEARTBEAT_SLUG=timeclock-system-${INSTANCE_ID:?}`, so each clock has its own healthchecks.io check. This goes through compose rather than aeth_ext so devkit-container's supervisor, which reads the slug as-is, pings the same check.
     7. Reader access: the app container mounts `/dev/bus/usb` with device rule `c 189:* rmw`. A `[tool.docker].startup_scripts` entry (runs as root before the app) finds the reader in `/sys` by USB ID `05ba:000a` and chowns its device file to user 999. If the reader isn't present, the script exits nonzero and startup fails (fingerprints are mandatory); Docker's restart retries until it's plugged in.

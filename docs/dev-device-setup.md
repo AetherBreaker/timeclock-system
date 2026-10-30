@@ -18,10 +18,11 @@ The installer image does most of the setup. Its source is [`image/dev-device/`](
 - Security updates installed automatically (`unattended-upgrades`, Debian-Security only), rebooting at 03:00 when one needs it.
 - Hardware-testing tools: `usbutils`, `libinput-tools`, `fprintd`, and libfprint's Python bindings (`gir1.2-fprint-2.0`, `python3-gi`).
 - `coolify-tunnel-setup`, which sets up the tunnel for Coolify (step 5).
-- The standby screen, screen watcher and boot splash ([timeclock-standby](https://github.com/AetherBreaker/timeclock-standby),
-  [design](superpowers/specs/2026-10-29-standby-screen-design.md)): a splash with the logo from power-on, no boot
-  menu, no login prompt on the kiosk's terminal, and a standby page with live steps on terminal 7 whenever the clock
-  can't show (booting, a deploy, a kiosk restart). See [Servicing](#servicing) for the consoles.
+- The clock's display ([timeclock-standby](https://github.com/AetherBreaker/timeclock-standby),
+  [design](superpowers/specs/2026-10-29-standby-screen-design.md)): a splash with the logo from power-on and no boot
+  menu, then sway on terminal 7 showing the clock (cog on the app, at `127.0.0.1:8080`) or, whenever the clock can't
+  show (booting, a deploy), a standby page with live steps; the screen watcher picks which. Remote access (RustDesk)
+  runs on the host and sees both. See [Servicing](#servicing) for the consoles.
 
 ## 1. Write the USB stick
 
@@ -123,18 +124,20 @@ Coolify renames the container (`coolify-tunnel-<id>`) but keeps `coolify-tunnel`
 ## Servicing
 
 - **A console at the clock:** Ctrl+Alt+F2 (to F6) gives a login prompt. The screen watcher leaves it alone until
-  2 minutes pass with no keyboard or touch input, then puts back the clock or the standby page; Ctrl+Alt+F1 returns
-  to the clock at once. A console login logs out by itself after 5 minutes idle. Ctrl+Alt+F7 shows the standby page,
-  for watching a deploy's steps.
+  2 minutes pass with no keyboard or touch input, then puts back the screen; Ctrl+Alt+F7 returns to it at once. A
+  console login logs out by itself after 5 minutes idle.
 - **The boot menu:** hold Esc while the clock boots.
 - **The standby page from the workstation:** `ssh -L 8091:127.0.0.1:8091 timeclock-system-<name>`, then
   `http://localhost:8091/`.
 - **Settings:** `/etc/timeclock/watcher.conf` (the screen watcher; `flip = deploy-start` shows the standby as soon as
   a deploy starts, not when the old app stops) and `/etc/timeclock/standby.conf` (the status app); every key and its
   default is in each file. Restart `timeclock-watcher` or `timeclock-status` after a change.
-- **Updating the standby on a clock:** replace a file under `/opt/timeclock-standby/` over SSH and restart its unit
-  (`timeclock-status` for `status.py` and the page, `timeclock-standby` for the display), or unpack a newer
-  timeclock-standby release and run its `install.sh` as root (safe to run again; it keeps the settings).
+- **The display's parts** are systemd units: `timeclock-display` (sway), `timeclock-standby` and `timeclock-clock`
+  (the two browsers), `timeclock-status`, `timeclock-watcher`, and `sweetfiresupportdesk` (RustDesk). `journalctl -u
+  <unit>` for each; restarting `timeclock-clock` reloads the clock with nobody seeing it (it's hidden until live).
+- **Updating the display on a clock:** replace a file under `/opt/timeclock-standby/` over SSH and restart its unit,
+  or unpack a newer timeclock-standby release and run its `install.sh` as root (safe to run again; it keeps edited
+  settings).
 
 ## Deploying the clock
 
@@ -145,7 +148,7 @@ Once per clock, after the install. timeclock-dev's values are in parentheses.
 3. **Hub:** in wireguard-hub's `peers.toml`, a row `timeclock-system-<INSTANCE_ID>` (`timeclock-system-dev`) with the next free `/32` and `lan = "office"` (`lan = "dev"`); in `rules.v4`, forwards from that address to the log server (TCP 9020) and the backend (TCP 5432); then a hub release.
 4. **Database login,** in the SQL editor: `CREATE ROLE timeclock_clock_<INSTANCE_ID> LOGIN PASSWORD '<random>' IN ROLE timeclock_clocks;` (`timeclock_clock_dev` … `IN ROLE timeclock_test_clocks`).
 5. **On the device:** `sudo mkdir -p /data/timeclock_system_files/branding`, and copy `SFT-Logo-June-2022-color.svg` into `branding/`. Without it the screen shows no logo.
-   For remote access, also `sudo install -d -m 700 /data/timeclock_system_files/remote` and copy the Sweet Fire Support Desk client into it as `sweetfiresupportdesk.deb` (`sudo install -m 600 …`); it's kept out of git, since its password is baked in. The kiosk installs it at every start and keeps its settings, and so its ID, in `remote/config/`. Without it the kiosk runs without remote access.
+   For remote access, also `sudo install -d -m 700 /data/timeclock_system_files/remote` and copy the Sweet Fire Support Desk client into it as `sweetfiresupportdesk.deb` (`sudo install -m 600 …`); it's kept out of git, since its password is baked in. The display installs it at every boot when it changed, and keeps its settings, and so its ID, in `remote/config/`. Without it the clock runs without remote access.
 6. **Coolify application** (Docker Compose, this repository, `docker/compose.yaml`) with these variables, then deploy. Deploys stop the old containers first, which blanks the screen and stops punches, so deploy outside shift changes.
 
    | Variable | Value |
@@ -159,7 +162,7 @@ Once per clock, after the install. timeclock-dev's values are in parentheses.
    | `TIMECLOCK_DB_NAME` | `timeclock` (`timeclock_test`) |
    | `TIMECLOCK_DB_USER`, `TIMECLOCK_DB_PASSWORD` | the login from step 4 |
 
-   The compose file sets the rest: time zone, log server and database addresses, and alert addresses. The screen stays blank until the app's health check passes; then the kiosk opens the clock.
+   The compose file sets the rest: time zone, log server and database addresses, and alert addresses. The standby page shows until the app serves; then the clock appears.
 
 ## Rebuilding the image
 
