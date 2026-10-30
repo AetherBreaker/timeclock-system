@@ -232,7 +232,7 @@ persisted_data/
 # ---- SFT additions ----
 *.svg
 
-# The remote-access client: its password is baked in (docker/kiosk/remote.sh)
+# The remote-access client: its password is baked in (the image copies it to the clock; timeclock-standby's remote.sh)
 *.deb
 
 # The install images: their output (both), and production's scratch and private inputs (the RustDesk client, the logo)
