@@ -40,6 +40,10 @@ services:
       - TIMECLOCK_DB_NAME=${TIMECLOCK_DB_NAME:?}
       - TIMECLOCK_DB_USER=${TIMECLOCK_DB_USER:?}
       - TIMECLOCK_DB_PASSWORD=${TIMECLOCK_DB_PASSWORD:?}
+      # Read by the host (its watcher updates it): which host image channel, and when (timeclock-host).
+      - HOST_UPDATE_CHANNEL=${HOST_UPDATE_CHANNEL:-}
+      - HOST_UPDATE_MODE=${HOST_UPDATE_MODE:-}
+      - HOST_UPDATE_WINDOW=${HOST_UPDATE_WINDOW:-}
     cap_add:
       - NET_ADMIN
     # The clock's own browser runs on the host (timeclock-standby's display) and reaches the app here; loopback only, so
