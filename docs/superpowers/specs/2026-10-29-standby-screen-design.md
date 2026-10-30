@@ -277,7 +277,8 @@ replacing a file over SSH and restarting the unit (owner).
 During startup the app writes its current step to `/app/persisted_data/status/app.json` (host:
 `/data/timeclock_system_files/status/app.json`), atomically (temp file and rename): `{"step": "<display text>",
 "version": "<its version>", "at": "<ISO time>"}`. The text is display-ready, so the app can add or rename steps without
-the status app changing. Steps: loading the local store, starting the fingerprint reader, ready (my call on the cut).
+the status app changing. Steps: connecting to the fingerprint reader, loading the local store, starting the reader, ready (my call on the cut;
+the owner kept the first over a lint limit on `serve()`).
 The VPN comes up in devkit-container before the app starts and is covered by "Starting the time clock".
 
 ### 6.2 Banner

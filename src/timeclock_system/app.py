@@ -51,7 +51,7 @@ def _no_signal_capture(_server: uvicorn.Server) -> Generator[None]:
   yield
 
 
-def serve(project_name: str) -> None:
+def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of every part; splitting it would only scatter it
   """Build every part, then run NiceGUI until the shutdown stops it.
 
   Args:
@@ -62,6 +62,7 @@ def serve(project_name: str) -> None:
   clock = Clock(  # the validator sets the id
     store, instance_id=settings.instance_id or "", clock_number=settings.clock_number, tz=settings.tz, alert=_send_alert
   )
+  write_status(settings.status_dir, "Connecting to the fingerprint reader")  # shown on the host's standby page
   reader = FprintReader()  # a missing reader raises ReaderGone here, uncaught: fatal at startup (R14.7)
 
   # asyncio holds tasks weakly, so every task and scanner-event future is kept here until it finishes, and one
