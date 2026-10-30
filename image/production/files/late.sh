@@ -51,7 +51,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 systemctl enable docker
 
-# The app's persisted folder (docker/compose.yaml): the logo, and the remote-access client the kiosk installs at start.
+# The app's persisted folder (docker/compose.yaml): the logo, and the remote-access client the display installs (remote.sh).
 D=/data/timeclock_system_files
 install -d -m 755 /data "$D" "$D/branding"
 install -m 644 "$S/SFT-Logo-June-2022-color.svg" "$D/branding/"

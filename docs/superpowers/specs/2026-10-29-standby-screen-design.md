@@ -148,7 +148,8 @@ appeared crashed ("Could not find a usable platform module"). Each unit waits un
   session (systemd `PAMName=login` on terminal 7, `XDG_SESSION_TYPE=wayland`) (my call), so it finds it with no stand-in.
   The container's `loginctl` stand-in comes along only if that doesn't work.
 - **Screen sharing**: PipeWire, WirePlumber, xdg-desktop-portal and its wlroots backend as root's user services in that
-  session, the backend set to share the one screen without asking (`chooser_type=none`, as today).
+  session, the backend set to share the one screen without asking (`chooser_type=none`, as today). Debian's PipeWire
+  units refuse root's session (`ConditionUser=!root`); a drop-in lifts that (found on main-warehouse).
 - **Input**: sway picks up RustDesk's virtual keyboard and mouse directly. RustDesk's virtual keyboard can't switch
   terminals (`xkb_options srvrkeys:none` for that device only): a remote Ctrl+Alt+F*n* would take the screen from sway
   and freeze the remote picture until someone switched back (my call).
@@ -171,6 +172,10 @@ appeared crashed ("Could not find a usable platform module"). Each unit waits un
    ignores every switch away from such a terminal: the boot froze on the splash for 11 s on main-warehouse until the
    kiosk freed it.
 3. **Browsers** and **RustDesk**, once sway answers.
+
+Debian's own splash quit (`plymouth-quit.service`) is held off as display managers do (`Conflicts=`, `OnFailure=` on
+the display unit), so only the display quits the splash; run beside it, it put terminal 1 back in text mode and its
+boot messages showed for about 0.9 s (main-warehouse). It still runs if the display fails.
 
 Docker needs no ordering any more (the drop-in that held it behind the standby goes, my call): nothing it starts
 touches the screen.
