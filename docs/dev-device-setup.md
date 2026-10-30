@@ -147,9 +147,9 @@ Once per clock, after the install. timeclock-dev's values are in parentheses.
 2. **Coolify server:** at `coolify-tunnel:<port>`, with Coolify's key in root's `authorized_keys` and the proxy set to **None** (5c).
 3. **Hub:** in wireguard-hub's `peers.toml`, a row `timeclock-system-<INSTANCE_ID>` (`timeclock-system-dev`) with the next free `/32` and `lan = "office"` (`lan = "dev"`); in `rules.v4`, forwards from that address to the log server (TCP 9020) and the backend (TCP 5432); then a hub release.
 4. **Database login,** in the SQL editor: `CREATE ROLE timeclock_clock_<INSTANCE_ID> LOGIN PASSWORD '<random>' IN ROLE timeclock_clocks;` (`timeclock_clock_dev` … `IN ROLE timeclock_test_clocks`).
-5. **On the device:** `sudo mkdir -p /data/timeclock_system_files/branding`, and copy `SFT-Logo-June-2022-color.svg` into `branding/`. Without it the screen shows no logo.
+5. **On the device:** `sudo mkdir -p /data/timeclock_system_files/branding`, and copy `SFT-Logo-June-2022-color.svg` into `branding/`. Without it the screen shows no logo. The boot splash and the display's background take the logo when timeclock-standby's `install.sh` runs, so run it again after adding one (`sudo sh install.sh` from an unpacked release).
    For remote access, also `sudo install -d -m 700 /data/timeclock_system_files/remote` and copy the Sweet Fire Support Desk client into it as `sweetfiresupportdesk.deb` (`sudo install -m 600 …`); it's kept out of git, since its password is baked in. The display installs it at every boot when it changed, and keeps its settings, and so its ID, in `remote/config/`. Without it the clock runs without remote access.
-6. **Coolify application** (Docker Compose, this repository, `docker/compose.yaml`) with these variables, then deploy. Deploys stop the old containers first, which blanks the screen and stops punches, so deploy outside shift changes.
+6. **Coolify application** (Docker Compose, this repository, `docker/compose.yaml`) with these variables, then deploy. Deploys stop the old app first, which shows the standby page and stops punches until the new one serves, so deploy outside shift changes.
 
    | Variable | Value |
    | --- | --- |
