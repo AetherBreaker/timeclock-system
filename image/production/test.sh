@@ -72,7 +72,7 @@ $SSH '
   sudo /usr/sbin/NetworkManager --print-config | grep -A2 "^\[connectivity\]"
   nmcli -t -f NAME,TYPE con; sudo nmcli -g connection.interface-name,802-11-wireless.ssid con show "$(nmcli -t -f NAME,TYPE con | sed -n "s/:802-11-wireless\$//p")" 2>&1
   sudo modprobe -c | grep "^options rtw88_usb"
-  systemctl is-enabled timeclock-watcher timeclock-status timeclock-standby timeclock-tty1 getty@tty1 seatd 2>&1 | paste -sd " "
+  systemctl is-enabled timeclock-watcher timeclock-status timeclock-display timeclock-standby timeclock-clock timeclock-remote timeclock-tty1 getty@tty1 seatd 2>&1 | paste -sd " "
   ls /opt/timeclock-standby /usr/local/sbin/timeclock-watcher; head -3 /etc/timeclock/watcher.conf
   grep -E "^GRUB_(TIMEOUT|TIMEOUT_STYLE|CMDLINE_LINUX_DEFAULT)=" /etc/default/grub; plymouth-set-default-theme
   timedatectl | grep -E "Time zone|NTP service"
