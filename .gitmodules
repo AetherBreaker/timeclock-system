@@ -7,3 +7,6 @@
 [submodule "standby"]
 	path = standby
 	url = https://github.com/AetherBreaker/timeclock-standby
+[submodule "host"]
+	path = host
+	url = https://github.com/AetherBreaker/timeclock-host.git
