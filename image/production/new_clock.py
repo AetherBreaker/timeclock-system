@@ -16,13 +16,14 @@ Every step checks what's already done, so a rerun after a failure carries on whe
 3. coolify-tunnel: the clock's tunnel on the next free port and its line in docker/authorized_keys, pushed and
    redeployed;
 4. Coolify: the server (<hostname>-tunnel:<port>, root, no proxy; Coolify allows one server per address whatever the
-   port, and an ssh rule in Coolify's container sends every *-tunnel name to coolify-tunnel, see its README), validated;
+   port, and an ssh rule in Coolify's container sends every *-tunnel name to coolify-tunnel, see its README), validated,
+   and Docker's coolify network on the clock (Coolify creates it only with a proxy; the application joins it);
 5. the clock's database login, timeclock_clock_<name> in timeclock_clocks, with a random password;
 6. the Coolify application (docker/compose.yaml of this repository, beside timeclock-dev's), its variables filled in:
    the clock's own from the steps above, the shared ones copied from timeclock-dev's application (not PINGKEY or the
    Pushover pair, which the owner sets by hand); named exactly as the
-   hostname, through timeclock-dev's GitHub App, watching docker/**, on the predefined network. Not deployed: Coolify's API can't turn on Consistent
-   Container Names, so that's done in Coolify (Advanced > Container) before the first deploy.
+   hostname, through timeclock-dev's GitHub App, watching docker/**, on the predefined network, with Consistent
+   Container Names on. Not deployed: the owner sets PINGKEY and the Pushover pair first, if wanted.
 The variables stay editable in Coolify; nothing here sets them again once the application exists.
 
 Needs, in .env: COOLIFY_API_TOKEN (a root token). And: ~/.ssh/timeclock_dev (tcadmin's key), `ssh Coolify_Server`,
@@ -222,6 +223,8 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
   else:
     sys.exit(f"Coolify server {peer} isn't reachable and usable after 20 minutes; check it in Coolify, then rerun")
   print(f"  server: {peer} validated")
+  run(*ssh, "sudo docker network inspect coolify >/dev/null 2>&1 || sudo docker network create --attachable coolify")
+  print("  network: coolify on the clock")
 
   # 5. Database login, with a new password (the application doesn't exist yet, so nothing else holds the old one).
   role = f"timeclock_clock_{name.replace('-', '_')}"
@@ -270,6 +273,7 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
     "connect_to_docker_network": True,
   }
   app_uuid = api("POST", "/applications/private-github-app", body)["uuid"]  # pyright: ignore[reportIndexIssue]
+  api("PATCH", f"/applications/{app_uuid}", {"is_consistent_container_name_enabled": True})
   values = {
     "INSTANCE_ID": name,
     "CLOCK_NUMBER": number,
@@ -285,8 +289,7 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
     "PATCH", f"/applications/{app_uuid}/envs/bulk", {"data": [{"key": k, "value": v, "is_preview": False} for k, v in values.items()]}
   )
   print(f"  application: {peer} created ({', '.join(values)})")
-  print(f"done. In Coolify, set {peer}'s {', '.join(sorted(OWNER_ONLY))} if wanted, turn on its Advanced > Container >")
-  print("Consistent Container Names, then deploy it.")
+  print(f"done. In Coolify, set {peer}'s {', '.join(sorted(OWNER_ONLY))} if wanted, then deploy it.")
 
 
 if __name__ == "__main__":
