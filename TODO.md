@@ -45,10 +45,6 @@ Each needs its own design before it's built.
   matcher's detail points circled (failed presses included), in memory only, never saved or logged. Samples on
   2026-10-29 showed ridge cut-offs at the window's left edge counted as detail points, and a faint line across the
   middle of every press.
-- [ ] **A "being updated" screen while the app is down.** When Coolify stops the app to deploy an update, a placeholder
-  screen takes over saying the clock is being updated, so people don't panic when the menu drops. Designed in
-  `docs/superpowers/specs/2026-10-29-standby-screen-design.md` (standby screen, watcher, boot splash); not built yet.
-- [ ] **Investigate kmsvnc for remote servicing.** A VNC server that reads the picture from the graphics hardware, so it
-  shows whatever is on screen (the clock, the standby screen, a text console) and survives terminal switches, unlike
-  RustDesk, which only sees the kiosk. Not packaged for Debian; check that it reads the EliteDesk's Intel framebuffer
-  (its hardware-decoding option), and keep it on local connections, reached through SSH. Raised 2026-10-29.
+- [ ] **Turn the screen off after hours, waking on touch** (owner: later, 2026-10-29). sway can power the display off
+  (`output * power off`); first check on each clock's monitor that its touch panel keeps working while the screen sleeps,
+  and catch the waking touch with an overlay so it doesn't press a key on the page.
