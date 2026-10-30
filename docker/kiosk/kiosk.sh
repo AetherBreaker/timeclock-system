@@ -19,7 +19,10 @@ while :; do
   case "$prev" in 1 | 7) break ;; esac
   sleep 1
 done
-perl -e 'open(T, "<", "/dev/tty0") or die "tty0: $!"; ioctl(T, 0x5606, 1) or die "VT_ACTIVATE: $!";
+# Terminal 1 goes to graphics mode first (KDSETMODE), as seatd sets it a moment later anyway: the kernel then doesn't
+# repaint it as a black text console on the switch, and the screen keeps the standby's last picture until cage draws.
+perl -e 'open(C, "<", "/dev/tty1") or die "tty1: $!"; ioctl(C, 0x4B3A, 1) or die "KDSETMODE: $!";
+  open(T, "<", "/dev/tty0") or die "tty0: $!"; ioctl(T, 0x5606, 1) or die "VT_ACTIVATE: $!";
   ioctl(T, 0x5607, 1) or die "VT_WAITACTIVE: $!"'
 # Remote access waits for cage's Wayland socket, up within a second of this.
 /remote.sh &
