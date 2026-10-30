@@ -42,10 +42,14 @@ services:
       - TIMECLOCK_DB_PASSWORD=${TIMECLOCK_DB_PASSWORD:?}
     cap_add:
       - NET_ADMIN
+    # The clock's own browser runs on the host (timeclock-standby's display) and reaches the app here; loopback only, so
+    # nothing outside the clock can.
+    ports:
+      - "127.0.0.1:8080:8080"
     networks:
       - coolify
     # Fresh heartbeats and the web server answering. The heartbeat files persist across containers, so alone they pass
-    # before a new container serves, and the kiosk (depends_on: service_healthy) would open Firefox too early.
+    # before a new container serves.
     healthcheck:
       test:
         - CMD-SHELL
@@ -55,32 +59,6 @@ services:
           && /app/.venv/bin/python -c "import urllib.request;
           urllib.request.urlopen('http://localhost:8080/favicon.ico', timeout=3)"
       start_period: 90s
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-  kiosk:
-    build:
-      context: .
-      dockerfile: docker/kiosk/Dockerfile
-    restart: unless-stopped
-    privileged: true
-    volumes:
-      - /dev:/dev
-      # Remote access: the RustDesk client package (kept out of git) and its settings (docker/kiosk/remote.sh).
-      - /data/timeclock_system_files/remote:/remote
-    environment:
-      - KIOSK_URL=http://timeclock-system:8080/?kiosk  # `?kiosk`: only this browser hides the cursor (page.py)
-    depends_on:
-      timeclock-system:
-        condition: service_healthy
-    networks:
-      - coolify
-    # The compositor and the browser are running; a Firefox exit ends cage and the container anyway, so this mostly
-    # gives Coolify a health status (the image has grep, not pgrep).
-    healthcheck:
-      test: ["CMD-SHELL", "grep -qsx cage /proc/[0-9]*/comm && grep -qsx firefox-esr /proc/[0-9]*/comm"]
-      start_period: 30s
       interval: 30s
       timeout: 5s
       retries: 3
