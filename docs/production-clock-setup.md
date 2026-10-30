@@ -102,8 +102,8 @@ shell syntax, so Git's and Windows' `ssh.exe` both run it. `Coolify_Server` is t
 
    The variables stay editable in the application's settings in Coolify.
 7. **A different wifi network** than the image's: over SSH while still wired,
-   `sudo nmcli dev wifi connect "<network>" password "<password>"`. It reconnects after every reboot. Wired stays the
-   better choice for a clock.
+   `sudo nmcli dev wifi connect "<network>" password "<password>"`. It reconnects after every reboot. Wifi is a clock's
+   normal connection; the cable is for emergencies and troubleshooting.
 
 ## Rebuilding the image
 
