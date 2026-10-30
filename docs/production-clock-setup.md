@@ -26,9 +26,8 @@ Everything the test image does except the test tools (fprintd, libinput-tools), 
   on the test device (dev-device-setup.md, "What the image
   sets up" and "Servicing"): the splash shows the logo, and nobody using the clock sees Linux text.
 - `tcadmin` / `timeclock` at the console, SSH by the workstation's key (`~/.ssh/timeclock_dev`), passwordless sudo.
-  The workstation's `~/.ssh/config` has one entry for every clock, so `ssh timeclock-system-<name>` reaches any of them:
-  `Host timeclock-system-*` with `HostName %h.local`, `User tcadmin`, `IdentityFile ~/.ssh/timeclock_dev` and
-  `IdentitiesOnly yes`.
+  The workstation reaches a clock through its Coolify tunnel, whatever network the clock is on; over the local network
+  (`<hostname>.local`, with a cable into the clock) only as the backup ("Once: the workstation's SSH config", below).
 
 The ISO holds the remote-access client, so it stays in the gitignored `image/production/out/`.
 
@@ -42,6 +41,32 @@ In Coolify, **Keys & Tokens → API tokens**, create one with **root** permissio
 Coolify reaches each clock at `<hostname>-tunnel:<port>`: it allows only one server per address whatever the port, and
 an ssh rule mounted into Coolify's own container sends every `*-tunnel` name to coolify-tunnel. Set up per the
 coolify-tunnel README, "Coolify's ssh rule".
+
+## Once: the workstation's SSH config
+
+`ssh timeclock-system-<name>` goes through the clock's tunnel: a throwaway busybox container on the VPS's `coolify`
+network relays to coolify-tunnel, which holds the clock's port (busybox is already there for Coolify's error pages;
+nothing is set up on the VPS host). `ssh timeclock-system-<name>.local` is the backup, over the local network. In
+`~/.ssh/config`, beside each clock's own entry (`new_clock.py` prints it: the tunnel port, and its host key by name):
+
+```sshconfig
+# The backup, over the local network (a cable plugged into the clock): ssh timeclock-system-<name>.local
+Host timeclock-system-*.local
+  ProxyCommand none
+  User tcadmin
+  IdentityFile ~/.ssh/timeclock_dev
+  IdentitiesOnly yes
+
+# The main way in, through the clock's tunnel on the Coolify VPS: ssh timeclock-system-<name>
+Host timeclock-system-*
+  ProxyCommand ssh -q Coolify_Server docker run --rm -i --network coolify busybox:musl nc coolify-tunnel %p
+  User tcadmin
+  IdentityFile ~/.ssh/timeclock_dev
+  IdentitiesOnly yes
+```
+
+ssh takes each setting from the first block that matches, so the `.local` block comes first. The relay command has no
+shell syntax, so Git's and Windows' `ssh.exe` both run it. `Coolify_Server` is the workstation's entry for the VPS.
 
 ## Per clock
 
@@ -70,7 +95,8 @@ coolify-tunnel README, "Coolify's ssh rule".
    variable filled in except `PINGKEY`, `ALERTS_PUSHOVER_TOKEN` and `ALERTS_PUSHOVER_USER_KEY`, watch paths
    `docker/**`, on the predefined network (it creates Docker's `coolify` network on the clock), Consistent Container
    Names on. It takes up to twenty minutes, mostly Coolify's validation. If a step fails, fix the cause and run it
-   again: done steps are skipped.
+   again: done steps are skipped. It ends by printing the clock's entry for the workstation's `~/.ssh/config`; add
+   it, and `ssh timeclock-system-<name>` goes through the tunnel from then on.
 6. **In Coolify**, on the new application: set `PINGKEY` (the healthchecks.io ping key; empty means no heartbeat
    ping) and the Pushover pair if wanted, then **Deploy**.
 

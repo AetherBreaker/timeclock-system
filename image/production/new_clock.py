@@ -24,7 +24,9 @@ Every step checks what's already done, so a rerun after a failure carries on whe
    Pushover pair, which the owner sets by hand); named exactly as the
    hostname, through timeclock-dev's GitHub App, watching docker/**, on the predefined network, with Consistent
    Container Names on. Not deployed: the owner sets PINGKEY and the Pushover pair first, if wanted.
-The variables stay editable in Coolify; nothing here sets them again once the application exists.
+The variables stay editable in Coolify; nothing here sets them again once the application exists. It ends by printing
+the clock's entry for the workstation's ~/.ssh/config (docs/production-clock-setup.md, "Once: the workstation's SSH
+config"), so `ssh <hostname>` goes through the tunnel.
 
 Needs, in .env: COOLIFY_API_TOKEN (a root token). And: ~/.ssh/timeclock_dev (tcadmin's key), `ssh Coolify_Server`,
 the wireguard-hub checkout beside this one (read only), and the coolify-tunnel one with push access.
@@ -290,6 +292,8 @@ def main() -> None:  # noqa: C901, D103, PLR0912, PLR0915 - one linear checklist
   )
   print(f"  application: {peer} created ({', '.join(values)})")
   print(f"done. In Coolify, set {peer}'s {', '.join(sorted(OWNER_ONLY))} if wanted, then deploy it.")
+  # The host key is checked under the name this run reached the clock by, which accept-new above recorded.
+  print(f"\nAdd to ~/.ssh/config, so `ssh {peer}` goes through the tunnel:\n\nHost {peer}\n  Port {port}\n  HostKeyAlias {host}")
 
 
 if __name__ == "__main__":
