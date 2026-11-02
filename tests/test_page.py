@@ -357,7 +357,7 @@ async def test_the_version_shows_in_the_corner(controller: KioskController, tmp_
 @pytest.mark.parametrize(
   ("os_release", "suffix"),
   [
-    ("ID=fedora\nIMAGE_ID=timeclock-host\nIMAGE_VERSION='0.1.0'\nBUILD_ID=2026-11-09\n", " · host 0.1.0 (Nov 9)"),
+    ("ID=fedora\nIMAGE_ID=timeclock-host\nIMAGE_VERSION='0.1.0'\nBUILD_ID=2026-11-09\n", " · host 0.1.0 (Nov 9, 2026)"),
     ("ID=fedora\nIMAGE_ID=timeclock-host\nIMAGE_VERSION=dev\n", " · host dev"),
     ('ID=debian\nVERSION_ID="13"\n', ""),
     (None, ""),
