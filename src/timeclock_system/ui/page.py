@@ -165,7 +165,7 @@ class _KioskPage:
       self._version_text += f" · host {host}"
       with contextlib.suppress(ValueError):
         built = date.fromisoformat(fields.get("BUILD_ID", ""))
-        self._version_text += f" ({built:%b} {built.day})"
+        self._version_text += f" ({built:%b} {built.day}, {built.year})"
     self._logo_checked = False
     self._shown: Screen | None = None  # what `screen` last drew; one page instance serves every client
     self._banner_shown: str | None = None
