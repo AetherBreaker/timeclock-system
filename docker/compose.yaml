@@ -17,6 +17,12 @@ services:
       - type: bind
         source: /dev/bus/usb
         target: /dev/bus/usb
+      # The host's os-release (every host has one): timeclock-host stamps its version there, which the app shows
+      # beside its own.
+      - type: bind
+        source: /etc/os-release
+        target: /run/host/os-release
+        read_only: true
     device_cgroup_rules:
       - c 189:* rmw
     environment:

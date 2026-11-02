@@ -4,10 +4,12 @@
 """
 
 # Standard library imports
+import contextlib
 import inspect
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from importlib.metadata import version
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 # Third party imports
@@ -44,7 +46,6 @@ from timeclock_system.ui.controller import (
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Callable
-  from pathlib import Path
   from zoneinfo import ZoneInfo
 
   # Third party imports
@@ -57,6 +58,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 LOGO_FILE = "SFT-Logo-June-2022-color.svg"
+# The host's os-release, mounted read-only by the compose file: timeclock-host stamps its version there.
+HOST_OS_RELEASE = Path("/run/host/os-release")
 _THEME_CSS = """
 :root { --sft-yellow: #F9E60D; --sft-red: #ED1A2C; --sft-black: #161514; --sft-white: #FFFFFF; --sft-green: #2E7D32;
   --sft-blue: #298DF0; --sft-orange: #FB8C00; --sft-read-green: #43A047; }
@@ -116,6 +119,7 @@ def build_root(
   tz: ZoneInfo,
   branding_dir: Path,
   on_error: Callable[[Exception], None],
+  host_os_release: Path = HOST_OS_RELEASE,
 ) -> Callable[[], None]:
   """Return the page's root function for `ui.run(root=…)`.
 
@@ -125,8 +129,9 @@ def build_root(
     tz: The business's zone, for displayed times.
     branding_dir: Where the logo SVGs live on the device (R39.1).
     on_error: Gets any exception from a button, tap or key; NiceGUI alone would only log it.
+    host_os_release: The host's os-release, for the host image's version beside the app's.
   """
-  return _KioskPage(controller, status, tz, branding_dir, on_error).root
+  return _KioskPage(controller, status, tz, branding_dir, on_error, host_os_release=host_os_release).root
 
 
 class _KioskPage:
@@ -139,12 +144,28 @@ class _KioskPage:
     tz: ZoneInfo,
     branding_dir: Path,
     on_error: Callable[[Exception], None],
+    *,
+    host_os_release: Path,
   ) -> None:
     self._controller = controller
     self._on_error = on_error
     self._status = status
     self._tz = tz
     self._branding_dir = branding_dir
+    # The host image's version beside the app's, where timeclock-host stamped the host's os-release (IMAGE_ID,
+    # IMAGE_VERSION, and BUILD_ID, the build date); any other host shows the app's alone. Read once: a host update
+    # restarts the container.
+    self._version_text = f"v{version('timeclock-system')}"
+    try:
+      lines = host_os_release.read_text(encoding="utf-8").splitlines()
+    except OSError:
+      lines = []
+    fields = {key: value.strip("'\"") for key, _, value in (line.partition("=") for line in lines)}
+    if fields.get("IMAGE_ID") == "timeclock-host" and (host := fields.get("IMAGE_VERSION")):
+      self._version_text += f" · host {host}"
+      with contextlib.suppress(ValueError):
+        built = date.fromisoformat(fields.get("BUILD_ID", ""))
+        self._version_text += f" ({built:%b} {built.day})"
     self._logo_checked = False
     self._shown: Screen | None = None  # what `screen` last drew; one page instance serves every client
     self._banner_shown: str | None = None
@@ -175,9 +196,9 @@ class _KioskPage:
     ui.keyboard(on_key=self._on_key)
 
     clock_label = ui.label().classes("fixed top-2 right-4 text-xl")
-    # Small and dim: for whoever services the clock, telling which release it runs. The very bottom-left corner, below
-    # the reader line.
-    ui.label(f"v{version('timeclock-system')}").classes("fixed bottom-2 left-4 text-sm opacity-50").mark("version")
+    # Small and dim: for whoever services the clock, telling which releases it runs (the app's, and the host image's).
+    # The very bottom-left corner, below the reader line.
+    ui.label(self._version_text).classes("fixed bottom-2 left-4 text-sm opacity-50").mark("version")
     self.indicator()
     self.banner()
     self.screen()

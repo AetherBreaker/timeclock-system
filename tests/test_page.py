@@ -354,6 +354,29 @@ async def test_the_version_shows_in_the_corner(controller: KioskController, tmp_
     await user.should_see(f"v{version('timeclock-system')}")
 
 
+@pytest.mark.parametrize(
+  ("os_release", "suffix"),
+  [
+    ("ID=fedora\nIMAGE_ID=timeclock-host\nIMAGE_VERSION='0.1.0'\nBUILD_ID=2026-11-09\n", " · host 0.1.0 (Nov 9)"),
+    ("ID=fedora\nIMAGE_ID=timeclock-host\nIMAGE_VERSION=dev\n", " · host dev"),
+    ('ID=debian\nVERSION_ID="13"\n', ""),
+    (None, ""),
+  ],
+  ids=["timeclock-host", "no-build-date", "another-host", "not-mounted"],
+)
+async def test_the_host_version_shows_beside_the_apps(
+  controller: KioskController, tmp_path: Path, os_release: str | None, suffix: str
+) -> None:
+  path = tmp_path / "os-release"
+  if os_release is not None:
+    path.write_text(os_release, encoding="utf-8")
+  root = build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error, host_os_release=path)
+  async with user_simulation(root) as user:
+    await user.open("/")
+    [label] = user.find(marker="version").elements
+    assert label.text == f"v{version('timeclock-system')}{suffix}"  # pyright: ignore[reportAttributeAccessIssue]
+
+
 async def fingerprints_as(controller: KioskController, username: str) -> None:
   await controller.gear()
   await controller.open_fingerprints()
