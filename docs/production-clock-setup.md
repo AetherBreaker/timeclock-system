@@ -84,6 +84,22 @@ The same steps. Before step 5, `ssh-keygen -R timeclock-system-<name>.local` (th
 deploys the application. The clock gets a new RustDesk ID unless its old `remote/config` folder is copied back into
 `/data/timeclock_system_files/remote/`.
 
+## Test clocks
+
+A clock's database decides whether it's in production: a clock whose application has
+`TIMECLOCK_DB_NAME=timeclock_test` is a test clock, safe to test anything on; a clock on `timeclock` is in production.
+The test database's employees are a copy of production's (same IDs and PINs), so anyone can test with their own login.
+
+To make a clock a test clock (or the reverse, with `timeclock` and `timeclock_clocks`):
+
+1. In the SQL editor, a login for it in the test group:
+   `CREATE ROLE timeclock_clock_<name>_test LOGIN PASSWORD '<random>' IN ROLE timeclock_test_clocks;` and
+   `ALTER ROLE timeclock_clock_<name> NOLOGIN;` for its production one.
+2. In Coolify, its `TIMECLOCK_DB_NAME`, `TIMECLOCK_DB_USER` and `TIMECLOCK_DB_PASSWORD`.
+3. Over SSH, stop its app and clear its local store, which holds the other database's rows:
+   `sudo docker stop <container>`, then `sudo rm /data/timeclock_system_files/timeclock.sqlite3*`.
+4. Redeploy it in Coolify.
+
 ## Host updates
 
 The image is published as `ghcr.io/aetherbreaker/timeclock-host`, with two channels: `:latest` (every release) and
