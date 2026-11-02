@@ -62,7 +62,7 @@ then run `new_clock.py` from the workstation.
 5. **From the workstation**, in the timeclock-host checkout:
 
    ```powershell
-   uv run install/new_clock.py timeclock-system-<name>.local
+   uv run install/new_clock.py timeclock-system-<name>.local   # a test clock: --test before the host
    ```
 
    It checks the clock runs the host image and the hub enrolment against the pinned release, opens its Coolify tunnel
