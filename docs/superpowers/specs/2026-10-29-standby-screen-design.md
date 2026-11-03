@@ -79,16 +79,16 @@ Functionally only the app's faults matter; anything else is visual and gone by t
 
 ## 2. The pieces
 
-| Piece | Where it runs | Language | Changes how often |
-| --- | --- | --- | --- |
-| **Display**: sway on terminal 7, in a login session | host, systemd, root | config (my call) | rarely |
-| **Standby browser**: cog on the status page | host, systemd | config | rarely |
-| **Clock browser**: cog on the clock app | host, systemd | config + a small wrapper | rarely |
-| **Remote access**: RustDesk's service and the screen-sharing stack | host, systemd | the vendor package | with the package |
-| **Watcher**: decides which window shows | host, systemd, root | Rust (owner) | written once, then frozen (owner) |
-| **Status app**: live status, the standby page, the banner | host, systemd, root | Python (owner), the host's Python 3, standard library only | often; edited on the clock when debugging (owner) |
-| **Clock app** (existing) | container (Coolify) | Python | writes its status, shows the banner, publishes its port to the host (§6) |
-| **Boot**: GRUB hidden, Plymouth splash, quiet console | host | image config | rarely |
+| Piece                                                              | Where it runs       | Language                                                   | Changes how often                                                        |
+| ------------------------------------------------------------------ | ------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------ |
+| **Display**: sway on terminal 7, in a login session                | host, systemd, root | config (my call)                                           | rarely                                                                   |
+| **Standby browser**: cog on the status page                        | host, systemd       | config                                                     | rarely                                                                   |
+| **Clock browser**: cog on the clock app                            | host, systemd       | config + a small wrapper                                   | rarely                                                                   |
+| **Remote access**: RustDesk's service and the screen-sharing stack | host, systemd       | the vendor package                                         | with the package                                                         |
+| **Watcher**: decides which window shows                            | host, systemd, root | Rust (owner)                                               | written once, then frozen (owner)                                        |
+| **Status app**: live status, the standby page, the banner          | host, systemd, root | Python (owner), the host's Python 3, standard library only | often; edited on the clock when debugging (owner)                        |
+| **Clock app** (existing)                                           | container (Coolify) | Python                                                     | writes its status, shows the banner, publishes its port to the host (§6) |
+| **Boot**: GRUB hidden, Plymouth splash, quiet console              | host                | image config                                               | rarely                                                                   |
 
 Everything on the host lives in the **`timeclock-standby` repository** (owner), a submodule at `standby/`, with its own
 releases. The name stays though it now holds the whole display (my call: a rename is churn for nothing). The only
@@ -204,15 +204,15 @@ sway's control socket (showing or hiding the clock window) and, for consoles, th
 
 ### 4.1 What it observes
 
-| Observation | How |
-| --- | --- |
-| Which terminal is showing | `/sys/class/tty/tty0/active`, waited on with `poll` for changes |
-| Whether sway's terminal is claimed | `KDGETMODE` on `/dev/tty7`: graphics mode |
-| Whether the clock window exists and shows | sway's tree (`GET_TREE` over its control socket): the window with the clock's app id, in the scratchpad or not |
-| Keyboard and touch input | every `/dev/input/event*`, read without grabbing; rescanned for hotplug |
-| Ctrl+Alt+F*n* presses | the same input events: F*n* down while Ctrl and Alt are held |
-| **Clock live** | a process of the clock browser's unit (its cgroup, `timeclock-clock.service`) holds an ESTABLISHED TCP connection to the app's port (8080), **the same connection (socket inode) in two checks at least 1 s apart**: its socket inodes matched in `/proc/net/tcp` and `tcp6`. Per process, not per port: the status app's own favicon probe also connects to 8080. Held, not merely seen: Docker's port proxy accepts a connection before the app listens and closes it when the app refuses, so the start page's probe and the page's reconnect attempts make brief connections while a new app starts (my call, from the review). The clock page keeps its connection open while it works and loses it within seconds when the app stops (to confirm, §10). |
-| **Deploy running** (deploy-start mode only) | a running container whose image repository is `coollabsio/coolify-helper`, via the Docker API on `/var/run/docker.sock`, every 2 s. Coolify's `sentinel` container also runs permanently and must not match. |
+| Observation                                 | How                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Which terminal is showing                   | `/sys/class/tty/tty0/active`, waited on with `poll` for changes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Whether sway's terminal is claimed          | `KDGETMODE` on `/dev/tty7`: graphics mode                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Whether the clock window exists and shows   | sway's tree (`GET_TREE` over its control socket): the window with the clock's app id, in the scratchpad or not                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Keyboard and touch input                    | every `/dev/input/event*`, read without grabbing; rescanned for hotplug                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Ctrl+Alt+F*n* presses                       | the same input events: F*n* down while Ctrl and Alt are held                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Clock live**                              | a process of the clock browser's unit (its cgroup, `timeclock-clock.service`) holds an ESTABLISHED TCP connection to the app's port (8080), **the same connection (socket inode) in two checks at least 1 s apart**: its socket inodes matched in `/proc/net/tcp` and `tcp6`. Per process, not per port: the status app's own favicon probe also connects to 8080. Held, not merely seen: Docker's port proxy accepts a connection before the app listens and closes it when the app refuses, so the start page's probe and the page's reconnect attempts make brief connections while a new app starts (my call, from the review). The clock page keeps its connection open while it works and loses it within seconds when the app stops (to confirm, §10). |
+| **Deploy running** (deploy-start mode only) | a running container whose image repository is `coollabsio/coolify-helper`, via the Docker API on `/var/run/docker.sock`, every 2 s. Coolify's `sentinel` container also runs permanently and must not match.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 sway's control socket is a fixed path (`SWAYSOCK`, set by the display unit) (my call). The watcher speaks sway's IPC
 directly (a small binary framing over a Unix socket), standard library only.
@@ -290,20 +290,20 @@ docker_socket = /var/run/docker.sock
 
 The status app collects everything; the watcher collects nothing (owner).
 
-| Mode | Steps | Source |
-| --- | --- | --- |
-| starting | Starting up | the status app running |
-| | Connecting to the network | NetworkManager connectivity |
-| | Starting Docker | `docker.service` state |
-| | Starting the time clock | the app container started (Docker events) |
-| | *the app's own steps* | the app's status file (§6.1) |
-| | Opening the clock | the app serving (`/favicon.ico`), then the clock live (§4.1) |
-| updating | Preparing an update | Coolify's helper container appeared |
-| | Building version X | a new app image appeared; its version label (§6.3) |
-| | Stopping the old version | the old app container stopping |
-| | Starting version X | the new app container started |
-| | *the app's own steps* | the app's status file |
-| | Opening the clock | as above |
+| Mode     | Steps                     | Source                                                       |
+| -------- | ------------------------- | ------------------------------------------------------------ |
+| starting | Starting up               | the status app running                                       |
+|          | Connecting to the network | NetworkManager connectivity                                  |
+|          | Starting Docker           | `docker.service` state                                       |
+|          | Starting the time clock   | the app container started (Docker events)                    |
+|          | *the app's own steps*     | the app's status file (§6.1)                                 |
+|          | Opening the clock         | the app serving (`/favicon.ico`), then the clock live (§4.1) |
+| updating | Preparing an update       | Coolify's helper container appeared                          |
+|          | Building version X        | a new app image appeared; its version label (§6.3)           |
+|          | Stopping the old version  | the old app container stopping                               |
+|          | Starting version X        | the new app container started                                |
+|          | *the app's own steps*     | the app's status file                                        |
+|          | Opening the clock         | as above                                                     |
 
 Unchanged otherwise: a deploy's steps are collected from the moment the helper appears whatever the flip mode;
 updating vs starting decided from Docker's events on the clock; the app container found by its compose service label;

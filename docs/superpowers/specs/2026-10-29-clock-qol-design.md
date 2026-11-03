@@ -26,14 +26,14 @@
 On any PIN pad (username or PIN field), a recognized finger does what it would have done on the screen before Use PIN;
 digits already typed are discarded.
 
-| Pad | Recognized finger |
-| --- | --- |
-| Idle's Use PIN (login) | Opens that person's punch menu |
-| Admin reconfirm | Own finger: admin menu. Anyone else's: their punch menu |
-| Rescan (admins, PIN-only employees) | Own finger: records the punch. Anyone else's: their punch menu |
-| Manager override | A manager's: approves. Anyone else's: back to the override prompt with "A manager must authorize this", as a non-manager's PIN does |
-| Admin approval | An admin's: approves. Anyone else's: back to the approval prompt with "An admin must approve this", as a non-admin's PIN does |
-| Fingerprints login | Opens that person's fingerprint options; changes still need an admin's approval |
+| Pad                                 | Recognized finger                                                                                                                   |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Idle's Use PIN (login)              | Opens that person's punch menu                                                                                                      |
+| Admin reconfirm                     | Own finger: admin menu. Anyone else's: their punch menu                                                                             |
+| Rescan (admins, PIN-only employees) | Own finger: records the punch. Anyone else's: their punch menu                                                                      |
+| Manager override                    | A manager's: approves. Anyone else's: back to the override prompt with "A manager must authorize this", as a non-manager's PIN does |
+| Admin approval                      | An admin's: approves. Anyone else's: back to the approval prompt with "An admin must approve this", as a non-admin's PIN does       |
+| Fingerprints login                  | Opens that person's fingerprint options; changes still need an admin's approval                                                     |
 
 The new employee's PIN pad is unchanged: it isn't a login, and a finger there is ignored.
 
@@ -48,16 +48,16 @@ it still changes for its other news, as today.
 
 **Icon and status: live only, never on a timer** (the one floor is the failed read's 1 s).
 
-| Reader | Icon | Status |
-| --- | --- | --- |
-| Waiting for a finger | Yellow | "Ready" |
-| Finger down, being read | Blue | "Keep your finger down" (at login too, however briefly) |
-| Read succeeded, finger still down | Green, ending when the finger lifts | "Lift your finger" |
-| Login scan read but matched nobody, finger still down | Orange, ending when the finger lifts | "Lift your finger" |
-| Read failed | Red, until the reader is waiting for a finger again, at least 1 s | "Couldn't read that, try again" |
-| Paused itself (too hot) | Red | "Reader paused" |
-| Not taking scans (the gap after a scan) | Dim | None |
-| Asleep outside business hours | Dim | "Tap to wake the reader" |
+| Reader                                                | Icon                                                              | Status                                                  |
+| ----------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------- |
+| Waiting for a finger                                  | Yellow                                                            | "Ready"                                                 |
+| Finger down, being read                               | Blue                                                              | "Keep your finger down" (at login too, however briefly) |
+| Read succeeded, finger still down                     | Green, ending when the finger lifts                               | "Lift your finger"                                      |
+| Login scan read but matched nobody, finger still down | Orange, ending when the finger lifts                              | "Lift your finger"                                      |
+| Read failed                                           | Red, until the reader is waiting for a finger again, at least 1 s | "Couldn't read that, try again"                         |
+| Paused itself (too hot)                               | Red                                                               | "Reader paused"                                         |
+| Not taking scans (the gap after a scan)               | Dim                                                               | None                                                    |
+| Asleep outside business hours                         | Dim                                                               | "Tap to wake the reader"                                |
 
 **Message: the one thing that lingers.**
 
