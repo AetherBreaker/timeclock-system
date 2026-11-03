@@ -37,7 +37,7 @@
     "ruff>=0.15",
     "timeclock-backend",
     "tombi>=1.5",
-  ]                                # setup-project added: "devkit-claude-hooks", "devkit-poe-complete", "poethepoet>=0.46.0", "pyright>=1.1.411", "pytest>=8.0", "pytest-asyncio>=0.24", "pytest-cov>=5.0", "ruff>=0.15", "tombi>=1.5"
+  ]                                   # setup-project added: "devkit-claude-hooks", "devkit-poe-complete", "poethepoet>=0.46.0", "pyright>=1.1.411", "pytest>=8.0", "pytest-asyncio>=0.24", "pytest-cov>=5.0", "ruff>=0.15", "tombi>=1.5"
 
 [build-system]
   requires      = ["uv_build>=0.11.2,<0.12.0"]
@@ -112,9 +112,9 @@
 
   executionEnvironments = [{ root = "src", extraPaths = ["src"] }]
 
-  # backend/, schema/ and standby/ are submodules with their own environments and checks. Setting exclude replaces
-  # pyright's defaults, so they're restated.
-  exclude = ["backend", "schema", "standby", "**/node_modules", "**/__pycache__", "**/.*"]
+  # backend/, host/, schema/ and standby/ are submodules with their own environments and checks (ruff and tombi skip
+  # them too). Setting exclude replaces pyright's defaults, so they're restated.
+  exclude = ["backend", "host", "schema", "standby", "**/node_modules", "**/__pycache__", "**/.*"]
 
 [tool.pytest.ini_options]
   addopts      = [
@@ -135,6 +135,11 @@
   src       = ["./src", "../*/src", "../*/python"]
 
   exclude = [
+    # The submodules: their own projects and checks (with fix on, ours rewrote their files).
+    "backend",
+    "host",
+    "schema",
+    "standby",
     ".bzr",
     ".direnv",
     ".eggs",
@@ -229,6 +234,11 @@
 
   [tool.tombi.files]
     exclude = [
+      # The submodules: their own projects and checks.
+      "backend",
+      "host",
+      "schema",
+      "standby",
       ".bzr",
       ".direnv",
       ".eggs",
@@ -272,4 +282,4 @@
     devkit-container    = [{ index = "SFTPyPI" }]
     devkit-claude-hooks = [{ index = "SFTPyPI" }]
     devkit-poe-complete = [{ index = "SFTPyPI" }]
-timeclock-backend = { path = "backend", editable = true }
+    timeclock-backend   = { path = "backend", editable = true }
