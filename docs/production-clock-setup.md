@@ -47,8 +47,11 @@ then run `new_clock.py` from the workstation.
 ## Per clock
 
 1. **Write the stick** with `out/timeclock-install.iso` (Rufus in DD image mode, or balenaEtcher).
-2. **BIOS** as for the test device ([dev-device-setup.md](dev-device-setup.md), 2), and legacy support off: the clock
-   starts the UEFI way only, where it keeps its firmware boot entries up to date.
+2. **BIOS** (F10 at power-on):
+   - **Advanced → Boot Options:** UEFI boot on, USB boot on.
+   - Legacy support off: the clock starts the UEFI way only, where it keeps its firmware boot entries up to date.
+   - **Advanced → Power-On Options → After Power Loss: Power On**, so the clock comes back by itself after an outage.
+   - Secure Boot as it is. If the clock drifts or resets while unplugged, replace the CMOS battery (CR2032).
 3. **Install:** network cable plugged in; boot the stick (F9). On its screen, enter the clock name and number, check the
    drives it lists, and type `yes` to erase them. The stick can stay in. The clock restarts, sets itself up, and
    restarts once more into the timeclock system: the logo, then the standby screen, which waits for setup.
@@ -119,3 +122,20 @@ tries that release again. **Promote a release** to `:stable`:
 ```powershell
 docker buildx imagetools create --tag ghcr.io/aetherbreaker/timeclock-host:stable ghcr.io/aetherbreaker/timeclock-host@sha256:<digest>
 ```
+
+## Servicing
+
+- **A console at the clock:** Ctrl+Alt+F2 (to F6) gives a login prompt (`tcadmin`, the stick's console password). The
+  screen watcher leaves it alone until 2 minutes pass with no keyboard or touch input, then puts back the screen;
+  Ctrl+Alt+F7 returns to it at once. A console login logs out by itself after 5 minutes idle.
+- **The boot menu:** hold Esc while the clock boots.
+- **The standby page from the workstation:** `ssh -L 8091:127.0.0.1:8091 timeclock-system-<name>`, then
+  `http://localhost:8091/`.
+- **Settings:** `/etc/timeclock/watcher.conf` (the screen watcher; `flip = deploy-start` shows the standby as soon as
+  a deploy starts, not when the old app stops) and `/etc/timeclock/standby.conf` (the status app); every key and its
+  default is in each file. Restart `timeclock-watcher` or `timeclock-status` after a change.
+- **The display's parts** are systemd units: `timeclock-display` (sway), `timeclock-standby` and `timeclock-clock`
+  (the two browsers), `timeclock-status`, `timeclock-watcher`, and `sweetfiresupportdesk` (RustDesk). `journalctl -u
+  <unit>` for each; restarting `timeclock-clock` reloads the clock with nobody seeing it (it's hidden until live).
+- **The display's files** are in the host image, so a change ships in a host release. To try one on a test clock,
+  `sudo bootc usr-overlay` makes `/usr` writable until the next restart.
