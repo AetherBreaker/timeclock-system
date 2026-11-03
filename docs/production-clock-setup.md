@@ -79,9 +79,8 @@ then run `new_clock.py` from the workstation.
 
 ## Reinstalling a clock
 
-The same steps. Before step 5, `ssh-keygen -R timeclock-system-<name>.local` (the reinstall has a new SSH host key).
-`new_clock.py` keeps the clock's Coolify application as it is, registers its new tunnel key, validates the server and
-deploys the application. The clock gets a new RustDesk ID unless its old `remote/config` folder is copied back into
+The same steps. `new_clock.py` drops the clock's old SSH host key (the reinstall makes a new one), keeps its Coolify
+application as it is, registers its new tunnel key, validates the server and deploys the application. The clock gets a new RustDesk ID unless its old `remote/config` folder is copied back into
 `/data/timeclock_system_files/remote/`.
 
 ## Test clocks
