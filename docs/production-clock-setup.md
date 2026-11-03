@@ -47,7 +47,8 @@ then run `new_clock.py` from the workstation.
 ## Per clock
 
 1. **Write the stick** with `out/timeclock-install.iso` (Rufus in DD image mode, or balenaEtcher).
-2. **BIOS** as for the test device ([dev-device-setup.md](dev-device-setup.md), 2).
+2. **BIOS** as for the test device ([dev-device-setup.md](dev-device-setup.md), 2), and legacy support off: the clock
+   starts the UEFI way only, where it keeps its firmware boot entries up to date.
 3. **Install:** network cable plugged in; boot the stick (F9). On its screen, enter the clock name and number, check the
    drives it lists, and type `yes` to erase them. The stick can stay in. The clock restarts, sets itself up, and
    restarts once more into the timeclock system: the logo, then the standby screen, which waits for setup.
