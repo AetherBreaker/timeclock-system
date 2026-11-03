@@ -232,14 +232,9 @@ persisted_data/
 # ---- SFT additions ----
 *.svg
 
-# The remote-access client: its password is baked in (the image copies it to the clock; timeclock-standby's remote.sh)
+# The remote-access client: its password is baked in
 *.deb
 
-# The install images: their output (both), and production's scratch and private inputs (the RustDesk client, the logo)
-image/dev-device/out/
-image/production/out/
-image/production/work/
-image/production/private/
 /docs/superpowers/plans
 # Fingerprint images captured for review; never committed
 fingerprint-samples/
