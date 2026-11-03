@@ -73,7 +73,8 @@ then run `new_clock.py` from the workstation.
    (its key line in coolify-tunnel, which it redeploys), adds and validates the Coolify server, puts RustDesk's client
    on the clock, creates its database login, then creates the Coolify application: named exactly as the hostname,
    every variable filled in except `PINGKEY`, `ALERTS_PUSHOVER_TOKEN` and `ALERTS_PUSHOVER_USER_KEY`, host updates on
-   `:stable` in a 03:00 window, watch paths `docker/**`, on the predefined network, Consistent Container Names on. It
+   `:stable` in a 03:00 window, watch path `docker/compose.yaml` (so only a release, whose pin changes that file,
+   deploys it), on the predefined network, Consistent Container Names on. It
    takes up to twenty minutes, mostly Coolify's validation. If a step fails, fix the cause and run it again: done steps
    are skipped. Add the SSH config entry it prints.
 6. **In Coolify**, on the new application: set `PINGKEY` (the healthchecks.io ping key; empty means no heartbeat ping)
