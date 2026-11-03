@@ -17,7 +17,8 @@ then run `new_clock.py` from the workstation.
 - The wifi network the stick was built with, on any wifi device, beside the cable: traffic goes over the cable and moves
   to wifi when the cable loses its link or its internet.
 - At its first boot the clock mirrors its drives, then switches to the host image's `:stable` channel and restarts into
-  it (a few minutes, with internet).
+  it (a few minutes, with internet). It says on screen what it's doing, every 15 seconds: the network's state while
+  there's no internet, then how much it has downloaded.
 
 ## Once
 
