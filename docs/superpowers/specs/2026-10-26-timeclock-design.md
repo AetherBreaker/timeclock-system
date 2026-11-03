@@ -85,25 +85,25 @@ share a phone or email).
  Office LAN (one or more clocks)                         VPS (Coolify)
  ┌────────────── clock host (Fedora CoreOS) ───────┐     ┌──────────────────────────────────────────┐
  │ display sway + WebKitGTK ── 127.0.0.1:8080 ─┐   │     │ Coolify ── coolify network ──┐           │
- │ app     NiceGUI, scanner thread, SQLite  ◄──┘   │     │ coolify-tunnel (sshd, :2223) ◄─┼── ssh -R  │
- │         WireGuard spoke (fixed port, R28.2) ════╪═════╪═► WireGuard hub                │           │
- │ discovery  host network, LAN broadcast (R28.3)  │     │   ├─ central log server (spoke, :9020)     │
- │ systemd: ssh -N -R to coolify-tunnel (R29) ─────┼─────┼─► ├─ timeclock-backend (spoke)             │
- └─────────────────────────────────────────────────┘     │   │    relay :5432 ──► postgres (private)  │
-        ▲ direct WireGuard between clocks on the LAN      │   │    scheduler: daily auto clock-out     │
-        ▼ (R28)                                           └──────────────────────────────────────────┘
+ │ app     NiceGUI, scanner thread, SQLite  ◄──┘   │     │ coolify-tunnel (sshd, :2223) ◄─┼── ssh -R│
+ │         WireGuard spoke (fixed port, R28.2) ════╪═════╪═► WireGuard hub                │         │
+ │ discovery  host network, LAN broadcast (R28.3)  │     │   ├─ central log server (spoke, :9020)   │
+ │ systemd: ssh -N -R to coolify-tunnel (R29) ─────┼─────┼─► ├─ timeclock-backend (spoke)           │
+ └─────────────────────────────────────────────────┘     │   │    relay :5432 ──► postgres (private)│
+        ▲ direct WireGuard between clocks on the LAN     │   │    scheduler: daily auto clock-out   │
+        ▼ (R28)                                          └──────────────────────────────────────────┘
 ```
 
-| Repository | Role |
-| --- | --- |
-| `timeclock-system` (this one) | The clock: app container, discovery service, libfprint patch. |
-| `timeclock-host` (submodule at `host/`) | The clock's host: a bootc image on Fedora CoreOS, its install stick and `new_clock.py` (§5). |
-| `timeclock-backend` (submodule at `backend/`) | Relay, PostgreSQL sidecar, migrations on startup, scheduler (R37). |
-| `timeclock-schema` (new; submodule at `schema/`) | Shared pydantic models, shift logic, SQL migrations; published to SFTPyPI (R37.2, R37.5). |
-| `aeth_ext` | Logging, alerts, shutdown; changes in §10. |
-| `devkit-container` | Image template, entrypoint, supervisor, WireGuard spoke; changes in §11. |
-| `wireguard-hub` | Peer table and firewall rules; configuration in §12. |
-| `coolify-tunnel` | Coolify's SSH path to each clock host (R29); one registry line per clock. |
+| Repository                                       | Role                                                                                         |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `timeclock-system` (this one)                    | The clock: app container, discovery service, libfprint patch.                                |
+| `timeclock-host` (submodule at `host/`)          | The clock's host: a bootc image on Fedora CoreOS, its install stick and `new_clock.py` (§5). |
+| `timeclock-backend` (submodule at `backend/`)    | Relay, PostgreSQL sidecar, migrations on startup, scheduler (R37).                           |
+| `timeclock-schema` (new; submodule at `schema/`) | Shared pydantic models, shift logic, SQL migrations; published to SFTPyPI (R37.2, R37.5).    |
+| `aeth_ext`                                       | Logging, alerts, shutdown; changes in §10.                                                   |
+| `devkit-container`                               | Image template, entrypoint, supervisor, WireGuard spoke; changes in §11.                     |
+| `wireguard-hub`                                  | Peer table and firewall rules; configuration in §12.                                         |
+| `coolify-tunnel`                                 | Coolify's SSH path to each clock host (R29); one registry line per clock.                    |
 
 The repository and package names `timeclock-schema` / `timeclock_schema` and the submodule path `schema/`
 are spec calls. Create the GitHub remote before running setup-project, or `GIT_REPO` renders empty.
@@ -325,12 +325,12 @@ Input: one employee's punches and their corrections. Steps:
    R41.2: of two consecutive punches of the same type, the oldest counts, automatic or not. A late-synced real
    `clock_out` after an automatic one is skipped, and an automatic one after a real one is skipped.
 
-| State | Valid punches | Next state |
-| --- | --- | --- |
-| off | clock_in | working |
-| working | clock_out / break_start / lunch_start | off / on break / at lunch |
-| on break | break_end / clock_out | working / off |
-| at lunch | lunch_end / clock_out | working / off |
+| State    | Valid punches                         | Next state                |
+| -------- | ------------------------------------- | ------------------------- |
+| off      | clock_in                              | working                   |
+| working  | clock_out / break_start / lunch_start | off / on break / at lunch |
+| on break | break_end / clock_out                 | working / off             |
+| at lunch | lunch_end / clock_out                 | working / off             |
 
 A `clock_out` from a break or lunch ends it implicitly (spec call: it lets the automatic clock-out close
 a shift left on break, and spares an employee a second tap).
@@ -461,16 +461,16 @@ Rules every path follows:
   alone; each screen keeps its own error line for who scanned, roles, PINs and refused punches. Icon and status are
   live from the reader, never on a timer but the failed read's 1 s floor:
 
-  | Reader | Icon | Status |
-  | --- | --- | --- |
-  | Waiting for a finger | Yellow | "Ready" |
-  | Finger down, being read | Blue | "Keep your finger down" |
-  | Read succeeded, finger still down | Green, until the lift | "Lift your finger" |
-  | Login scan read but matched nobody, finger still down | Orange, until the lift | "Lift your finger" |
-  | Read failed | Red, until the reader waits for a finger again, at least 1 s | "Couldn't read that, try again" |
-  | Paused itself (too hot) | Red | "Reader paused" |
-  | Not taking scans (the gap after a scan) | Dim | None |
-  | Asleep outside business hours (§6.3) | Dim | "Tap to wake the reader" |
+  | Reader                                                | Icon                                                         | Status                          |
+  | ----------------------------------------------------- | ------------------------------------------------------------ | ------------------------------- |
+  | Waiting for a finger                                  | Yellow                                                       | "Ready"                         |
+  | Finger down, being read                               | Blue                                                         | "Keep your finger down"         |
+  | Read succeeded, finger still down                     | Green, until the lift                                        | "Lift your finger"              |
+  | Login scan read but matched nobody, finger still down | Orange, until the lift                                       | "Lift your finger"              |
+  | Read failed                                           | Red, until the reader waits for a finger again, at least 1 s | "Couldn't read that, try again" |
+  | Paused itself (too hot)                               | Red                                                          | "Reader paused"                 |
+  | Not taking scans (the gap after a scan)               | Dim                                                          | None                            |
+  | Asleep outside business hours (§6.3)                  | Dim                                                          | "Tap to wake the reader"        |
 
   The message lingers. A failed read's text moves there when its red ends, and clears on a screen change, a
   successful read, a newer message, or, on the idle screen only, after 15 s. "Scan successful" (any read that
@@ -977,22 +977,22 @@ move to the host (2026-10-29, standby-screen spec).
 
 The clock's environment, set per clock in its Coolify application:
 
-| Variable | Value |
-| --- | --- |
-| `INSTANCE_ID` | names the clock and its location in alerts, logs and the database; `dev` on timeclock-dev (R16.2, R3.3) |
-| `CLOCK_NUMBER` | a whole number from 1 to 99, unique per clock, picking its employee-number block (§6.4); separate from `INSTANCE_ID`, which names the clock's location (owner, 2026-10-27). The clock refuses to start if it's missing or out of range |
-| `HEARTBEAT_SLUG` | `timeclock-system-${INSTANCE_ID:?}` (R14.6) |
-| `TZ` | `America/New_York` (R41.4) |
-| `LOG_HISTORY_RETENTION_DAYS` | `14` (R44) |
-| `LOG_CONN_HOST` | the log server's tunnel address |
-| `ALERTS_EMAIL`, `ALERTS_EMAIL_PWD`, `ALERTS_RECIPIENTS` | as on other projects |
-| `PINGKEY` | optional: the healthchecks.io ping key, set by the owner by hand; empty means no heartbeat ping, as on timeclock-dev (owner, 2026-10-28) |
-| `WG_PRIVATE_KEY`, `WG_HUB_URL`, `WG_HUB_REPO`, `WG_HUB_TOKEN` | fetched mode |
-| `WG_TOLERATE_DISCONNECTED` | `1` (R22) |
-| `WG_HANDSHAKE_TIMEOUT_SECS` | `10` (§11.2) |
-| `WG_LISTEN_PORT` | `51821` (§11.3) |
-| `TIMECLOCK_DB_HOST` | the backend's tunnel address |
-| `TIMECLOCK_DB_NAME`, `TIMECLOCK_DB_USER`, `TIMECLOCK_DB_PASSWORD` | `timeclock`, the clock's own login (e.g. `timeclock_clock_3`) and its password; on timeclock-dev `timeclock_test`, `timeclock_clock_dev` (R26.2, R26.6) |
+| Variable                                                          | Value                                                                                                                                                                                                                                  |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INSTANCE_ID`                                                     | names the clock and its location in alerts, logs and the database; `dev` on timeclock-dev (R16.2, R3.3)                                                                                                                                |
+| `CLOCK_NUMBER`                                                    | a whole number from 1 to 99, unique per clock, picking its employee-number block (§6.4); separate from `INSTANCE_ID`, which names the clock's location (owner, 2026-10-27). The clock refuses to start if it's missing or out of range |
+| `HEARTBEAT_SLUG`                                                  | `timeclock-system-${INSTANCE_ID:?}` (R14.6)                                                                                                                                                                                            |
+| `TZ`                                                              | `America/New_York` (R41.4)                                                                                                                                                                                                             |
+| `LOG_HISTORY_RETENTION_DAYS`                                      | `14` (R44)                                                                                                                                                                                                                             |
+| `LOG_CONN_HOST`                                                   | the log server's tunnel address                                                                                                                                                                                                        |
+| `ALERTS_EMAIL`, `ALERTS_EMAIL_PWD`, `ALERTS_RECIPIENTS`           | as on other projects                                                                                                                                                                                                                   |
+| `PINGKEY`                                                         | optional: the healthchecks.io ping key, set by the owner by hand; empty means no heartbeat ping, as on timeclock-dev (owner, 2026-10-28)                                                                                               |
+| `WG_PRIVATE_KEY`, `WG_HUB_URL`, `WG_HUB_REPO`, `WG_HUB_TOKEN`     | fetched mode                                                                                                                                                                                                                           |
+| `WG_TOLERATE_DISCONNECTED`                                        | `1` (R22)                                                                                                                                                                                                                              |
+| `WG_HANDSHAKE_TIMEOUT_SECS`                                       | `10` (§11.2)                                                                                                                                                                                                                           |
+| `WG_LISTEN_PORT`                                                  | `51821` (§11.3)                                                                                                                                                                                                                        |
+| `TIMECLOCK_DB_HOST`                                               | the backend's tunnel address                                                                                                                                                                                                           |
+| `TIMECLOCK_DB_NAME`, `TIMECLOCK_DB_USER`, `TIMECLOCK_DB_PASSWORD` | `timeclock`, the clock's own login (e.g. `timeclock_clock_3`) and its password; on timeclock-dev `timeclock_test`, `timeclock_clock_dev` (R26.2, R26.6)                                                                                |
 
 Each clock is one Coolify application (Docker Compose type) on its own server. The server's proxy is None
 (R14.5). Compose deploys stop the old containers before starting new ones, which blanks the screen and
