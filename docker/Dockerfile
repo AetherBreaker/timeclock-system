@@ -13,19 +13,20 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gcc git pkg-config meson ninja-build \
   libglib2.0-dev libgusb-dev libssl-dev libgirepository1.0-dev gobject-introspection \
   && rm -rf /var/lib/apt/lists/*
-COPY docker/libfprint/uru4000-no-heat-model.patch /tmp/libfprint.patch
-# The pinned 1.94.100 release (spec §7), patched so an always-waiting reader never trips the heat model; a changed
-# tarball or a patch that doesn't apply fails the build.
+COPY docker/libfprint/*.patch /tmp/libfprint-patches/
+# The pinned 1.94.100 release (spec §7), patched so an always-waiting reader never trips the heat model and identify
+# takes the best-scoring print, not the first over the threshold; a changed tarball or a patch that doesn't apply fails
+# the build.
 RUN mkdir /tmp/libfprint \
   && curl -fsSL -o /tmp/libfprint.tar.gz \
   https://gitlab.freedesktop.org/libfprint/libfprint/-/archive/v1.94.100/libfprint-v1.94.100.tar.gz \
   && echo "edc90e02f330a7595ceaf37f2c6ec32ed43541347fe936d3273b0bb2524fd19c  /tmp/libfprint.tar.gz" | sha256sum -c - \
   && tar -xzf /tmp/libfprint.tar.gz -C /tmp/libfprint --strip-components=1 \
-  && git -C /tmp/libfprint apply /tmp/libfprint.patch \
+  && git -C /tmp/libfprint apply /tmp/libfprint-patches/*.patch \
   && meson setup /tmp/libfprint/build /tmp/libfprint --prefix=/opt/libfprint --libdir=lib -Ddrivers=uru4000 \
   -Dintrospection=true -Ddoc=false -Dgtk-examples=false -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled \
   && meson install -C /tmp/libfprint/build \
-  && rm -rf /tmp/libfprint /tmp/libfprint.tar.gz /tmp/libfprint.patch
+  && rm -rf /tmp/libfprint /tmp/libfprint.tar.gz /tmp/libfprint-patches
 # !end builder-cached
 
 ARG GIT_TAG
