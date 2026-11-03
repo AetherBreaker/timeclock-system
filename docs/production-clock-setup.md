@@ -49,8 +49,8 @@ then run `new_clock.py` from the workstation.
 1. **Write the stick** with `out/timeclock-install.iso` (Rufus in DD image mode, or balenaEtcher).
 2. **BIOS** as for the test device ([dev-device-setup.md](dev-device-setup.md), 2).
 3. **Install:** network cable plugged in; boot the stick (F9). On its screen, enter the clock name and number, check the
-   drives it lists, and type `yes` to erase them. When it says so, remove the stick. The clock restarts, sets itself up,
-   and restarts once more into the timeclock system: the logo, then the standby screen, which waits for setup.
+   drives it lists, and type `yes` to erase them. The stick can stay in. The clock restarts, sets itself up, and
+   restarts once more into the timeclock system: the logo, then the standby screen, which waits for setup.
 4. **Enrol it in wireguard-hub, by hand** (never from a script, since it ends in a release), in the wireguard-hub
    checkout:
    - a key pair; the private key, base64, in `timeclock-system-<name>.key` (gitignored);
