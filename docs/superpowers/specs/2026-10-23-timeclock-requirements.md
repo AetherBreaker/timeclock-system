@@ -17,7 +17,7 @@ Short requirements list, to be expanded into a full design spec once the main de
 1. Fingerprint reader drivers and SDK cost nothing: no subscriptions, no license fees.
 2. Readers: the DigitalPersona U.are.U 4500s already on the shelf.
 3. The time clock runs on Linux.
-    1. Host OS: Debian 13, no desktop.
+    1. Host OS: Fedora CoreOS as a bootc image, `timeclock-host` (submodule `host/`), no desktop. Its `Containerfile` defines the whole host, and a clock changes only by taking a new image release (owner, 2026-11-03; was Debian 13).
     2. The install image doesn't hardcode a hostname; each device's is set at install (`timeclock-dev` is only the test device's name).
     3. timeclock-dev stays the development device and will likely never become a real clock. Its `INSTANCE_ID` is `dev`; production clocks are numbered from 1.
 4. Written in Python, targeting 3.14 (per `pyproject.toml`). Custom Rust bindings are acceptable if needed.
@@ -26,8 +26,8 @@ Short requirements list, to be expanded into a full design spec once the main de
 7. The touchscreen must be cheap.
     1. The design stays touchscreen-agnostic (any USB multitouch screen) until one turns up that doesn't work as is. No model is specified.
 8. Hardware: probably an HP EliteDesk 800 G3 or similar, wiped for Linux.
-9. Browser: cog (WPE WebKit) (owner, 2026-10-29; was Firefox).
-10. The device is a Docker host that our Coolify server deploys to. The app runs in containers; the display (sway, the browsers, RustDesk) runs on the host, installed by the image and timeclock-standby's releases (owner, 2026-10-29: standby-screen spec). Startup and maintenance are controlled from the repos, with no manual changes on the device.
+9. Browser: timeclock-standby's `kiosk.py`, a WebKitGTK window (owner, 2026-11-03; was cog, whose Wayland output needs an EGL call Mesa 26 dropped; Firefox before that).
+10. The device is a Docker host that our Coolify server deploys to. The app runs in containers; the display (sway, the browsers, RustDesk) runs on the host, built into the host image, which pins timeclock-standby by commit (owner, 2026-10-29: standby-screen spec; 2026-11-03: host image). Startup and maintenance are controlled from the repos, with no manual changes on the device.
 11. Fingerprints through libfprint (open source; it has supported the 4500 for years), called from Python via PyGObject.
     1. All libfprint calls on one dedicated thread, using its blocking (`_sync`) calls. Nothing else in the process runs GLib's main loop.
     2. PyGObject is installed from PyPI for Python 3.14, not from a distro package, which is built for the distro's own Python.
@@ -127,7 +127,7 @@ Short requirements list, to be expanded into a full design spec once the main de
     3. Configuration tables live in a Postgres `config` schema: `config.business_hours` (40.3) and a one-row `config.settings` holding `auto_clock_out_enabled` (on), `auto_clock_out_run_time` and `auto_clock_out_stamp_time`. Those times, and business hours' open and close times, are Postgres `time` values (no date, no zone; `datetime.time` in pydantic). A stamp time later than the run time fails validation: the job skips that run and alerts.
     4. Local time everywhere comes from aeth_ext's `settings.tz` (the `TZ` environment variable), which compose sets explicitly to `America/New_York` on the backend and the clocks; never the host's time zone (the VPS runs UTC).
     5. Weekly totals split a shift that crosses Monday 00:00 at midnight.
-42. The clock hosts install Debian security updates automatically (`unattended-upgrades`, security only), rebooting at 03:00 when an update needs it. Set in the install image's preseed, so it applies from the next image rebuild. A later version should make settings like these configurable from the database.
+42. The clock hosts update by taking host image releases (owner, 2026-11-03; was Debian's `unattended-upgrades`). Each clock follows a channel, `:latest` (every release, including the weekly rebuilds that pick up Fedora's updates) or `:stable` (releases promoted by hand; production clocks), and restarts into a new release as soon as nobody is using it or in a daily window (03:00, 60 minutes by default). A release that doesn't come up within ten minutes is rolled back and never tried again. The settings are the app's `HOST_UPDATE_*` variables in Coolify. A later version should make settings like these configurable from the database.
 43. Images are built on each device (Coolify's default). Revisit together with the libfprint fallback (40.4) if deploys get slow.
 44. The clock's `log_history_retention_days` is 14. An outage never lasts longer than a week: the offices have backup generators and Starlink as backup internet.
 45. Punching: the employee scans first; the screen then shows only the punches valid from their current state (e.g. clocked in: clock out, start break, start lunch), and a tap records one.

@@ -83,8 +83,8 @@ share a phone or email).
 
 ```text
  Office LAN (one or more clocks)                         VPS (Coolify)
- ┌──────────────── clock host (Debian 13) ─────────┐     ┌──────────────────────────────────────────┐
- │ display sway + cog, host ── 127.0.0.1:8080 ─┐   │     │ Coolify ── coolify network ──┐           │
+ ┌────────────── clock host (Fedora CoreOS) ───────┐     ┌──────────────────────────────────────────┐
+ │ display sway + WebKitGTK ── 127.0.0.1:8080 ─┐   │     │ Coolify ── coolify network ──┐           │
  │ app     NiceGUI, scanner thread, SQLite  ◄──┘   │     │ coolify-tunnel (sshd, :2223) ◄─┼── ssh -R  │
  │         WireGuard spoke (fixed port, R28.2) ════╪═════╪═► WireGuard hub                │           │
  │ discovery  host network, LAN broadcast (R28.3)  │     │   ├─ central log server (spoke, :9020)     │
@@ -96,7 +96,8 @@ share a phone or email).
 
 | Repository | Role |
 | --- | --- |
-| `timeclock-system` (this one) | The clock: app container, discovery service, libfprint patch, install image. |
+| `timeclock-system` (this one) | The clock: app container, discovery service, libfprint patch. |
+| `timeclock-host` (submodule at `host/`) | The clock's host: a bootc image on Fedora CoreOS, its install stick and `new_clock.py` (§5). |
 | `timeclock-backend` (submodule at `backend/`) | Relay, PostgreSQL sidecar, migrations on startup, scheduler (R37). |
 | `timeclock-schema` (new; submodule at `schema/`) | Shared pydantic models, shift logic, SQL migrations; published to SFTPyPI (R37.2, R37.5). |
 | `aeth_ext` | Logging, alerts, shutdown; changes in §10. |
@@ -374,25 +375,28 @@ are tested with a test-only kind.
 
 ## 5. Clock host
 
-- Debian 13, no desktop (R3.1). Production clocks install from `image/production/` (it asks the clock's name
-  and number, erases the internal drives, and mirrors two drives with RAID 1;
-  `docs/production-clock-setup.md`); timeclock-dev from `image/dev-device/`. Wired Ethernet is the norm; wifi
-  works when a clock can't stay wired.
-- `unattended-upgrades`, security only, rebooting at 03:00 when needed (R42): set in `preseed.cfg.in`
-  (`pkgsel/update-policy`) plus an apt config file under `files/` for the reboot; takes effect from the next
-  image rebuild. Don't rebuild the image as part of this work.
-- Time zone America/New_York and NTP come from the image. Containers share the host clock, so punch
-  timestamps come from it; they don't depend on the host's zone (§9).
-- libfprint's hwdb rule from the host's `libfprint-2-2` package enables USB autosuspend for the reader. If a
-  future host image drops that package, autosuspend has to be enabled another way.
-- The systemd reverse tunnel to coolify-tunnel and its key are part of the one-time install (R29,
-  `docs/dev-device-setup.md`).
+- Fedora CoreOS as a bootc image, `timeclock-host` (repo `timeclock-host`, submodule `host/`), no desktop (R3.1;
+  every clock since 2026-11-03, replacing the Debian 13 installers). Its `Containerfile` defines the whole host; a
+  change ships as a host release. One install stick serves every clock: it asks the clock's name and number, erases
+  the internal drives and mirrors two with RAID 1, then the clock switches to the `:stable` channel. `install/new_clock.py`
+  in timeclock-host does the rest from the workstation (`docs/production-clock-setup.md`). Traffic takes the cable and
+  moves to wifi when the cable loses its link or its internet.
+- Host updates (R42): the screen watcher is also the updater. It reads `HOST_UPDATE_CHANNEL`, `_MODE` and `_WINDOW`
+  from the app container, takes the channel's new release and restarts into it behind the splash; a release that isn't
+  up within ten minutes rolls back and is never tried again. Zincati and bootc's own update timer are masked.
+- Time zone America/New_York (`/etc/localtime` in the image) and NTP (Fedora's chrony). Containers share the host
+  clock, so punch timestamps come from it; they don't depend on the host's zone (§9).
+- The host has no libfprint, yet the reader autosuspends (`power/control=auto` on main-warehouse, 2026-11-03), most
+  likely from systemd's own `60-autosuspend-fingerprint-reader.hwdb` (unconfirmed). If an image loses it, the image
+  needs its own udev rule.
+- The reverse tunnel to coolify-tunnel: `coolify-tunnel-setup` in the image, which `new_clock.py` runs (R29).
 - The display ([its design](2026-10-29-standby-screen-design.md), repo `timeclock-standby`, submodule `standby/`),
-  installed by both images: sway on terminal 7 with two cog windows, the clock (the app at `127.0.0.1:8080`) and the
-  standby page; a frozen Rust screen watcher that shows the clock's window when the clock is live and the standby
-  otherwise, deciding only from what it observes; a Python status app with live starting and updating steps and the
-  update banner; RustDesk on the host; a Plymouth splash, a hidden GRUB menu and a quiet console, so users never see
-  Linux text (owner, 2026-10-29; the kiosk container and Firefox went with the display's move to the host).
+  built into the host image from timeclock-standby at a pinned commit (`STANDBY_REF`): sway on terminal 7 with two
+  `kiosk.py` (WebKitGTK) windows, the clock (the app at `127.0.0.1:8080`) and the standby page; a frozen Rust screen
+  watcher that shows the clock's window when the clock is live and the standby otherwise, deciding only from what it
+  observes; a Python status app with live starting and updating steps and the update banner; RustDesk on the host; a
+  Plymouth splash, a hidden GRUB menu and a quiet console, so users never see Linux text (owner, 2026-10-29; the kiosk
+  container and Firefox went with the display's move to the host; cog gave way to `kiosk.py` on Fedora, R9).
 
 ## 6. Clock app (timeclock-system)
 
@@ -1007,11 +1011,11 @@ over the `coolify` network, not the tunnel).
 
 One-time, per device; the full procedure is `docs/production-clock-setup.md`:
 
-1. Install from the production image (§5). The installer asks the clock's name (its `INSTANCE_ID`, so the
+1. Install from the install stick (§5). The installer asks the clock's name (its `INSTANCE_ID`, so the
    hostname is `timeclock-system-<name>`) and its `CLOCK_NUMBER`, before it erases anything.
 2. Enroll the clock in the hub by hand (§12): its key, its row (with `lan` once LAN sharing exists), its
    forward rules, then a hub release-and-pin. Release commands never run from a script.
-3. `uv run image/production/new_clock.py timeclock-system-<name>.local` checks the enrolment against the
+3. `uv run install/new_clock.py timeclock-system-<name>.local`, in the timeclock-host checkout, checks the enrolment against the
    pinned hub release, then does the rest, each step skipped when already done: the clock's coolify-tunnel
    port and key line (R29), the Coolify server at `<hostname>-tunnel:<port>` (Coolify allows one server per
    address, so an ssh rule in Coolify's container sends every `*-tunnel` name to coolify-tunnel; supersedes

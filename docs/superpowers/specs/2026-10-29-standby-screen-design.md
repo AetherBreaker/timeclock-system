@@ -25,6 +25,23 @@ terminals while Plymouth runs, then quit it), cog for the standby page, the stat
 Built and dropped: the kiosk's check-in and both `handback.sh` scripts, the graphics-mode trick, the kiosk images
 (`docker/kiosk/`, `docker/kiosk-cage-only/`), the watcher's switching between terminals 1 and 7.
 
+## Since then: the Fedora host image (2026-11-03)
+
+This design was built on Debian. Every clock now runs the `timeclock-host` image, Fedora CoreOS defined by a
+`Containerfile` (master spec §5, R3.1), which changes the parts below; read the sections after this one with them in
+mind.
+
+- **Packaging and install**: the display's files, units and packages are in the host image, which pins
+  timeclock-standby by commit. §9's host packages, preseed and `install.sh` are superseded, and a change ships as a host
+  release, not a file replaced over SSH (`sudo bootc usr-overlay` makes `/usr` writable on a clock until it restarts).
+- **Browsers**: cog gave way to `kiosk.py`, one WebKitGTK window per screen under its own app id (owner; cog 0.18's
+  Wayland output needs an EGL call Mesa 26 dropped). Read cog below as `kiosk.py`: cog's flags and the load-failure
+  wrapper are gone, and `kiosk.py` does their jobs (the splash until the first page loads, back to the start page after
+  a failed load, a reload when the web process crashes).
+- **RustDesk** (§3.4): `remote.sh` unpacks the `.deb` with `dpkg-deb` into `/var/lib/sweetfiresupportdesk`, labelled
+  for SELinux as programs, rather than installing it. The package stays out of the public image.
+- **The status app** runs on Fedora's Python 3.
+
 ## 1. Why
 
 When Coolify deploys, the clock's menu drops: first the page goes dead, then the kiosk container restarts and the
@@ -69,7 +86,7 @@ Functionally only the app's faults matter; anything else is visual and gone by t
 | **Clock browser**: cog on the clock app | host, systemd | config + a small wrapper | rarely |
 | **Remote access**: RustDesk's service and the screen-sharing stack | host, systemd | the vendor package | with the package |
 | **Watcher**: decides which window shows | host, systemd, root | Rust (owner) | written once, then frozen (owner) |
-| **Status app**: live status, the standby page, the banner | host, systemd, root | Python (owner), Debian's 3.13, standard library only | often; edited on the clock when debugging (owner) |
+| **Status app**: live status, the standby page, the banner | host, systemd, root | Python (owner), the host's Python 3, standard library only | often; edited on the clock when debugging (owner) |
 | **Clock app** (existing) | container (Coolify) | Python | writes its status, shows the banner, publishes its port to the host (§6) |
 | **Boot**: GRUB hidden, Plymouth splash, quiet console | host | image config | rarely |
 
@@ -148,7 +165,7 @@ appeared crashed ("Could not find a usable platform module"). Each unit waits un
   session (systemd `PAMName=login` on terminal 7, `XDG_SESSION_TYPE=wayland`) (my call), so it finds it with no stand-in.
   The container's `loginctl` stand-in comes along only if that doesn't work.
 - **Screen sharing**: PipeWire, WirePlumber, xdg-desktop-portal and its wlroots backend as root's user services in that
-  session, the backend set to share the one screen without asking (`chooser_type=none`, as today). Debian's PipeWire
+  session, the backend set to share the one screen without asking (`chooser_type=none`, as today). The distribution's PipeWire
   units refuse root's session (`ConditionUser=!root`); a drop-in lifts that (found on main-warehouse).
 - **Input**: sway picks up RustDesk's virtual keyboard and mouse directly. RustDesk's virtual keyboard can't switch
   terminals (`xkb_options srvrkeys:none` for that device only): a remote Ctrl+Alt+F*n* would take the screen from sway
@@ -173,7 +190,7 @@ appeared crashed ("Could not find a usable platform module"). Each unit waits un
    kiosk freed it.
 3. **Browsers** and **RustDesk**, once sway answers.
 
-Debian's own splash quit (`plymouth-quit.service`) is held off as display managers do (`Conflicts=`, `OnFailure=` on
+The distribution's own splash quit (`plymouth-quit.service`) is held off as display managers do (`Conflicts=`, `OnFailure=` on
 the display unit), so only the display quits the splash; run beside it, it put terminal 1 back in text mode and its
 boot messages showed for about 0.9 s (main-warehouse). It still runs if the display fails.
 
@@ -341,7 +358,7 @@ picture drops for those seconds.
   kernel 6.9 made fastboot the default on every Intel GPU and dropped the option (built). The mode change from the
   firmware's 800×600 to the panel's mode at driver load is likely a monitor blink; trying GRUB at the panel's mode is a
   later experiment (my call).
-- **Plymouth** with the clock's theme, every image of Debian's spinner theme copied in (two-step won't show without its
+- **Plymouth** with the clock's theme, every image of the spinner theme copied in (two-step won't show without its
   prompt images and Plymouth falls back to text; built). The logo moves to the screen's centre (my call), and **sway's
   background is the same logo centred** (`output * bg <logo> center #000000`), so splash → sway changes only the spinner.
   Measured: sway's start is 1 black frame, then the logo until the standby page draws (about 0.5 s warm, 2 s on a cold
@@ -356,7 +373,8 @@ picture drops for those seconds.
   browser, remote-access install, watcher, status, terminal 1), `plymouth/`. Releases by tag, built by its workflow.
 - **This repository**: the submodule; §6.4's compose change and the kiosk directories removed; both images; the
   master spec's kiosk sections (R13) updated to match.
-- **Host packages** (both images' preseed, and `install.sh` for clocks installed before): `sway`, `swaybg`, `cog`,
+- **Host packages** (Debian; superseded by timeclock-host's `Containerfile`) (both images' preseed, and `install.sh`
+  for clocks installed before): `sway`, `swaybg`, `cog`,
   `pipewire`, `wireplumber`, `xdg-desktop-portal`, `xdg-desktop-portal-wlr`, `dbus-user-session`, `plymouth`,
   `plymouth-themes`, `librsvg2-bin`, `python3`; `cage` and `firefox-esr` no longer (`seatd` only if §3.4's session
   falls back to it). The ISO bakes the latest release and the install fetches it again if it can (built).
