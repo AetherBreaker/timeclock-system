@@ -21,6 +21,12 @@
   identify touches against the stored prints and build the template from them, or compile NBIS bozorth3 into a small C
   extension. Still open: which prints count (inactive employees, the person's own other fingers), what the refusal
   says, and whether it sends an alert.
+- [ ] **Build patched libraries at release, not at deploy** (owner, 2026-11-02). libfprint's source is pinned (1.94.100,
+  checksum-checked) and patched, but every clock compiles it at each deploy against whatever compiler and libraries the
+  base image and Debian ship that day, so two clocks on one release can run different builds. Build it once when a
+  release is cut, attach the build to the release, and have the Dockerfile download and checksum-check it. The same
+  goes for anything else we compile with our own patch. Open: whether PyGObject and pycairo (compiled from source at
+  deploy, unpatched, versions locked by uv.lock) go the same way.
 
 ## Deferred features
 
@@ -45,6 +51,11 @@ Each needs its own design before it's built.
   matcher's detail points circled (failed presses included), in memory only, never saved or logged. Samples on
   2026-10-29 showed ridge cut-offs at the window's left edge counted as detail points, and a faint line across the
   middle of every press.
+- [ ] **Larger touch areas for buttons** (owner, 2026-11-02): each button takes taps slightly past its drawn edge, so
+  presses feel less finicky, but no two buttons' touch areas overlap. Specifics to be discussed.
+- [ ] **Host update download toast** (owner, 2026-11-02): while the clock downloads a host update in the background, a
+  small toast slides in from the right, bottom right above the database status, with a live progress bar. Specifics
+  to be discussed.
 - [ ] **Turn the screen off after hours, waking on touch** (owner: later, 2026-10-29). sway can power the display off
   (`output * power off`); first check on each clock's monitor that its touch panel keeps working while the screen sleeps,
   and catch the waking touch with an overlay so it doesn't press a key on the page.
