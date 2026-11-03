@@ -1,0 +1,32 @@
+    # timeclock-system: identify takes the best-scoring print, not the first one over the threshold.
+    def identify_image(self, gallery, image, **transform):
+        self._identify_match = None
+        self._identify_fp = None
+
+        def identify_cb(dev, res):
+            self._identify_match, self._identify_fp = dev.identify_finish(res)
+
+        self.dev.identify(gallery, callback=identify_cb)
+        self.wait_for_finger_status(FPrint.FingerStatusFlags.NEEDED)
+        self.send_image(image, **transform)
+        while self._identify_fp is None:
+            ctx.iteration(True)
+        return self._identify_match
+
+    def test_identify_best_not_first(self):
+        # Two prints of one finger both reach the threshold; the better one wins wherever it sits in the gallery.
+        self.prints['whorl_weak'] = transform_image(self.prints['whorl'], dx=6, dy=4, dw=12, dh=12,
+                                                    angle=0.2)
+        fp_weak = self.enroll_print('whorl_weak')
+        fp_strong = self.enroll_print('whorl')
+        fp_other = self.enroll_print('tented_arch')
+        for gallery in ([fp_weak, fp_strong, fp_other], [fp_other, fp_strong, fp_weak]):
+            self.assertIs(self.identify_image(gallery, 'whorl'), fp_strong)
+
+    def test_identify_own_print_in_any_order(self):
+        names = ['arch', 'loop-right', 'tented_arch', 'whorl']
+        enrolled = {n: self.enroll_print(n) for n in names}
+        for probe in names:
+            for gallery in (list(enrolled.values()), list(reversed(list(enrolled.values())))):
+                self.assertIs(self.identify_image(gallery, probe, dx=2, dy=-1, angle=0.03), enrolled[probe])
+
