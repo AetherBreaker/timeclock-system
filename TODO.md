@@ -55,7 +55,8 @@ Each needs its own design before it's built.
   presses feel less finicky, but no two buttons' touch areas overlap. Specifics to be discussed.
 - [ ] **Host update download toast** (owner, 2026-11-02): while the clock downloads a host update in the background, a
   small toast slides in from the right, bottom right above the database status, with a live progress bar. Specifics
-  to be discussed.
+  to be discussed. Additionally make the regular app update banner instead appear as a toast.
+- [ ] **Review simultaneous update handling** Verify what happens if an update for both the host image and the app get pushed at around the same time, and ensure the system automatically coordinates the updates safely.
 - [ ] **Turn the screen off after hours, waking on touch** (owner: later, 2026-10-29). sway can power the display off
   (`output * power off`); first check on each clock's monitor that its touch panel keeps working while the screen sleeps,
   and catch the waking touch with an overlay so it doesn't press a key on the page.
