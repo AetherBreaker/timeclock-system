@@ -276,12 +276,12 @@ class _KioskPage:
     # redraw the screen under it. Color and dimness go on the icon and status, so a BUSY icon doesn't dim the message.
     indicator = self._controller.reader_indicator
     with ui.row().classes("fixed bottom-10 left-4 z-20 items-center gap-2").mark("reader-indicator", f"reader-{indicator}"):
-      ui.icon("fingerprint").classes(f"text-5xl reader-{indicator}").mark("reader-icon")
+      ui.icon("fingerprint").classes(f"text-6xl reader-{indicator}").mark("reader-icon")
       if status := text.READER_STATUS[indicator]:
-        ui.label(status).classes(f"text-xl reader-{indicator}").mark("reader-status")
+        ui.label(status).classes(f"text-2xl reader-{indicator}").mark("reader-status")
       if (message := self._controller.reader_message) is not None:
         tone = f"reader-message-{message.tone}"
-        ui.label(message.text).classes(f"text-xl {tone}").mark("reader-message", tone)
+        ui.label(message.text).classes(f"text-2xl {tone}").mark("reader-message", tone)
 
   async def _guarded(self, call: Callable[[], object]) -> None:
     # Every button, tap and key runs through here, so their exceptions reach on_error; NiceGUI's own errors (a send to a
