@@ -17,6 +17,7 @@ from uuid import UUID  # noqa: TC003  # the dataclass annotation is evaluated at
 
 # Third party imports
 from aeth_ext.errors import alert
+from timeclock_schema.enums import Finger, ScanResult  # the dataclass annotations are evaluated at runtime
 
 if TYPE_CHECKING:
   # Standard library imports
@@ -32,6 +33,56 @@ class GalleryPrint:
   print_id: UUID
   employee_id: int
   template: bytes = field(repr=False)  # R15: keep the template out of tracebacks and alerts
+  finger: Finger
+
+
+@dataclass(frozen=True)
+class ScanImage:
+  """The raw image of one capture."""
+
+  data: bytes = field(repr=False)  # R15: biometric, like a template
+  width: int
+  height: int
+
+
+@dataclass(frozen=True)
+class Capture:
+  """One identify as the reader saw it: `match` is libfprint's pick (the best print at or above its threshold, or None).
+
+  `scores` gives every gallery print's score in gallery order; -1 means libfprint never scored it.
+  """
+
+  match: UUID | None
+  scores: tuple[tuple[UUID, int], ...]
+  probe: bytes | None = field(default=None, repr=False)  # R15: the serialized probe print
+  image: ScanImage | None = None
+
+
+@dataclass(frozen=True)
+class ScoredPrint:
+  """A gallery print with the score it got in one capture."""
+
+  print_id: UUID
+  employee_id: int
+  finger: Finger
+  score: int
+
+
+@dataclass(frozen=True)
+class ScanReport:
+  """What one identify found and how it was decided.
+
+  `best` is libfprint's match if any, else the top score; `other` is the top-scoring print of anyone but `best`'s employee.
+  """
+
+  result: ScanResult
+  best: ScoredPrint | None
+  other: ScoredPrint | None
+  scores: tuple[tuple[UUID, int], ...]
+  margin: int
+  probe: bytes | None = field(default=None, repr=False)  # R15
+  image: ScanImage | None = None
+  retry_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -40,11 +91,14 @@ class Matched:
 
   print_id: UUID
   employee_id: int
+  scan: ScanReport | None = None
 
 
 @dataclass(frozen=True)
 class NoMatch:
-  """A capture matched no enrolled print."""
+  """A capture matched no enrolled print, or matched one too closely to another person's."""
+
+  scan: ScanReport | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +106,7 @@ class Retry:
   """A capture was unusable; `message` tells the user what to do."""
 
   message: str
+  scan: ScanReport | None = None
 
 
 @dataclass(frozen=True)
@@ -152,11 +207,11 @@ class Reader(Protocol):
     gallery: Sequence[GalleryPrint],
     cancel: CancelToken,
     on_status: Callable[[FingerStatus], None],
-    on_result: Callable[[UUID | None], None],
-  ) -> UUID | None:
-    """Capture one print and match it against `gallery`; return the matched print id or None.
+    on_result: Callable[[Capture], None],
+  ) -> Capture:
+    """Capture one print and score it against every print in `gallery`.
 
-    `on_status` gets every finger-status change. `on_result` gets the match the moment it's made, while the finger may
+    `on_status` gets every finger-status change. `on_result` gets the capture the moment it's made, while the finger may
     still be down; the call itself returns only after the lift.
     """
     ...
@@ -183,6 +238,28 @@ class ScannerTimings:
   finger_off_pause: float = 1.0  # after a capture, about twice the 0.54 s tail the spike saw; see _ready_once
   failure_limit: float = 180.0  # a ReaderFailure streak this long is fatal
   enroll_idle_timeout: float = 30.0
+
+
+def _decide(capture: Capture, gallery: Sequence[GalleryPrint], margin: int) -> Matched | NoMatch:
+  """Turn a capture into the event to post: a match must beat every other person's best print by `margin` (0: no rule)."""
+  known = {p.print_id: p for p in gallery}
+  scored = [ScoredPrint(i, known[i].employee_id, known[i].finger, score) for i, score in capture.scores if i in known and score >= 0]
+  best = next((s for s in scored if s.print_id == capture.match), None)
+  matched = best is not None
+  if best is None:
+    best = max(scored, key=lambda s: s.score, default=None)  # max keeps the first of equal scores, as libfprint does
+  others = [] if best is None else [s for s in scored if s.employee_id != best.employee_id]
+  other = max(others, key=lambda s: s.score, default=None)
+  if best is None or not matched:
+    result = ScanResult.NO_MATCH
+  elif margin > 0 and best.score - (0 if other is None else other.score) < margin:
+    result = ScanResult.TOO_CLOSE
+  else:
+    result = ScanResult.MATCHED
+  scan = ScanReport(result, best, other, capture.scores, margin, capture.probe, capture.image)
+  if result is ScanResult.MATCHED and best is not None:
+    return Matched(best.print_id, best.employee_id, scan)
+  return NoMatch(scan)
 
 
 class Scanner:
@@ -215,6 +292,7 @@ class Scanner:
     self._mode = ReaderMode.CLOSED
     self._mode_changes = 0  # lets an enrollment tell a set_mode cancel from its own idle timeout
     self._gallery: tuple[GalleryPrint, ...] = ()
+    self._margin = 0
     self._token: CancelToken | None = None
     self._busy_since: float | None = None
     self._stopping = False
@@ -251,13 +329,15 @@ class Scanner:
     if token is not None:
       token.cancel()
 
-  def set_gallery(self, prints: Sequence[GalleryPrint]) -> None:
+  def set_gallery(self, prints: Sequence[GalleryPrint], margin: int) -> None:
     """Replace the gallery, restarting a running identify; an equal gallery changes nothing (R6).
 
     Only an identify is restarted: an enrollment doesn't use the gallery, and cancelling it would lose the user's stages.
+    A new `margin` applies from the next capture, without a restart.
     """
     gallery = tuple(prints)
     with self._lock:
+      self._margin = margin
       if gallery == self._gallery:
         return
       self._gallery = gallery
@@ -372,16 +452,12 @@ class Scanner:
       if self._stopping or self._mode is not ReaderMode.READY:
         raise ScanCancelled
       self._token = token
-      gallery = self._gallery
-
-    def result_of(print_id: UUID | None) -> Matched | NoMatch:
-      match = next((p for p in gallery if p.print_id == print_id), None)
-      return NoMatch() if match is None else Matched(match.print_id, match.employee_id)
+      gallery, margin = self._gallery, self._margin
 
     early: list[Matched | NoMatch] = []  # a list, not a nonlocal: pyright doesn't see a closure assign a local
 
-    def on_result(print_id: UUID | None) -> None:
-      early.append(result_of(print_id))
+    def on_result(capture: Capture) -> None:
+      early.append(_decide(capture, gallery, margin))
       self._post(early[-1])
 
     # The periodic re-arm bounds every identify, so a call that outlives it is hung (busy_seconds, §6.2).
@@ -389,9 +465,9 @@ class Scanner:
     rearm.daemon = True
     rearm.start()
     try:
-      print_id = self._blocking(self._reader.identify, gallery, token, self._on_status, on_result)
+      capture = self._blocking(self._reader.identify, gallery, token, self._on_status, on_result)
     except RetryScan as e:
-      return Retry(str(e)), False
+      return Retry(str(e), ScanReport(ScanResult.RETRY, None, None, (), margin, retry_message=str(e))), False
     except ScanCancelled:
       # A cancel after the result (a mode change, closing time, the re-arm) only stopped the wait for the lift.
       if not early:
@@ -404,7 +480,7 @@ class Scanner:
       if self._last_status not in {None, _NO_FINGER}:
         self._post(_NO_FINGER)  # a cancelled call may never report the lift
       self._last_status = None
-    return (early[-1], True) if early else (result_of(print_id), False)
+    return (early[-1], True) if early else (_decide(capture, gallery, margin), False)
 
   def _enroll_once(self, mode_changes: int) -> None:
     token = self._reader.new_cancel()

@@ -292,6 +292,7 @@ async def test_gallery_orders_by_latest_punch_here(env: Env) -> None:
   gallery = await env.clock.gallery()
   assert [g.employee_id for g in gallery] == [2, 1, 4]
   assert gallery[0].template == b"t2"
+  assert gallery[0].finger is Finger.LEFT_INDEX
   assert gallery[0].print_id == prints[2].id
 
 
@@ -458,7 +459,7 @@ async def test_catch_up_since_uses_the_stored_time_of_an_amended_clock_in(env: E
 
 
 def test_gallery_print_repr_hides_the_template() -> None:
-  assert "SECRETBYTES" not in repr(GalleryPrint(uuid4(), 1, b"SECRETBYTES"))
+  assert "SECRETBYTES" not in repr(GalleryPrint(uuid4(), 1, b"SECRETBYTES", Finger.RIGHT_THUMB))
 
 
 NEW = NewEmployee("New", None, "Hire", "+15551234567", "new@example.com", EmployeeRole.EMPLOYEE, 1)

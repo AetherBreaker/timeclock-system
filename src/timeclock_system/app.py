@@ -38,7 +38,7 @@ if TYPE_CHECKING:
   from timeclock_system.scanner import ScannerEvent
 
 _TICK_SECS = 0.5
-_GALLERY_TABLES: frozenset[ChangeTable] = frozenset({"employees", "fingerprints", "punches"})
+_GALLERY_TABLES: frozenset[ChangeTable] = frozenset({"employees", "fingerprints", "punches", "settings"})
 
 
 def _send_alert(reason: str, details: str) -> None:
@@ -98,7 +98,7 @@ def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of ev
   register_for_shutdown(lambda _trails: scanner.stop(), phase=ShutdownPhase.THREADED)
 
   async def refresh_gallery() -> None:
-    scanner.set_gallery(await clock.gallery())
+    scanner.set_gallery(await clock.gallery(), clock.settings().fingerprint_match_margin)
 
   async def tick_forever() -> None:
     # An app task, not a page timer, so business hours drive the reader with no browser connected.

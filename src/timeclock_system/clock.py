@@ -528,7 +528,7 @@ class Clock:
     active.sort(
       key=lambda f: (f.employee_id not in latest, -latest[f.employee_id].timestamp() if f.employee_id in latest else 0.0, str(f.id))
     )
-    return [GalleryPrint(f.id, f.employee_id, f.template.get_secret_value()) for f in active]
+    return [GalleryPrint(f.id, f.employee_id, f.template.get_secret_value(), f.finger) for f in active]
 
   # -- weekly prune -------------------------------------------------------------------------------------------------
 
