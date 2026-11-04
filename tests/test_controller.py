@@ -1474,6 +1474,14 @@ async def test_a_refused_menu_settles_other_at_once(kiosk: Kiosk) -> None:
   assert outcomes(kiosk) == [ScanOutcome.OTHER]
 
 
+async def test_a_match_on_a_screen_that_ignores_it_settles_other_at_once(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  await kiosk.ctl.gear()
+  await kiosk.ctl.on_scanner_event(scanned(MIA))  # GearMenu has no use for a match
+  assert isinstance(kiosk.ctl.screen, GearMenu)
+  assert outcomes(kiosk) == [ScanOutcome.OTHER, ScanOutcome.OTHER]
+
+
 async def test_managers_override_scan_settles_other(kiosk: Kiosk) -> None:
   await kiosk.ctl.on_scanner_event(scanned(ANN))
   kiosk.t.advance(RESCAN_AFTER_SECS + 1)
@@ -1481,6 +1489,7 @@ async def test_managers_override_scan_settles_other(kiosk: Kiosk) -> None:
   await kiosk.ctl.request_override()
   await kiosk.ctl.on_scanner_event(scanned(MIA))
   assert isinstance(kiosk.ctl.screen, Confirmation)  # the manager's finger recorded Ann's punch
+  assert outcomes(kiosk) == [ScanOutcome.OTHER, ScanOutcome.OTHER]  # both at once, before any tick
   kiosk.t.advance(CONFIRM_SECS + 0.1)
   await kiosk.ctl.tick()
   first, second = kiosk.store.unsynced_scans()
