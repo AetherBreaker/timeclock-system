@@ -522,7 +522,7 @@ class LocalStore:
 
   def unsynced_scans(self, limit: int = 50) -> list[FingerprintScan]:
     """Return up to `limit` settled scans not yet pushed, oldest first."""
-    # Blobs are fetched per row after the JSON parses, so no frame that can fail holds raw bytes in a local.
+    # Blobs are fetched per row after the JSON parses and wrapped at the fetch, so no frame that can fail holds raw bytes.
     scans: list[FingerprintScan] = []
     with self._lock:
       ids_json = self._conn.execute(
@@ -530,15 +530,11 @@ class LocalStore:
       ).fetchall()
       for scan_id, scan_json in ids_json:
         scan = FingerprintScan.model_validate_json(scan_json)
-        blobs = self._conn.execute("SELECT probe, image FROM fingerprint_scans WHERE id = ?", (scan_id,)).fetchone()
-        scans.append(
-          scan.model_copy(
-            update={
-              "probe": None if blobs[0] is None else SecretBytes(blobs[0]),
-              "image": None if blobs[1] is None else SecretBytes(blobs[1]),
-            }
-          )
+        probe, image = (
+          None if blob is None else SecretBytes(blob)
+          for blob in self._conn.execute("SELECT probe, image FROM fingerprint_scans WHERE id = ?", (scan_id,)).fetchone()
         )
+        scans.append(scan.model_copy(update={"probe": probe, "image": image}))
     return scans
 
   def delete_scan(self, scan_id: UUID) -> None:
