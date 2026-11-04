@@ -30,3 +30,30 @@
             for gallery in (list(enrolled.values()), list(reversed(list(enrolled.values())))):
                 self.assertIs(self.identify_image(gallery, probe, dx=2, dy=-1, angle=0.03), enrolled[probe])
 
+    def test_identify_scores_every_gallery_print(self):
+        # Each print in the gallery reports the score it got; one left out of the gallery keeps -1.
+        fp_whorl = self.enroll_print('whorl')
+        fp_arch = self.enroll_print('arch')
+        fp_tented = self.enroll_print('tented_arch')
+        fp_left_out = self.enroll_print('loop-right')
+        self.assertEqual(fp_whorl.get_identify_score(), -1)
+        match = self.identify_image([fp_whorl, fp_arch, fp_tented], 'whorl')
+        self.assertIs(match, fp_whorl)
+        scores = [p.get_identify_score() for p in (fp_whorl, fp_arch, fp_tented)]
+        self.assertEqual(match.get_identify_score(), max(scores))
+        self.assertGreaterEqual(match.get_identify_score(), 40)
+        for other in (fp_arch, fp_tented):
+            self.assertGreaterEqual(other.get_identify_score(), 0)
+            self.assertLess(other.get_identify_score(), match.get_identify_score())
+        self.assertEqual(fp_left_out.get_identify_score(), -1)
+
+    def test_identify_probe_keeps_its_image(self):
+        # The app saves the probe's image after an identify.
+        fp = self.enroll_print('whorl')
+        self.identify_image([fp], 'whorl')
+        image = self._identify_fp.get_image()
+        self.assertIsNotNone(image)
+        self.assertGreater(image.get_width(), 0)
+        self.assertGreater(image.get_height(), 0)
+        self.assertEqual(len(image.get_data()), image.get_width() * image.get_height())
+
