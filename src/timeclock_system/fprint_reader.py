@@ -136,8 +136,8 @@ class FprintReader:
       # libfprint hands back the gallery object it matched, so identity finds its id.
       match_id = next((print_id for print_id, print_ in self._prints.items() if print_ is match), None)
       scores = tuple((print_id, print_.get_identify_score()) for print_id, print_ in self._prints.items())
-      # The probe's bytes and image are best-effort: no failure there may cost the capture its match or scores. The bytes
-      # are never bound to a local and nothing that can raise runs while they're held, so no traceback renders them.
+      # The probe's bytes and image are best-effort: no failure there may cost the capture its match or scores. Once
+      # the bytes are bound to `scan_data`, only `Capture(...)`, which can't raise, runs, so no traceback renders them.
       scan_data: tuple[bytes | None, ScanImage | None] = (None, None)
       if probe is not None:
         try:
