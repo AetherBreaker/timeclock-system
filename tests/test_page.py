@@ -413,7 +413,7 @@ async def test_the_version_sits_below_the_reader_line(controller: KioskControlle
     [icon] = user.find(marker="reader-icon").elements
     assert {"fixed", "bottom-2", "left-4", "text-sm", "opacity-50"} <= set(label.classes)
     assert {"fixed", "bottom-10", "left-4"} <= set(row.classes)
-    assert "text-5xl" in icon.classes
+    assert "text-6xl" in icon.classes
 
 
 @pytest.mark.parametrize(
