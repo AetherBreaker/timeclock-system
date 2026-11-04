@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 # Third party imports
+from pydantic import SecretBytes
 from timeclock_schema.base import REVEAL, TimeclockModel
 from timeclock_schema.models import (
   BusinessHours,
@@ -23,6 +24,7 @@ from timeclock_schema.models import (
   Fingerprint,
   FingerprintBypass,
   FingerprintChange,
+  FingerprintScan,
   Group,
   Punch,
   PunchCorrection,
@@ -34,6 +36,9 @@ if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Mapping, Sequence
   from pathlib import Path
+
+  # Third party imports
+  from timeclock_schema.enums import ScanOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +79,11 @@ CREATE TABLE IF NOT EXISTS fingerprints (
 CREATE TABLE IF NOT EXISTS fingerprint_removals (id TEXT PRIMARY KEY, replaced_by TEXT);
 -- The change log's unpushed rows; a pushed row is deleted.
 CREATE TABLE IF NOT EXISTS fingerprint_changes (id TEXT PRIMARY KEY, employee_id INTEGER NOT NULL, json TEXT NOT NULL);
+-- The scan log: `settled` is 0 while a matched scan waits for its outcome. Bytes live in the BLOBs, never in the JSON.
+-- A pushed row is deleted.
+CREATE TABLE IF NOT EXISTS fingerprint_scans (
+  id TEXT PRIMARY KEY, at TEXT NOT NULL, settled INTEGER NOT NULL, json TEXT NOT NULL, probe BLOB, image BLOB
+);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -472,6 +482,52 @@ class LocalStore:
         (_iso(before),),
       )
     return len(doomed) + corrections
+
+  # -- scan log -----------------------------------------------------------------------------------------------------
+
+  def insert_scan(self, s: FingerprintScan, *, settled: bool) -> None:
+    """Queue a scan for the push; an open one (`settled` false) waits for `settle_scan`."""
+    probe, image = (None if b is None else b.get_secret_value() for b in (s.probe, s.image))
+    with self._lock, self._conn:
+      self._conn.execute(
+        "INSERT OR IGNORE INTO fingerprint_scans (id, at, settled, json, probe, image) VALUES (?, ?, ?, ?, ?, ?)",
+        (str(s.id), _iso(s.at), int(settled), s.model_dump_json(context=REVEAL, exclude={"probe", "image"}), probe, image),
+      )
+
+  def settle_scan(self, scan_id: UUID, outcome: ScanOutcome, punch_id: UUID | None = None) -> None:
+    """Record what became of an open scan and release it to the push; an unknown or settled id changes nothing."""
+    with self._lock, self._conn:
+      row = self._conn.execute("SELECT json FROM fingerprint_scans WHERE id = ? AND settled = 0", (str(scan_id),)).fetchone()
+      if row is None:
+        return
+      settled = FingerprintScan.model_validate_json(row[0]).model_copy(update={"outcome": outcome, "punch_id": punch_id})
+      self._conn.execute(
+        "UPDATE fingerprint_scans SET settled = 1, json = ? WHERE id = ?",
+        (settled.model_dump_json(context=REVEAL, exclude={"probe", "image"}), str(scan_id)),
+      )
+
+  def settle_open_scans(self) -> None:
+    """Release every open scan with no outcome: whatever it waited on died with the last run."""
+    with self._lock, self._conn:
+      self._conn.execute("UPDATE fingerprint_scans SET settled = 1 WHERE settled = 0")
+
+  def unsynced_scans(self, limit: int = 50) -> list[FingerprintScan]:
+    """Return up to `limit` settled scans not yet pushed, oldest first."""
+    with self._lock:
+      rows = self._conn.execute(
+        "SELECT json, probe, image FROM fingerprint_scans WHERE settled = 1 ORDER BY at, rowid LIMIT ?", (limit,)
+      ).fetchall()
+    return [
+      FingerprintScan.model_validate_json(j).model_copy(
+        update={"probe": None if p is None else SecretBytes(p), "image": None if i is None else SecretBytes(i)}
+      )
+      for j, p, i in rows
+    ]
+
+  def delete_scan(self, scan_id: UUID) -> None:
+    """Delete a pushed scan."""
+    with self._lock, self._conn:
+      self._conn.execute("DELETE FROM fingerprint_scans WHERE id = ?", (str(scan_id),))
 
   # -- meta ---------------------------------------------------------------------------------------------------------
 

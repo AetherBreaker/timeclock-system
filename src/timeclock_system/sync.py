@@ -16,6 +16,7 @@ from uuid import UUID
 # Third party imports
 import psycopg
 from psycopg.rows import DictRow, dict_row
+from psycopg.types.json import Jsonb
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Punch, PunchCorrection, RuleRow, Settings
 from timeclock_schema.wire import NOTIFY_CHANNEL, Notification
 
@@ -43,7 +44,7 @@ _SELECT: Final[dict[str, LiteralString]] = {
   "config.business_hours": "SELECT id, weekday, opens, closes FROM config.business_hours",
   "config.settings": (
     "SELECT auto_clock_out_enabled, auto_clock_out_run_time, auto_clock_out_stamp_time, lunches_enabled, breaks_enabled, "
-    "paid_break_minutes, weekly_hours_alert FROM config.settings"
+    "paid_break_minutes, weekly_hours_alert, save_scan_images, fingerprint_match_margin FROM config.settings"
   ),
   "punches": "SELECT id, employee_id, kind, at, instance_id, automatic, received_at, db_login FROM punches",
   "punch_corrections": "SELECT id, punch_id, action, new_at, new_kind, note, recorded_at FROM punch_corrections",
@@ -94,6 +95,20 @@ _INSERT_FINGERPRINT_CHANGE: Final = (
   "VALUES (%(id)s, %(employee_id)s, %(finger)s, %(action)s, %(approved_by)s, %(pin_only)s, %(at)s, %(instance_id)s) "
   "ON CONFLICT (id) DO NOTHING"
 )
+# Every column the clock role may insert; `scores` goes in as jsonb.
+_INSERT_SCAN: Final = (
+  "INSERT INTO fingerprint_scans (id, at, instance_id, result, best_fingerprint_id, best_employee_id, best_finger, "
+  "best_score, other_fingerprint_id, other_employee_id, other_finger, other_score, scores, margin, outcome, punch_id, "
+  "retry_message, probe, image, image_width, image_height) "
+  "VALUES (%(id)s, %(at)s, %(instance_id)s, %(result)s::scan_result, %(best_fingerprint_id)s, %(best_employee_id)s, "
+  "%(best_finger)s::finger, %(best_score)s, %(other_fingerprint_id)s, %(other_employee_id)s, %(other_finger)s::finger, "
+  "%(other_score)s, %(scores)s, %(margin)s, %(outcome)s::scan_outcome, %(punch_id)s, %(retry_message)s, %(probe)s, "
+  "%(image)s, %(image_width)s, %(image_height)s) ON CONFLICT (id) DO NOTHING"
+)
+_SCAN_COLUMNS: Final[set[str]] = {
+  "id", "at", "instance_id", "best_fingerprint_id", "best_employee_id", "best_score", "other_fingerprint_id",
+  "other_employee_id", "other_score", "margin", "punch_id", "retry_message", "image_width", "image_height",
+}  # fmt: skip
 
 _BACKOFF_START, _BACKOFF_MAX = 1.0, 60.0
 _PING_AFTER_SECS = 30.0
@@ -360,6 +375,26 @@ class DatabaseSync:
         self._refused_record("fingerprint bypass", b.id, f"employee {b.employee_id}, {b.reason.value} at {b.at}", err)
         continue
       await asyncio.to_thread(self._store.mark_bypass_synced, b.id)
+    # Last: scan rows have no foreign keys, so none waits on another record, and a backlog can't delay a punch.
+    for scan in await asyncio.to_thread(self._store.unsynced_scans):
+      try:
+        await conn.execute(
+          _INSERT_SCAN,
+          {
+            **scan.model_dump(include=_SCAN_COLUMNS),
+            "result": scan.result.value,
+            "outcome": scan.outcome and scan.outcome.value,
+            "best_finger": scan.best_finger and scan.best_finger.value,
+            "other_finger": scan.other_finger and scan.other_finger.value,
+            "scores": Jsonb({str(print_id): score for print_id, score in scan.scores.items()}),
+            "probe": scan.probe and scan.probe.get_secret_value(),
+            "image": scan.image and scan.image.get_secret_value(),
+          },
+        )
+      except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as err:
+        self._refused_record("fingerprint scan", scan.id, f"{scan.result.value} at {scan.at}", err)
+        continue
+      await asyncio.to_thread(self._store.delete_scan, scan.id)
 
   async def _apply(self, conn: AsyncConnection[DictRow], payload: str) -> None:
     """Apply one notification (§4.4): re-read what it names and mirror it; a row that's gone is deleted locally."""

@@ -27,9 +27,9 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from pydantic import SecretBytes, SecretStr
-from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, PunchKind
+from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, PunchKind, ScanResult
 from timeclock_schema.migrations import load_migrations
-from timeclock_schema.models import Employee, Fingerprint, FingerprintBypass, Punch
+from timeclock_schema.models import Employee, Fingerprint, FingerprintBypass, FingerprintScan, Punch
 from timeclock_schema.shifts import EmployeeState
 
 # First party imports
@@ -517,3 +517,46 @@ async def test_remove_then_add_the_same_finger_while_offline(pg: Pg, rig: Callab
 
   await eventually(only_new, "the removal to land before the insert")
   assert r.alerts == []
+
+
+async def test_pushes_scans_and_deletes_them_here(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
+  r = await rig()
+  print_id = uuid4()
+  scan = FingerprintScan(
+    id=uuid4(),
+    at=datetime.now(UTC),
+    instance_id="1",
+    result=ScanResult.NO_MATCH,
+    best_fingerprint_id=print_id,
+    best_employee_id=7,
+    best_finger=Finger.LEFT_INDEX,
+    best_score=12,
+    scores={print_id: 12},
+    margin=15,
+    probe=SecretBytes(b"probe"),
+    image=SecretBytes(b"image"),
+    image_width=2,
+    image_height=3,
+  )
+  r.store.insert_scan(scan, settled=True)
+  r.sync.wake()
+
+  async def pushed() -> bool:
+    return bool(await admin_execute(pg, "SELECT 1 FROM fingerprint_scans WHERE id = %(id)s", {"id": scan.id}))
+
+  await eventually(pushed, "the scan to reach PostgreSQL")
+  [row] = await admin_execute(
+    pg,
+    "SELECT result::text, best_finger::text, scores, probe, image, image_width, image_height, outcome, db_login "
+    "FROM fingerprint_scans WHERE id = %(id)s",
+    {"id": scan.id},
+  )
+  assert row == ("no_match", "left_index", {str(print_id): 12}, b"probe", b"image", 2, 3, None, pg.role)
+  await eventually(lambda: r.store.unsynced_scans() == [], "the local scan to be deleted")
+  assert r.alerts == []
+
+
+async def test_catch_up_mirrors_the_scan_switches(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
+  await admin_execute(pg, "UPDATE config.settings SET save_scan_images = false, fingerprint_match_margin = 7")
+  r = await rig()
+  assert (r.clock.settings().save_scan_images, r.clock.settings().fingerprint_match_margin) == (False, 7)

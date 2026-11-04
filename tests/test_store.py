@@ -9,12 +9,21 @@ from uuid import UUID, uuid4
 # Third party imports
 import pytest
 from pydantic import SecretBytes
-from timeclock_schema.enums import BypassReason, CorrectionAction, Finger, FingerprintChangeAction, PunchKind
+from timeclock_schema.enums import (
+  BypassReason,
+  CorrectionAction,
+  Finger,
+  FingerprintChangeAction,
+  PunchKind,
+  ScanOutcome,
+  ScanResult,
+)
 from timeclock_schema.models import (
   Employee,
   Fingerprint,
   FingerprintBypass,
   FingerprintChange,
+  FingerprintScan,
   Group,
   Punch,
   PunchCorrection,
@@ -470,3 +479,61 @@ def test_unlabelled_local_prints_are_dropped_on_open(db_path: Path) -> None:
   finally:
     s.close()
   assert query(db_path, "SELECT count(*) FROM fingerprints") == [(0,)]
+
+
+def scan(at: datetime = T, scores: dict[UUID, int] | None = None) -> FingerprintScan:
+  return FingerprintScan(
+    id=uuid4(),
+    at=at,
+    instance_id="clock-a",
+    result=ScanResult.MATCHED,
+    best_fingerprint_id=uuid4(),
+    best_employee_id=1,
+    best_finger=Finger.LEFT_INDEX,
+    best_score=90,
+    margin=15,
+    probe=SecretBytes(b"probe-bytes"),
+    image=SecretBytes(b"image-bytes"),
+    image_width=2,
+    image_height=3,
+    scores=scores or {},
+  )
+
+
+def test_scan_round_trips_with_its_bytes(store: LocalStore, db_path: Path) -> None:
+  s = scan(scores={uuid4(): 90})
+  store.insert_scan(s, settled=True)
+  [got] = store.unsynced_scans()
+  assert got == s
+  assert got.probe is not None
+  assert got.image is not None
+  assert (got.probe.get_secret_value(), got.image.get_secret_value()) == (b"probe-bytes", b"image-bytes")
+  assert "bytes" not in query(db_path, "SELECT json FROM fingerprint_scans")[0][0]
+  store.delete_scan(s.id)
+  assert store.unsynced_scans() == []
+
+
+def test_open_scan_waits_for_its_outcome(store: LocalStore) -> None:
+  s, pid = scan(), uuid4()
+  store.insert_scan(s, settled=False)
+  assert store.unsynced_scans() == []
+  store.settle_scan(s.id, ScanOutcome.PUNCHED, pid)
+  [got] = store.unsynced_scans()
+  assert (got.outcome, got.punch_id) == (ScanOutcome.PUNCHED, pid)
+  store.settle_scan(s.id, ScanOutcome.CANCELLED)
+  store.settle_scan(uuid4(), ScanOutcome.CANCELLED)  # unknown: nothing
+  assert [(g.outcome, g.punch_id) for g in store.unsynced_scans()] == [(ScanOutcome.PUNCHED, pid)]
+
+
+def test_unsynced_scans_oldest_first_up_to_the_limit(store: LocalStore) -> None:
+  late, early = scan(T + timedelta(minutes=1)), scan(T)
+  store.insert_scan(late, settled=True)
+  store.insert_scan(early, settled=True)
+  assert [x.id for x in store.unsynced_scans()] == [early.id, late.id]
+  assert [x.id for x in store.unsynced_scans(limit=1)] == [early.id]
+
+
+def test_settle_open_scans_leaves_the_outcome_empty(store: LocalStore) -> None:
+  store.insert_scan(scan(), settled=False)
+  store.settle_open_scans()
+  assert [x.outcome for x in store.unsynced_scans()] == [None]
