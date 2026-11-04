@@ -1,3 +1,65 @@
+diff --git a/libfprint/fp-print-private.h b/libfprint/fp-print-private.h
+index 6d44700..c0f9aaf 100644
+--- a/libfprint/fp-print-private.h
++++ b/libfprint/fp-print-private.h
+@@ -35,6 +35,9 @@ struct _FpPrint
+ 
+   FpImage          *image;
+ 
++  /* timeclock-system: bozorth3 score from the last identify whose gallery held this print, -1 before any */
++  gint              identify_score;
++
+   /* Metadata */
+   FpFinger   finger;
+   gchar     *username;
+diff --git a/libfprint/fp-print.c b/libfprint/fp-print.c
+index d541437..4395c4a 100644
+--- a/libfprint/fp-print.c
++++ b/libfprint/fp-print.c
+@@ -328,6 +328,7 @@ fp_print_class_init (FpPrintClass *klass)
+ static void
+ fp_print_init (FpPrint *self)
+ {
++  self->identify_score = -1;
+ }
+ 
+ /**
+@@ -417,6 +418,23 @@ fp_print_get_image (FpPrint *print)
+   return print->image;
+ }
+ 
++/**
++ * fp_print_get_identify_score:
++ * @print: A #FpPrint
++ *
++ * timeclock-system: the bozorth3 score @print got in the last identify whose gallery held it, so a caller can compare
++ * the gallery's scores itself. -1 if @print has not been in an identify gallery.
++ *
++ * Returns: The score, or -1
++ */
++gint
++fp_print_get_identify_score (FpPrint *print)
++{
++  g_return_val_if_fail (FP_IS_PRINT (print), -1);
++
++  return print->identify_score;
++}
++
+ /**
+  * fp_print_get_finger:
+  * @print: A #FpPrint
+diff --git a/libfprint/fp-print.h b/libfprint/fp-print.h
+index ac6820d..160d520 100644
+--- a/libfprint/fp-print.h
++++ b/libfprint/fp-print.h
+@@ -83,6 +83,7 @@ FpPrint *fp_print_new (FpDevice *device);
+ const gchar *fp_print_get_driver (FpPrint *print);
+ const gchar *fp_print_get_device_id (FpPrint *print);
+ FpImage     *fp_print_get_image (FpPrint *print);
++gint         fp_print_get_identify_score (FpPrint *print);
+ 
+ FpFinger     fp_print_get_finger (FpPrint *print);
+ const gchar *fp_print_get_username (FpPrint *print);
 diff --git a/libfprint/fpi-image-device.c b/libfprint/fpi-image-device.c
 index 87bdc60..e310608 100644
 --- a/libfprint/fpi-image-device.c
@@ -45,10 +107,10 @@ index 87bdc60..e310608 100644
  
        if (!error || error->domain == FP_DEVICE_RETRY)
 diff --git a/libfprint/fpi-print.c b/libfprint/fpi-print.c
-index 6c5e20d..d70221d 100644
+index 6c5e20d..fe03f3b 100644
 --- a/libfprint/fpi-print.c
 +++ b/libfprint/fpi-print.c
-@@ -268,6 +268,47 @@ fpi_print_bz3_match (FpPrint *print_template,
+@@ -268,6 +268,50 @@ fpi_print_bz3_match (FpPrint *print_template,
    return FPI_MATCH_FAIL;
  }
  
@@ -63,6 +125,8 @@ index 6c5e20d..d70221d 100644
 +  gint probe_len;
 +  gint best = 0;
 +  gint i;
++
++  print_template->identify_score = -1;
 +
 +  if (print_template->type != FPI_PRINT_NBIS || print->type != FPI_PRINT_NBIS)
 +    {
@@ -90,6 +154,7 @@ index 6c5e20d..d70221d 100644
 +      best = MAX (best, score);
 +    }
 +
++  print_template->identify_score = best;
 +  return best;
 +}
 +
