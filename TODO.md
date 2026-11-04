@@ -61,6 +61,10 @@ Each needs its own design before it's built.
   small toast slides in from the right, bottom right above the database status, with a live progress bar. Specifics
   to be discussed. Additionally make the regular app update banner instead appear as a toast.
 - [ ] **Review simultaneous update handling** Verify what happens if an update for both the host image and the app get pushed at around the same time, and ensure the system automatically coordinates the updates safely.
+- [ ] **Screen recordings of interactions** (owner, 2026-11-04): any interaction (a touch, a key, a scan) starts a
+  recording of the screen, which runs until 15 seconds pass with none. When someone reports the screen saying or showing
+  something odd, the owner can check what it actually showed. Specifics to be discussed, such as where recordings are
+  kept, for how long, and who can view them.
 - [ ] **Turn the screen off after hours, waking on touch** (owner: later, 2026-10-29). sway can power the display off
   (`output * power off`); first check on each clock's monitor that its touch panel keeps working while the screen sleeps,
   and catch the waking touch with an overlay so it doesn't press a key on the page.
