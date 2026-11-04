@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 # Third party imports
 from pydantic import SecretStr
 from timeclock_schema.alerts import CONFIRMATION_NOTICE
-from timeclock_schema.enums import BypassReason, EmployeeRole, Finger
+from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, ScanOutcome
 from timeclock_schema.models import EMAIL_PATTERN
 
 # First party imports
@@ -83,6 +83,15 @@ class ReaderIndicator(StrEnum):
   PAUSED = "paused"  # paused itself (too hot), which the patched reader shouldn't do: red, "Reader paused"
   BUSY = "busy"  # not taking scans (the gap after a scan): dim, no text
   ASLEEP = "asleep"  # closed after hours until a tap: dim, "Tap to wake the reader"
+
+
+@dataclass(frozen=True)
+class _OpenScan:
+  """A matched scan not yet settled in the log, with the employee it matched and the type of screen it last left up."""
+
+  scan_id: UUID
+  employee_id: int
+  screen: type[Screen]
 
 
 @dataclass(frozen=True)
@@ -418,6 +427,7 @@ class KioskController:
     self._outcome: ReaderIndicator | None = None  # the press's READ or UNRECOGNIZED; cleared by a new press or the lift
     self._failed_at: float | None = None  # the last failed read, until a new press or its red ends
     self._message: ReaderMessage | None = None
+    self._open_scan: _OpenScan | None = None  # at most one; a new scan settles it first
     self._paused_until = float("-inf")
     self._mode: ReaderMode | None = None
     self._status_dir = status_dir
@@ -496,6 +506,12 @@ class KioskController:
     async with self._lock:
       before = self._screen
       yield
+      # A screen of another type than the open scan's means the person went elsewhere; Menu -> Rescan is the same visit.
+      if (open_scan := self._open_scan) is not None and type(self._screen) is not open_scan.screen:
+        if open_scan.screen is Menu and isinstance(self._screen, Rescan):
+          self._open_scan = replace(open_scan, screen=Rescan)
+        else:
+          await self._settle_open(ScanOutcome.OTHER)
       self._sync_reader()
       # A screen change is a change of screen type: typing on a pad or in the form, or a new scan's menu, isn't one.
       m, changed = self._message, type(self._screen) is not type(before)
@@ -511,6 +527,12 @@ class KioskController:
 
   # -- helpers for the transitions ------------------------------------------------------------------------------
 
+  async def _settle_open(self, outcome: ScanOutcome, punch_id: UUID | None = None) -> None:
+    """Settle the open scan, if any, and close it."""
+    if (open_scan := self._open_scan) is not None:
+      self._open_scan = None
+      await self._clock.settle_scan(open_scan.scan_id, outcome, punch_id)
+
   async def _open_menu(self, employee_id: int, auth: OverrideGrant | None = None, notice: str | None = None) -> Screen:
     now = self._mono()
     try:
@@ -525,6 +547,8 @@ class KioskController:
       outcome = await self._clock.record_punch(employee_id, kind, override=auth, pin_login=pin_login)
     except PunchRefused as refused:
       return await self._open_menu(employee_id, auth, notice=refused.message)
+    if self._open_scan is not None and self._open_scan.employee_id == employee_id:
+      await self._settle_open(ScanOutcome.PUNCHED, outcome.punch.id)  # a manager's scan authorizing another's punch isn't this
     # The confirmation notice is the clock's one alert action (§6.11); other actions belong to other deliverers.
     notices = tuple(text.alert_notice(f) for f in outcome.firings if CONFIRMATION_NOTICE in f.hook.actions)
     return Confirmation(
@@ -573,6 +597,7 @@ class KioskController:
       now = self._mono()
       s = self._screen
       message: ReaderMessage | None = None
+      scan_id = await self._log_scan(ev)
       match ev:
         case FingerStatus():
           self._on_finger_status(s, ev)
@@ -587,13 +612,30 @@ class KioskController:
         case Matched(employee_id=employee_id):
           self._outcome = ReaderIndicator.READ
           message = ReaderMessage(text.SCAN_SUCCESSFUL, "success", now)
-          await self._on_match(s, employee_id)
+          await self._on_scanned_match(s, employee_id, scan_id)
         case EnrollStage() | Enrolled() | EnrollFailed() if isinstance(s, Registering):
           message = await self._on_enroll(s, ev)
         case _:
           pass  # every (screen, event) pair the table doesn't list is ignored (R7f)
       if message is not None and isinstance(s, _FINGER_SCREENS):
         self._message = message  # a newer message replaces the old, so a success also clears an error
+
+  async def _log_scan(self, ev: ScannerEvent) -> UUID | None:
+    # Split out of on_scanner_event for C901. A new scan ends the last one's visit; events without a report log nothing.
+    if not isinstance(ev, Matched | NoMatch | Retry) or ev.scan is None:
+      return None
+    await self._settle_open(ScanOutcome.RESCANNED)
+    return await self._clock.record_scan(ev.scan)
+
+  async def _on_scanned_match(self, s: Screen, employee_id: int, scan_id: UUID | None) -> None:
+    # Split out of on_scanner_event for C901. A match opens its scan before `_on_match`, so a punch made inside counts for it.
+    if scan_id is not None:
+      self._open_scan = _OpenScan(scan_id, employee_id, type(s))
+    await self._on_match(s, employee_id)
+    if self._open_scan is not None:
+      self._open_scan = replace(self._open_scan, screen=type(self._screen))
+      if isinstance(self._screen, Idle):
+        await self._settle_open(ScanOutcome.OTHER)  # menu refused: settle now, or the next scan would read "rescanned"
 
   def _on_finger_status(self, s: Screen, ev: FingerStatus) -> None:
     # Split out of on_scanner_event for C901.
@@ -952,6 +994,7 @@ class KioskController:
     Abandoning a fingerprint change, at its approval or its touches, changes nothing.
     """
     async with self._transition():
+      await self._settle_open(ScanOutcome.CANCELLED)
       if self._mode is ReaderMode.ENROLL:
         self._mode = ReaderMode.READY
         self._reader.set_mode(ReaderMode.READY)
@@ -974,6 +1017,7 @@ class KioskController:
         if s.until is not None and now >= s.until:
           self._screen = Idle()
       elif now - s.touched_at >= IDLE_CLOSE_SECS:
+        await self._settle_open(ScanOutcome.TIMED_OUT)
         # The new employee is already saved, so a timeout on their optional fingerprint step still shows their number.
         if isinstance(s, NewFingerprint):
           self._screen = EmployeeAdded(s.employee.display_name, s.employee.id, touched_at=now)
