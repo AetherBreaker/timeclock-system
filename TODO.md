@@ -21,6 +21,10 @@
   identify touches against the stored prints and build the template from them, or compile NBIS bozorth3 into a small C
   extension. Still open: which prints count (inactive employees, the person's own other fingers), what the refusal
   says, and whether it sends an alert.
+- [ ] **The Fingerprints login accepts a fingerprint** (owner, 2026-11-04). The PIN login that opens the gear menu's
+  Fingerprints screen takes only a PIN; a finger does nothing there. It should run on the same system as the other PIN
+  pads, which always accept a print in place of the PIN. The controller already routes a finger on that pad
+  (`_on_pad_match`, the `FingerprintLogin` case), so start by finding out why it doesn't take effect.
 - [ ] **Build patched libraries at release, not at deploy** (owner, 2026-11-02). libfprint's source is pinned (1.94.100,
   checksum-checked) and patched, but every clock compiles it at each deploy against whatever compiler and libraries the
   base image and Debian ship that day, so two clocks on one release can run different builds. Build it once when a
