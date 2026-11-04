@@ -1421,11 +1421,31 @@ async def test_menu_left_open_settles_timed_out(kiosk: Kiosk) -> None:
   assert outcomes(kiosk) == [ScanOutcome.TIMED_OUT]
 
 
-async def test_next_scan_settles_rescanned(kiosk: Kiosk) -> None:
+async def test_next_match_settles_rescanned(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  kiosk.t.advance(1)
+  await kiosk.ctl.on_scanner_event(scanned(MIA))
+  assert outcomes(kiosk) == [ScanOutcome.RESCANNED]
+
+
+async def test_unrecognized_repress_keeps_the_menus_scan(kiosk: Kiosk) -> None:
   await kiosk.ctl.on_scanner_event(scanned(ANN))
   kiosk.t.advance(1)
   await kiosk.ctl.on_scanner_event(unmatched())
-  assert outcomes(kiosk) == [ScanOutcome.RESCANNED, None]
+  await kiosk.ctl.on_scanner_event(Retry("again", ScanReport(ScanResult.RETRY, None, None, (), 15)))
+  assert isinstance(kiosk.ctl.screen, Menu)
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  [(punch, _)] = kiosk.store.unsynced_punches()
+  matched_scan, *others = kiosk.store.unsynced_scans()
+  assert (matched_scan.outcome, matched_scan.punch_id) == (ScanOutcome.PUNCHED, punch.id)
+  assert [(o.result, o.outcome) for o in others] == [(ScanResult.NO_MATCH, None), (ScanResult.RETRY, None)]
+
+
+async def test_a_scanless_match_leaves_the_open_scan_alone(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  await kiosk.ctl.on_scanner_event(matched(MIA))
+  await kiosk.ctl.cancel()
+  assert outcomes(kiosk) == [ScanOutcome.CANCELLED]
 
 
 async def test_rescan_punch_belongs_to_the_new_scan(kiosk: Kiosk) -> None:
