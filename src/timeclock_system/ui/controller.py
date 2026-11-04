@@ -612,7 +612,10 @@ class KioskController:
         case Matched(employee_id=employee_id):
           self._outcome = ReaderIndicator.READ
           message = ReaderMessage(text.SCAN_SUCCESSFUL, "success", now)
-          await self._on_scanned_match(s, employee_id, scan_id)
+          if scan_id is None:
+            await self._on_match(s, employee_id)  # no scan recorded: no open scan to open, move or settle
+          else:
+            await self._on_scanned_match(s, employee_id, scan_id)
         case EnrollStage() | Enrolled() | EnrollFailed() if isinstance(s, Registering):
           message = await self._on_enroll(s, ev)
         case _:
@@ -621,21 +624,22 @@ class KioskController:
         self._message = message  # a newer message replaces the old, so a success also clears an error
 
   async def _log_scan(self, ev: ScannerEvent) -> UUID | None:
-    # Split out of on_scanner_event for C901. A new scan ends the last one's visit; events without a report log nothing.
+    # Split out of on_scanner_event for C901. Only a new match ends the open scan's visit: the reader stays ready on the
+    # menu, so an unrecognized re-press must not read as "rescanned". Events without a report log nothing.
     if not isinstance(ev, Matched | NoMatch | Retry) or ev.scan is None:
       return None
-    await self._settle_open(ScanOutcome.RESCANNED)
+    if isinstance(ev, Matched):
+      await self._settle_open(ScanOutcome.RESCANNED)
     return await self._clock.record_scan(ev.scan)
 
-  async def _on_scanned_match(self, s: Screen, employee_id: int, scan_id: UUID | None) -> None:
+  async def _on_scanned_match(self, s: Screen, employee_id: int, scan_id: UUID) -> None:
     # Split out of on_scanner_event for C901. A match opens its scan before `_on_match`, so a punch made inside counts for it.
-    if scan_id is not None:
-      self._open_scan = _OpenScan(scan_id, employee_id, type(s))
+    self._open_scan = _OpenScan(scan_id, employee_id, type(s))
     await self._on_match(s, employee_id)
-    if self._open_scan is not None:
+    if self._open_scan is not None:  # pyright: ignore[reportUnnecessaryComparison]  # a punch inside `_on_match` may have settled it
       self._open_scan = replace(self._open_scan, screen=type(self._screen))
       if isinstance(self._screen, Idle):
-        await self._settle_open(ScanOutcome.OTHER)  # menu refused: settle now, or the next scan would read "rescanned"
+        await self._settle_open(ScanOutcome.OTHER)  # menu refused: settle now, or the next match would read "rescanned"
 
   def _on_finger_status(self, s: Screen, ev: FingerStatus) -> None:
     # Split out of on_scanner_event for C901.
