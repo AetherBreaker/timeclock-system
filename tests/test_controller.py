@@ -13,7 +13,7 @@ import bcrypt
 import pytest
 from pydantic import SecretBytes, SecretStr
 from timeclock_schema.alerts import CONFIRMATION_NOTICE, WEEKLY_HOURS, Firing, Hook
-from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, FingerprintChangeAction, PunchKind
+from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, FingerprintChangeAction, PunchKind, ScanOutcome, ScanResult
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Punch, Settings
 
 # First party imports
@@ -28,12 +28,16 @@ from timeclock_system.scanner import (
   ReaderMode,
   ReaderPaused,
   Retry,
+  ScanReport,
+  ScoredPrint,
 )
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
 from timeclock_system.ui import text
 from timeclock_system.ui.controller import (
+  CONFIRM_SECS,
   IDLE_CLOSE_SECS,
+  RESCAN_AFTER_SECS,
   AddEmployeeDetails,
   AdminMenu,
   AdminReconfirm,
@@ -1378,3 +1382,99 @@ async def test_banner_removed_with_its_file(kiosk: Kiosk, tmp_path: Path) -> Non
   (tmp_path / "status" / "banner.json").unlink()
   await kiosk.ctl.tick()
   assert kiosk.ctl.banner is None
+
+
+def scanned(employee_id: int) -> Matched:
+  """A match carrying its scan report, as the scanner posts it."""
+  print_id = MIA_PRINT if employee_id == MIA else ANN_PRINT
+  best = ScoredPrint(print_id, employee_id, Finger.LEFT_INDEX, 90)
+  return Matched(print_id, employee_id, ScanReport(ScanResult.MATCHED, best, None, ((print_id, 90),), 15))
+
+
+def unmatched() -> NoMatch:
+  return NoMatch(ScanReport(ScanResult.NO_MATCH, None, None, (), 15))
+
+
+def outcomes(kiosk: Kiosk) -> list[ScanOutcome | None]:
+  return [s.outcome for s in kiosk.store.unsynced_scans()]
+
+
+async def test_scan_then_punch_settles_punched(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  assert outcomes(kiosk) == []  # a matched scan waits for its outcome
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  [scan] = kiosk.store.unsynced_scans()
+  [(punch, _)] = kiosk.store.unsynced_punches()
+  assert (scan.outcome, scan.punch_id) == (ScanOutcome.PUNCHED, punch.id)
+
+
+async def test_scan_then_cancel_settles_cancelled(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  await kiosk.ctl.cancel()
+  assert outcomes(kiosk) == [ScanOutcome.CANCELLED]
+
+
+async def test_menu_left_open_settles_timed_out(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  kiosk.t.advance(IDLE_CLOSE_SECS + 1)
+  await kiosk.ctl.tick()
+  assert outcomes(kiosk) == [ScanOutcome.TIMED_OUT]
+
+
+async def test_next_scan_settles_rescanned(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  kiosk.t.advance(1)
+  await kiosk.ctl.on_scanner_event(unmatched())
+  assert outcomes(kiosk) == [ScanOutcome.RESCANNED, None]
+
+
+async def test_rescan_punch_belongs_to_the_new_scan(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  kiosk.t.advance(RESCAN_AFTER_SECS + 1)
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  assert isinstance(kiosk.ctl.screen, Rescan)
+  assert outcomes(kiosk) == []  # Menu -> Rescan is still the same visit
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  assert isinstance(kiosk.ctl.screen, Confirmation)
+  first, second = kiosk.store.unsynced_scans()
+  [(punch, _)] = kiosk.store.unsynced_punches()
+  assert (first.outcome, first.punch_id) == (ScanOutcome.RESCANNED, None)
+  assert (second.outcome, second.punch_id) == (ScanOutcome.PUNCHED, punch.id)
+
+
+async def test_gear_from_menu_settles_other(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  await kiosk.ctl.gear()
+  assert outcomes(kiosk) == [ScanOutcome.OTHER]
+
+
+async def test_a_refused_menu_settles_other_at_once(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(99))  # not an employee this clock knows, so the menu is refused
+  assert isinstance(kiosk.ctl.screen, Idle)
+  assert outcomes(kiosk) == [ScanOutcome.OTHER]
+
+
+async def test_managers_override_scan_settles_other(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  kiosk.t.advance(RESCAN_AFTER_SECS + 1)
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  await kiosk.ctl.request_override()
+  await kiosk.ctl.on_scanner_event(scanned(MIA))
+  assert isinstance(kiosk.ctl.screen, Confirmation)  # the manager's finger recorded Ann's punch
+  kiosk.t.advance(CONFIRM_SECS + 0.1)
+  await kiosk.ctl.tick()
+  first, second = kiosk.store.unsynced_scans()
+  assert (first.best_employee_id, first.outcome) == (ANN, ScanOutcome.OTHER)  # left for the override prompt
+  assert (second.best_employee_id, second.outcome, second.punch_id) == (MIA, ScanOutcome.OTHER, None)
+
+
+async def test_a_failing_scan_log_still_opens_the_menu(kiosk: Kiosk, monkeypatch: pytest.MonkeyPatch) -> None:
+  async def failed(_scan: ScanReport) -> None:
+    return None
+
+  monkeypatch.setattr(kiosk.clock, "record_scan", failed)
+  await kiosk.ctl.on_scanner_event(scanned(ANN))
+  assert isinstance(kiosk.ctl.screen, Menu)
+  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
+  assert [p.kind for p in kiosk.store.punches(ANN)] == [PunchKind.CLOCK_IN]
+  assert outcomes(kiosk) == []
