@@ -1,7 +1,8 @@
 """Mirror PostgreSQL into the local store and push this clock's records, through the backend's relay (spec §6.6).
 
 One task owns one connection. Any database or network error drops it and the loop starts over from connecting, except
-the database refusing one pushed record: that record is alerted, kept and retried, and the push goes on (see _push).
+the database refusing one pushed record: that record is alerted, kept and retried (a scan is dropped), and the push goes
+on (see _push).
 """
 
 # Standard library imports
@@ -149,6 +150,7 @@ class DatabaseSync:
     self._clock = clock
     self._alert = alert
     self._refused: set[UUID | int] = set()  # records already alerted
+    self._scan_refused = False  # a refused scan already alerted this run
     self._store = store
     self._conninfo = conninfo
     self._now = now
@@ -345,8 +347,8 @@ class DatabaseSync:
     """Push unsynced records (§6.6 step 4, R38): employees, punches, then fingerprints, then PIN logins that punched nothing.
 
     Punches go oldest first, one transaction each with its bypass. A record the database refuses doesn't hold back the
-    ones after it: it's alerted, kept unsynced and retried next push. The store holds back a pending employee's records,
-    so those of one accepted here go in this same push.
+    ones after it: it's alerted, kept unsynced and retried next push; a refused scan is dropped. The store holds back a
+    pending employee's records, so those of one accepted here go in this same push.
     """
     await self._push_employees(conn)
     for punch, bypass in await asyncio.to_thread(self._store.unsynced_punches):
@@ -378,7 +380,6 @@ class DatabaseSync:
       await asyncio.to_thread(self._store.mark_bypass_synced, b.id)
     # Last: scan rows have no foreign keys, so none waits on another record, and a backlog can't delay a punch.
     scans = await asyncio.to_thread(self._store.unsynced_scans, _SCAN_BATCH)
-    pushed = 0
     for scan in scans:
       try:
         await conn.execute(
@@ -395,13 +396,15 @@ class DatabaseSync:
           },
         )
       except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as err:
-        self._refused_record("fingerprint scan", scan.id, f"{scan.result.value} at {scan.at}", err)
-        continue
+        # Dropped, not kept (owner, 2026-11-04): unsynced scans go oldest first, so a kept batch of refused ones would hold
+        # back every later scan. One alert per run, as a version mismatch refuses them all.
+        logger.warning("the database refused fingerprint scan %s (%s at %s); dropped: %s", scan.id, scan.result.value, scan.at, err)
+        if not self._scan_refused:
+          self._scan_refused = True
+          self._alert("Database refused a fingerprint scan", f"Refused scans are dropped from this clock's scan log: {err}")
       await asyncio.to_thread(self._store.delete_scan, scan.id)
-      pushed += 1
-    # A full batch means more may wait; the loop pushes again between notifications and punches. Only with progress: refused
-    # rows stay and sort first, so a full batch of them would otherwise re-push the same rows forever.
-    if len(scans) == _SCAN_BATCH and pushed:
+    # A full batch means more may wait; the loop pushes again between notifications and punches.
+    if len(scans) == _SCAN_BATCH:
       self._wake.set()
 
   async def _apply(self, conn: AsyncConnection[DictRow], payload: str) -> None:
