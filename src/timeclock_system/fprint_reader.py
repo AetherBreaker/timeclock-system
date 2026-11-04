@@ -6,6 +6,7 @@ Every method blocks and runs on the scanner thread, the only thread that touches
 
 # Standard library imports
 import argparse
+import logging
 import threading
 import time
 from typing import TYPE_CHECKING
@@ -44,6 +45,7 @@ if hasattr(FPrint, "device_retry_quark"):
 else:
   _RETRY_SOURCE, _RETRY_DOMAIN = "FPrint.DeviceRetry.quark", GLib.quark_to_string(FPrint.DeviceRetry.quark())
 _ERROR_DOMAIN = GLib.quark_to_string(FPrint.device_error_quark())
+LOGGER = logging.getLogger(__name__)
 
 
 def _reader_error(e: GLib.Error) -> Exception:
@@ -130,14 +132,22 @@ class FprintReader:
     except GLib.Error as e:
       raise _reader_error(e) from e
 
-    def capture_of(match: FPrint.Print | None, probe: FPrint.Print) -> Capture:
-      image = probe.get_image()
+    def capture_of(match: FPrint.Print | None, probe: FPrint.Print | None) -> Capture:
+      # The probe's bytes and image are best-effort: a failure there must never cost the capture its match or scores.
+      probe_bytes, image = None, None
+      if probe is not None:
+        try:
+          probe_bytes = bytes(probe.serialize())
+          raw = probe.get_image()
+          image = None if raw is None else ScanImage(bytes(raw.get_data()), raw.get_width(), raw.get_height())
+        except GLib.Error as e:
+          LOGGER.warning("the probe's scan data is unavailable: %s", e.message)  # message only, never bytes
       return Capture(
         # libfprint hands back the gallery object it matched, so identity finds its id.
         next((print_id for print_id, print_ in self._prints.items() if print_ is match), None),
         tuple((print_id, print_.get_identify_score()) for print_id, print_ in self._prints.items()),
-        bytes(probe.serialize()),
-        None if image is None else ScanImage(bytes(image.get_data()), image.get_width(), image.get_height()),
+        probe_bytes,
+        image,
       )
 
     def matched(_device: FPrint.Device, match: FPrint.Print | None, probe: FPrint.Print, _user_data: object, error: object) -> None:
