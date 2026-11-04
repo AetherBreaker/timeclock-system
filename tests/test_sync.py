@@ -583,19 +583,21 @@ async def test_a_backlog_drains_without_further_wakes(pg: Pg, rig: Callable[[], 
   assert await admin_execute(pg, "SELECT count(*) FROM fingerprint_scans") == [(120,)]
 
 
-async def test_a_full_batch_of_refused_scans_doesnt_wake_the_sync_again(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
-  await admin_execute(pg, "ALTER TABLE fingerprint_scans ADD CONSTRAINT refuse_all CHECK (false)")
+async def test_refused_scans_are_dropped_and_dont_hold_back_later_ones(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
+  await admin_execute(pg, "ALTER TABLE fingerprint_scans ADD CONSTRAINT refuse_no_match CHECK (result <> 'no_match')")
   r = await rig()
-  batch = 50  # the sync's _SCAN_BATCH
-  for _ in range(batch):
-    r.store.insert_scan(
-      FingerprintScan(id=uuid4(), at=datetime.now(UTC), instance_id="1", result=ScanResult.NO_MATCH, margin=15), settled=True
-    )
+  # More refused than a batch (50), all older than the one the database accepts.
+  *_, accepted = scans = [
+    FingerprintScan(id=uuid4(), at=datetime.now(UTC), instance_id="1", result=result, margin=15)
+    for result in [ScanResult.NO_MATCH] * 60 + [ScanResult.RETRY]
+  ]
+  for scan in scans:
+    r.store.insert_scan(scan, settled=True)
   r.sync.wake()
-  await eventually(lambda: len(r.alerts) == batch, "every scan to be refused")
-  await asyncio.sleep(0.5)  # a re-wake would have started another push by now
-  assert not r.sync._wake.is_set()  # pyright: ignore[reportPrivateUsage]
-  assert len(r.store.unsynced_scans(limit=100)) == batch
+  await eventually(lambda: r.store.unsynced_scans(limit=1) == [], "every scan to leave the clock")
+  assert await admin_execute(pg, "SELECT id FROM fingerprint_scans") == [(accepted.id,)]
+  [(reason, _)] = r.alerts  # once, for 60 refusals
+  assert reason == "Database refused a fingerprint scan"
 
 
 async def test_catch_up_mirrors_the_scan_switches(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
