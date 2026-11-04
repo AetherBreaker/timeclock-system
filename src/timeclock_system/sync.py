@@ -378,8 +378,7 @@ class DatabaseSync:
       await asyncio.to_thread(self._store.mark_bypass_synced, b.id)
     # Last: scan rows have no foreign keys, so none waits on another record, and a backlog can't delay a punch.
     scans = await asyncio.to_thread(self._store.unsynced_scans, _SCAN_BATCH)
-    if len(scans) == _SCAN_BATCH:
-      self._wake.set()  # a full batch means more may wait; the loop pushes again between notifications and punches
+    pushed = 0
     for scan in scans:
       try:
         await conn.execute(
@@ -399,6 +398,11 @@ class DatabaseSync:
         self._refused_record("fingerprint scan", scan.id, f"{scan.result.value} at {scan.at}", err)
         continue
       await asyncio.to_thread(self._store.delete_scan, scan.id)
+      pushed += 1
+    # A full batch means more may wait; the loop pushes again between notifications and punches. Only with progress: refused
+    # rows stay and sort first, so a full batch of them would otherwise re-push the same rows forever.
+    if len(scans) == _SCAN_BATCH and pushed:
+      self._wake.set()
 
   async def _apply(self, conn: AsyncConnection[DictRow], payload: str) -> None:
     """Apply one notification (§4.4): re-read what it names and mirror it; a row that's gone is deleted locally."""
