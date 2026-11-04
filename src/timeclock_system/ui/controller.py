@@ -638,8 +638,10 @@ class KioskController:
     await self._on_match(s, employee_id)
     if self._open_scan is not None:  # pyright: ignore[reportUnnecessaryComparison]  # a punch inside `_on_match` may have settled it
       self._open_scan = replace(self._open_scan, screen=type(self._screen))
-      if isinstance(self._screen, Idle):
-        await self._settle_open(ScanOutcome.OTHER)  # menu refused: settle now, or the next match would read "rescanned"
+      # The match left its employee nothing to act on (`_on_match` ignored it, or it ended on Idle or on a confirmation of
+      # someone else's punch): settle now, or the next match would read "rescanned" and a timeout "timed out".
+      if self._screen is s or isinstance(self._screen, Idle | Confirmation):
+        await self._settle_open(ScanOutcome.OTHER)
 
   def _on_finger_status(self, s: Screen, ev: FingerStatus) -> None:
     # Split out of on_scanner_event for C901.
