@@ -208,6 +208,7 @@ class Clock:
     self._alerted_rules: set[tuple[int, datetime]] = set()
     self._change_listeners: list[Callable[[frozenset[ChangeTable]], None]] = []
     self._record_listeners: list[Callable[[Record], None]] = []
+    self._scan_listeners: list[Callable[[], object]] = []
     # Serializes record_punch's guard-then-insert so two taps can't both pass the same state check.
     self._punch_lock = asyncio.Lock()
 
@@ -246,7 +247,10 @@ class Clock:
   async def load(self) -> None:
     """Cache employees, groups, rules, business hours and settings from the store."""
     await asyncio.to_thread(self._reload, ("employees", "groups", "rules", "business_hours", "settings"))
-    await asyncio.to_thread(self._store.settle_open_scans)  # a matched scan's outcome died with the last run
+    try:
+      await asyncio.to_thread(self._store.settle_open_scans)  # a matched scan's outcome died with the last run
+    except Exception:
+      logger.exception("could not settle the previous run's open fingerprint scans")  # the log must not block startup
 
   def notify_changed(self, tables: Iterable[ChangeTable]) -> None:
     """Reload the caches of the changed tables, then tell every change listener."""
@@ -262,6 +266,10 @@ class Clock:
   def add_record_listener(self, cb: Callable[[Record], None]) -> None:
     """Call `cb` on the loop after every record this clock creates is stored (sync's wake-up; LAN sharing's seam)."""
     self._record_listeners.append(cb)
+
+  def add_scan_listener(self, cb: Callable[[], object]) -> None:
+    """Call `cb` on the loop whenever a scan becomes settled (sync's wake-up: scans aren't records)."""
+    self._scan_listeners.append(cb)
 
   async def insert_peer_record(self, record: Punch | Fingerprint) -> bool:
     """LAN seam: store a record received from a peer (origin `peer`, so never pushed).
@@ -478,6 +486,9 @@ class Clock:
     except Exception:
       logger.exception("could not log a fingerprint scan")  # no bytes in the message: the scan is biometric
       return None
+    if scan.result is not ScanResult.MATCHED:
+      for cb in self._scan_listeners:
+        cb()
     return row.id
 
   async def settle_scan(self, scan_id: UUID, outcome: ScanOutcome, punch_id: UUID | None = None) -> None:
@@ -486,6 +497,9 @@ class Clock:
       await asyncio.to_thread(self._store.settle_scan, scan_id, outcome, punch_id)
     except Exception:
       logger.exception("could not settle fingerprint scan %s", scan_id)
+      return
+    for cb in self._scan_listeners:
+      cb()
 
   async def add_employee(self, new: NewEmployee, pin: SecretStr) -> Employee:
     """Create an employee at this clock, saved locally and pushed when the database is reachable (§6.4, §6.6).

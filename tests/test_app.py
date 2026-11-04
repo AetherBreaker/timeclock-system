@@ -4,15 +4,18 @@ import importlib
 import inspect
 import sys
 import types
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any, ClassVar, override
 from zoneinfo import ZoneInfo
 
 # Third party imports
 import pytest
 import uvicorn
+from timeclock_schema.enums import ScanResult
+from timeclock_schema.models import Settings
 
 # First party imports
 from timeclock_system.clock import Clock
+from timeclock_system.scanner import ScanReport
 from timeclock_system.store import LocalStore
 
 if TYPE_CHECKING:
@@ -21,6 +24,7 @@ if TYPE_CHECKING:
   from pathlib import Path
 
 NY = ZoneInfo("America/New_York")
+NEW_MARGIN = 7
 
 
 class FakeReader:
@@ -33,9 +37,50 @@ class FailingClock(Clock):
     raise RuntimeError("stored data failed validation")
 
 
+class FakeScanner:
+  """Records the gallery and margin the app hands over; every other call does nothing."""
+
+  def __init__(self, *_args: object) -> None:
+    self.galleries: list[tuple[object, int]] = []
+
+  def set_gallery(self, prints: object, margin: int) -> None:
+    self.galleries.append((prints, margin))
+
+  def __getattr__(self, _name: str) -> Callable[..., None]:
+    return lambda *_a, **_k: None
+
+
+class FakeSync:
+  """Counts wake-ups; never connects."""
+
+  def __init__(self, *_args: object, **_kwargs: object) -> None:
+    self.wakes = 0
+
+  def wake(self) -> None:
+    self.wakes += 1
+
+  def add_status_listener(self, _cb: object) -> None:
+    pass
+
+  async def run(self) -> None:
+    await asyncio.Event().wait()
+
+
+class RecordingClock(Clock):
+  instances: ClassVar[list[RecordingClock]] = []
+
+  def __init__(self, *args: Any, **kwargs: Any) -> None:
+    super().__init__(*args, **kwargs)
+    self.instances.append(self)
+
+
 @pytest.fixture
 def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
   """Run serve() with fakes for the hardware and NiceGUI, and capture what it hands to them."""
+  yield from serve_with(tmp_path, monkeypatch, {"Clock": FailingClock})
+
+
+def serve_with(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patches: dict[str, Any]) -> Iterator[dict[str, Any]]:
   fake_reader_module = types.ModuleType("timeclock_system.fprint_reader")
   fake_reader_module.FprintReader = FakeReader  # pyright: ignore[reportAttributeAccessIssue]
   monkeypatch.setitem(sys.modules, "timeclock_system.fprint_reader", fake_reader_module)
@@ -56,7 +101,8 @@ def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str,
   )
   captured: dict[str, Any] = {"shutdowns": [], "startup": [], "run": {}}
   monkeypatch.setattr(app_module.ClockSettings, "get_settings", lambda: settings)
-  monkeypatch.setattr(app_module, "Clock", FailingClock)
+  for name, fake in patches.items():
+    monkeypatch.setattr(app_module, name, fake)
   monkeypatch.setattr(app_module, "register_crash_alert_writer", lambda _w: None)
   monkeypatch.setattr(app_module, "register_for_shutdown", lambda *_a, **_k: None)
   monkeypatch.setattr(app_module, "install_loop_exception_handler", lambda: None)
@@ -92,6 +138,40 @@ async def test_a_failing_startup_shuts_the_clock_down(wired: dict[str, Any]) -> 
   [(reason, details)] = wired["shutdowns"]
   assert reason == "Startup stopped"
   assert "stored data failed validation" in details
+
+
+@pytest.fixture
+def wired_scanner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
+  RecordingClock.instances.clear()
+  scanner, sync = FakeScanner(), FakeSync()
+  patches = {
+    "Clock": RecordingClock,
+    "Scanner": lambda *_a: scanner,
+    "DatabaseSync": lambda *_a, **_k: sync,
+    "heartbeat_loop": lambda *_a, **_k: asyncio.Event().wait(),
+  }
+  captured = next(iter(serve_with(tmp_path, monkeypatch, patches)))
+  yield {**captured, "scanner": scanner, "sync": sync, "clock": RecordingClock.instances[0]}
+
+
+async def test_a_settings_change_reaches_the_scanner_margin(wired_scanner: dict[str, Any]) -> None:
+  [startup] = wired_scanner["startup"]
+  await invoke_like_nicegui(startup)
+  scanner, clock = wired_scanner["scanner"], wired_scanner["clock"]
+  assert scanner.galleries[-1][1] == Settings().fingerprint_match_margin
+  clock._store.set_settings(Settings(fingerprint_match_margin=NEW_MARGIN))
+  clock.notify_changed({"settings"})
+  await invoke_like_nicegui(lambda: None)  # the gallery refresh is a task
+  assert scanner.galleries[-1][1] == NEW_MARGIN
+
+
+async def test_a_settled_scan_wakes_the_sync(wired_scanner: dict[str, Any]) -> None:
+  [startup] = wired_scanner["startup"]
+  await invoke_like_nicegui(startup)
+  sync = wired_scanner["sync"]
+  before = sync.wakes
+  await wired_scanner["clock"].record_scan(ScanReport(ScanResult.NO_MATCH, None, None, (), 15))
+  assert sync.wakes == before + 1
 
 
 async def test_a_screen_error_shuts_the_clock_down(wired: dict[str, Any]) -> None:

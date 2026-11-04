@@ -537,3 +537,11 @@ def test_settle_open_scans_leaves_the_outcome_empty(store: LocalStore) -> None:
   store.insert_scan(scan(), settled=False)
   store.settle_open_scans()
   assert [x.outcome for x in store.unsynced_scans()] == [None]
+
+
+def test_the_scan_push_query_uses_the_settled_index(store: LocalStore, db_path: Path) -> None:
+  store.insert_scan(scan(), settled=True)  # the schema is created on open
+  plan = query(db_path, "EXPLAIN QUERY PLAN SELECT id, json FROM fingerprint_scans WHERE settled = 1 ORDER BY at, rowid LIMIT 50")
+  detail = " ".join(row[3] for row in plan)
+  assert "fingerprint_scans_settled_at" in detail
+  assert "TEMP B-TREE" not in detail
