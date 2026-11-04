@@ -8,6 +8,7 @@ by `notify_changed`.
 
 # Standard library imports
 import asyncio
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -19,13 +20,22 @@ from uuid import uuid4
 import bcrypt
 from pydantic import SecretBytes, SecretStr
 from timeclock_schema.alerts import AlertContext, Firing, fired_hooks
-from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, FingerprintChangeAction, PunchKind, RuleAction
+from timeclock_schema.enums import (
+  BypassReason,
+  EmployeeRole,
+  Finger,
+  FingerprintChangeAction,
+  PunchKind,
+  RuleAction,
+  ScanResult,
+)
 from timeclock_schema.models import (
   BusinessHours,
   Employee,
   Fingerprint,
   FingerprintBypass,
   FingerprintChange,
+  FingerprintScan,
   Group,
   Punch,
   RuleRow,
@@ -44,8 +54,14 @@ if TYPE_CHECKING:
   from uuid import UUID
   from zoneinfo import ZoneInfo
 
+  # Third party imports
+  from timeclock_schema.enums import ScanOutcome
+
   # First party imports
+  from timeclock_system.scanner import ScanReport
   from timeclock_system.store import LocalStore
+
+logger = logging.getLogger(__name__)
 
 ChangeTable = Literal["employees", "groups", "fingerprints", "punches", "punch_corrections", "rules", "business_hours", "settings"]
 
@@ -230,6 +246,7 @@ class Clock:
   async def load(self) -> None:
     """Cache employees, groups, rules, business hours and settings from the store."""
     await asyncio.to_thread(self._reload, ("employees", "groups", "rules", "business_hours", "settings"))
+    await asyncio.to_thread(self._store.settle_open_scans)  # a matched scan's outcome died with the last run
 
   def notify_changed(self, tables: Iterable[ChangeTable]) -> None:
     """Reload the caches of the changed tables, then tell every change listener."""
@@ -426,6 +443,49 @@ class Clock:
     # Alerts only inform; nothing here can refuse the punch (§2).
     firings = fired_hooks(AlertContext(employee_id, punches, corrections, s, self._tz, now))
     return PunchOutcome(punch, warnings, totals.worked + totals.paid_break, firings)
+
+  async def record_scan(self, scan: ScanReport) -> UUID | None:
+    """Store a scan in the log; a matched one stays open until `settle_scan`. Never raises: the log must not stop a punch.
+
+    Returns:
+      The new row's id, or None if it couldn't be stored.
+    """
+    try:
+      best, other = scan.best, scan.other
+      image = scan.image if self._settings.save_scan_images else None
+      row = FingerprintScan(
+        id=uuid4(),
+        at=self._now(),
+        instance_id=self.instance_id,
+        result=scan.result,
+        best_fingerprint_id=best and best.print_id,
+        best_employee_id=best and best.employee_id,
+        best_finger=best and best.finger,
+        best_score=best and best.score,
+        other_fingerprint_id=other and other.print_id,
+        other_employee_id=other and other.employee_id,
+        other_finger=other and other.finger,
+        other_score=other and other.score,
+        scores=dict(scan.scores),
+        margin=scan.margin,
+        retry_message=scan.retry_message,
+        probe=None if scan.probe is None else SecretBytes(scan.probe),
+        image=None if image is None else SecretBytes(image.data),
+        image_width=image and image.width,
+        image_height=image and image.height,
+      )
+      await asyncio.to_thread(self._store.insert_scan, row, settled=scan.result is not ScanResult.MATCHED)
+    except Exception:
+      logger.exception("could not log a fingerprint scan")  # no bytes in the message: the scan is biometric
+      return None
+    return row.id
+
+  async def settle_scan(self, scan_id: UUID, outcome: ScanOutcome, punch_id: UUID | None = None) -> None:
+    """Record what became of a matched scan, releasing it to the push. Never raises, like `record_scan`."""
+    try:
+      await asyncio.to_thread(self._store.settle_scan, scan_id, outcome, punch_id)
+    except Exception:
+      logger.exception("could not settle fingerprint scan %s", scan_id)
 
   async def add_employee(self, new: NewEmployee, pin: SecretStr) -> Employee:
     """Create an employee at this clock, saved locally and pushed when the database is reachable (§6.4, §6.6).

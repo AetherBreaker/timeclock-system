@@ -21,6 +21,8 @@ from timeclock_schema.enums import (
   FingerprintChangeAction,
   PunchKind,
   RuleAction,
+  ScanOutcome,
+  ScanResult,
 )
 from timeclock_schema.models import Employee, Fingerprint, Punch, PunchCorrection, RuleRow, Settings
 from timeclock_schema.shifts import EmployeeState
@@ -36,7 +38,7 @@ from timeclock_system.clock import (
   check_new_pin,
   normalize_phone,
 )
-from timeclock_system.scanner import GalleryPrint
+from timeclock_system.scanner import GalleryPrint, ScanImage, ScanReport, ScoredPrint
 from timeclock_system.store import LocalStore
 
 if TYPE_CHECKING:
@@ -614,3 +616,75 @@ async def test_a_punch_reaching_the_weekly_threshold_fires_the_hook(env: Env) ->
   over = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
   assert over.hours_this_week == timedelta(hours=41)
   assert [(f.hook.alert, f.limit) for f in over.firings] == [(WEEKLY_HOURS, timedelta(hours=40))]
+
+
+def scan_report(result: ScanResult = ScanResult.MATCHED) -> ScanReport:
+  best = ScoredPrint(uuid4(), 1, Finger.LEFT_INDEX, 90)
+  other = ScoredPrint(uuid4(), 2, Finger.RIGHT_THUMB, 40)
+  scores = ((best.print_id, 90), (other.print_id, 40))
+  return ScanReport(result, best, other, scores, 15, probe=b"probe", image=ScanImage(b"img", 2, 3))
+
+
+async def test_record_scan_fills_the_row(env: Env) -> None:
+  report = scan_report()
+  assert report.best is not None
+  assert report.other is not None
+  scan_id = await env.clock.record_scan(report)
+  assert scan_id is not None
+  assert env.store.unsynced_scans() == []  # matched: open until settled
+  await env.clock.settle_scan(scan_id, ScanOutcome.PUNCHED)
+  [row] = env.store.unsynced_scans()
+  assert (row.id, row.at, row.instance_id, row.result, row.margin) == (scan_id, T, "dev", ScanResult.MATCHED, 15)
+  assert row.outcome is ScanOutcome.PUNCHED
+  assert (row.best_fingerprint_id, row.best_employee_id, row.best_finger, row.best_score) == (
+    report.best.print_id,
+    1,
+    Finger.LEFT_INDEX,
+    90,
+  )
+  assert (row.other_fingerprint_id, row.other_employee_id, row.other_finger, row.other_score) == (
+    report.other.print_id,
+    2,
+    Finger.RIGHT_THUMB,
+    40,
+  )
+  assert row.scores == dict(report.scores)
+
+
+@pytest.mark.parametrize("result", [ScanResult.NO_MATCH, ScanResult.TOO_CLOSE, ScanResult.RETRY])
+async def test_scans_without_a_match_are_settled_at_once(env: Env, result: ScanResult) -> None:
+  scan_id = await env.clock.record_scan(scan_report(result))
+  assert [r.id for r in env.store.unsynced_scans()] == [scan_id]
+
+
+async def test_record_scan_drops_the_image_when_switched_off(env: Env) -> None:
+  await env.clock.record_scan(scan_report(ScanResult.NO_MATCH))
+  [kept] = env.store.unsynced_scans()
+  assert kept.image is not None
+  assert (kept.image_width, kept.image_height) == (2, 3)
+  env.store.delete_scan(kept.id)
+  env.store.set_settings(Settings(save_scan_images=False))
+  env.clock.notify_changed({"settings"})
+  await env.clock.record_scan(scan_report(ScanResult.NO_MATCH))
+  [dropped] = env.store.unsynced_scans()
+  assert (dropped.image, dropped.image_width, dropped.image_height) == (None, None, None)
+  assert dropped.probe is not None
+  assert dropped.probe.get_secret_value() == b"probe"
+
+
+async def test_load_settles_leftover_scans(env: Env) -> None:
+  scan_id = await env.clock.record_scan(scan_report())
+  assert env.store.unsynced_scans() == []
+  await env.clock.load()
+  assert [(r.id, r.outcome) for r in env.store.unsynced_scans()] == [(scan_id, None)]
+
+
+async def test_scan_log_failure_never_raises(env: Env, caplog: pytest.LogCaptureFixture) -> None:
+  def boom(*_args: object, **_kwargs: object) -> None:
+    raise RuntimeError("disk full")
+
+  env.store.insert_scan = boom
+  env.store.settle_scan = boom
+  assert await env.clock.record_scan(scan_report()) is None
+  await env.clock.settle_scan(uuid4(), ScanOutcome.CANCELLED)
+  assert len(caplog.records) == 2  # noqa: PLR2004
