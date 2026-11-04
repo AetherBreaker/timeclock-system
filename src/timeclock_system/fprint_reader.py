@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 # Third party imports
 import gi
+from timeclock_schema.enums import Finger
 
 gi.require_version("FPrint", "2.0")
 
@@ -21,6 +22,7 @@ from gi.repository import FPrint, Gio, GLib  # after require_version, or gi pick
 
 # First party imports
 from timeclock_system.scanner import (
+  Capture,
   FingerStatus,
   GalleryPrint,
   ReaderFailure,
@@ -28,6 +30,7 @@ from timeclock_system.scanner import (
   ReaderTooHot,
   RetryScan,
   ScanCancelled,
+  ScanImage,
 )
 
 if TYPE_CHECKING:
@@ -114,31 +117,41 @@ class FprintReader:
     gallery: Sequence[GalleryPrint],
     cancel: Gio.Cancellable,
     on_status: Callable[[FingerStatus], None],
-    on_result: Callable[[UUID | None], None],
-  ) -> UUID | None:
-    """Capture one print and match it against `gallery` in order; return the matched print id or None.
+    on_result: Callable[[Capture], None],
+  ) -> Capture:
+    """Capture one print and score it against every print in `gallery`, in order.
 
-    `on_result` gets the match from libfprint's match callback, which `fpi_device_identify_report` calls the moment the
-    scan is matched; `identify_sync` returns only after the finger lifts (the device deactivates on finger-off).
+    `on_result` gets the capture from libfprint's match callback, which `fpi_device_identify_report` calls the moment the
+    scan is matched; `identify_sync` returns only after the finger lifts (the device deactivates on finger-off). Every
+    gallery print's score is read from the patched libfprint's `get_identify_score` (-1: not scored).
     """
     try:
       self._prints = {p.print_id: self._prints.get(p.print_id) or FPrint.Print.deserialize(p.template) for p in gallery}
     except GLib.Error as e:
       raise _reader_error(e) from e
 
-    def matched(_device: FPrint.Device, match: FPrint.Print | None, _probe: object, _user_data: object, error: object) -> None:
-      if error is None:  # a retry reports its error here too, and the call then raises it
+    def capture_of(match: FPrint.Print | None, probe: FPrint.Print) -> Capture:
+      image = probe.get_image()
+      return Capture(
         # libfprint hands back the gallery object it matched, so identity finds its id.
-        on_result(next((print_id for print_id, print_ in self._prints.items() if print_ is match), None))
+        next((print_id for print_id, print_ in self._prints.items() if print_ is match), None),
+        tuple((print_id, print_.get_identify_score()) for print_id, print_ in self._prints.items()),
+        bytes(probe.serialize()),
+        None if image is None else ScanImage(bytes(image.get_data()), image.get_width(), image.get_height()),
+      )
+
+    def matched(_device: FPrint.Device, match: FPrint.Print | None, probe: FPrint.Print, _user_data: object, error: object) -> None:
+      if error is None:  # a retry reports its error here too, and the call then raises it
+        on_result(capture_of(match, probe))
 
     handler = self._watch_finger(on_status)
     try:
-      match, _probe = self._device.identify_sync(list(self._prints.values()), cancel, matched, None)
+      match, probe = self._device.identify_sync(list(self._prints.values()), cancel, matched, None)
     except GLib.Error as e:
       raise _reader_error(e) from e
     finally:
       self._device.disconnect(handler)
-    return next((print_id for print_id, print_ in self._prints.items() if print_ is match), None)
+    return capture_of(match, probe)
 
   def enroll(
     self, cancel: Gio.Cancellable, on_stage: Callable[[int, int, bool], None], on_status: Callable[[FingerStatus], None]
@@ -167,14 +180,17 @@ def _probe_identify(reader: FprintReader) -> None:
       reader.new_cancel(), lambda done, total, ok: print(f"stage {done}/{total}{'' if ok else ' (retry)'}"), lambda _status: None
     )
     print(f"template_bytes={len(template)}")
-    gallery = [GalleryPrint(uuid4(), 0, template)]
+    gallery = [GalleryPrint(uuid4(), 0, template, Finger.RIGHT_INDEX)]
     for attempt in range(1, 4):
       time.sleep(1.0)  # the scanner's finger_off_pause
       print(f"identify {attempt}: press the finger")
       started = time.monotonic()
       try:
-        matched = reader.identify(gallery, reader.new_cancel(), lambda _status: None, lambda _result: None)
-        result = "match" if matched else "no match"
+        capture = reader.identify(gallery, reader.new_cancel(), lambda _status: None, lambda _result: None)
+        best = max((score for _print_id, score in capture.scores), default=None)
+        image = capture.image
+        size = "no image" if image is None else f"image {image.width}x{image.height}"
+        result = f"{'match' if capture.match else 'no match'} (best score {best}, {len(capture.scores)} scores, {size})"
       except RetryScan as e:
         result = f"retry ({e})"
       print(f"identify {attempt}: {result} in {time.monotonic() - started:.2f} s")
