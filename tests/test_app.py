@@ -150,8 +150,10 @@ def wired_scanner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[d
     "DatabaseSync": lambda *_a, **_k: sync,
     "heartbeat_loop": lambda *_a, **_k: asyncio.Event().wait(),
   }
-  captured = next(iter(serve_with(tmp_path, monkeypatch, patches)))
+  serving = serve_with(tmp_path, monkeypatch, patches)
+  captured = next(serving)
   yield {**captured, "scanner": scanner, "sync": sync, "clock": RecordingClock.instances[0]}
+  next(serving, None)  # runs serve_with's teardown, which closes the store
 
 
 async def test_a_settings_change_reaches_the_scanner_margin(wired_scanner: dict[str, Any]) -> None:
