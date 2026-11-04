@@ -190,24 +190,26 @@ class LocalStore:
 
   # -- punches ------------------------------------------------------------------------------------------------------
 
-  def insert_punch(self, p: Punch, *, origin: Origin, bypass: FingerprintBypass | None = None) -> bool:
-    """Insert a punch (and the fingerprint bypass that authorized it, in the same transaction).
+  def insert_punch(self, p: Punch, *, origin: Origin, bypass: FingerprintBypass | None = None, before: Punch | None = None) -> bool:
+    """Insert a punch, with the fingerprint bypass that authorized it and the punch written just before it, in one transaction.
 
     Args:
       p: The punch.
       origin: Where it came from; only `local` punches start unsynced.
-      bypass: The override or PIN login recorded with it; synced with it.
+      bypass: The override or PIN login recorded with `p`; synced with it.
+      before: The break's or lunch's end that a clock-out from one writes first; a fresh id, so never a duplicate.
 
     Returns:
-      False if a punch with that id already exists (nothing is written).
+      False if a punch with `p`'s id already exists (nothing is written).
     """
+    insert = "INSERT OR IGNORE INTO punches (id, employee_id, at, origin, synced, json) VALUES (?, ?, ?, ?, ?, ?)"
     with self._lock, self._conn:
-      cur = self._conn.execute(
-        "INSERT OR IGNORE INTO punches (id, employee_id, at, origin, synced, json) VALUES (?, ?, ?, ?, ?, ?)",
-        (str(p.id), p.employee_id, _iso(p.at), origin, int(origin != "local"), _dump(p)),
-      )
-      if cur.rowcount == 0:
+      if self._conn.execute(insert, (str(p.id), p.employee_id, _iso(p.at), origin, int(origin != "local"), _dump(p))).rowcount == 0:
         return False
+      if before is not None:
+        self._conn.execute(
+          insert, (str(before.id), before.employee_id, _iso(before.at), origin, int(origin != "local"), _dump(before))
+        )
       if bypass is not None:
         self._conn.execute(
           "INSERT OR REPLACE INTO fingerprint_bypasses (id, punch_id, at, synced, json) VALUES (?, ?, ?, ?, ?)",

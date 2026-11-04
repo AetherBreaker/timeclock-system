@@ -393,6 +393,14 @@ class Clock:
         raise PunchRefused("; ".join(refusals))
       warnings = tuple(v.message for v in violations if v.action is RuleAction.WARN)
       punch = Punch(id=uuid4(), employee_id=employee_id, kind=kind, at=now, instance_id=self.instance_id)
+      # A clock-out from a break or lunch also writes its end, a microsecond earlier, so the punch log reads plainly
+      # (owner, 2026-11-04); the hours rules still end it at a clock-out, for punches recorded before this.
+      end_kind = {EmployeeState.ON_BREAK: PunchKind.BREAK_END, EmployeeState.AT_LUNCH: PunchKind.LUNCH_END}.get(timeline.state)
+      ending = None
+      if kind is PunchKind.CLOCK_OUT and end_kind is not None:
+        ending = Punch(
+          id=uuid4(), employee_id=employee_id, kind=end_kind, at=now - timedelta(microseconds=1), instance_id=self.instance_id
+        )
       if override is not None:
         bypass = FingerprintBypass(
           id=uuid4(),
@@ -406,11 +414,13 @@ class Clock:
         )
       else:
         bypass = self._login_bypass(e, punch.id) if pin_login else None
-      await asyncio.to_thread(self._store.insert_punch, punch, origin="local", bypass=bypass)
+      await asyncio.to_thread(self._store.insert_punch, punch, origin="local", bypass=bypass, before=ending)
+    written = [punch] if ending is None else [ending, punch]
     for cb in self._record_listeners:
-      cb(punch)
+      for p in written:
+        cb(p)
     self.notify_changed({"punches"})
-    s, punches = self._settings, [*punches, punch]
+    s, punches = self._settings, [*punches, *written]
     start, end = week_bounds(now, self._tz)
     totals = total_hours(punches, corrections, settings=s, tz=self._tz, start=start, end=end, now=now)
     # Alerts only inform; nothing here can refuse the punch (§2).

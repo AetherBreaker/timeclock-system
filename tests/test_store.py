@@ -121,6 +121,14 @@ def test_insert_punch_ignores_duplicate_ids(store: LocalStore) -> None:
   assert len(store.punches()) == 1
 
 
+def test_insert_punch_writes_the_punch_before_it_or_neither(store: LocalStore) -> None:
+  p, before = punch(), punch(T - timedelta(microseconds=1))
+  assert store.insert_punch(p, origin="local", before=before) is True
+  assert store.unsynced_punches() == [(before, None), (p, None)]
+  assert store.insert_punch(p, origin="local", before=punch(T - timedelta(seconds=1))) is False
+  assert store.punches() == [before, p]
+
+
 def test_local_punch_and_override_are_unsynced_together(store: LocalStore) -> None:
   p = punch()
   o = override(p)

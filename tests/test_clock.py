@@ -170,6 +170,28 @@ async def test_record_punch_stores_unsynced_and_notifies(env: Env) -> None:
   assert changed == [frozenset({"punches"})]
 
 
+@pytest.mark.parametrize(
+  ("started", "ended"), [(None, None), (PunchKind.BREAK_START, PunchKind.BREAK_END), (PunchKind.LUNCH_START, PunchKind.LUNCH_END)]
+)
+async def test_clock_out_from_a_break_or_lunch_writes_its_end_first(
+  env: Env, started: PunchKind | None, ended: PunchKind | None
+) -> None:
+  heard: list[object] = []
+  env.clock.add_record_listener(heard.append)
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=2)), origin="db")
+  if started is not None:
+    env.store.insert_punch(punch_at(1, started, T - timedelta(hours=1)), origin="db")
+  grant = OverrideGrant(manager_id=2, reason=BypassReason.OVERRIDE_FINGERPRINT_SKIPPED, pin_only=True)
+  outcome = await env.clock.record_punch(1, PunchKind.CLOCK_OUT, override=grant)
+  *endings, (clock_out, bypass) = env.store.unsynced_punches()
+  assert clock_out == outcome.punch
+  assert bypass is not None  # the override stays with the clock-out it authorized
+  assert bypass.punch_id == clock_out.id
+  assert [(p.kind, p.at, b) for p, b in endings] == ([] if ended is None else [(ended, T - timedelta(microseconds=1), None)])
+  assert heard == [*(p for p, _ in endings), clock_out]
+  assert (await env.clock.menu_info(1)).state is EmployeeState.OFF
+
+
 async def test_record_punch_refuses_invalid_kind(env: Env) -> None:
   with pytest.raises(PunchRefused):
     await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
