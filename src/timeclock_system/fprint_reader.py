@@ -133,22 +133,22 @@ class FprintReader:
       raise _reader_error(e) from e
 
     def capture_of(match: FPrint.Print | None, probe: FPrint.Print | None) -> Capture:
-      # The probe's bytes and image are best-effort: a failure there must never cost the capture its match or scores.
-      probe_bytes, image = None, None
+      # libfprint hands back the gallery object it matched, so identity finds its id.
+      match_id = next((print_id for print_id, print_ in self._prints.items() if print_ is match), None)
+      scores = tuple((print_id, print_.get_identify_score()) for print_id, print_ in self._prints.items())
+      # The probe's bytes and image are best-effort: no failure there may cost the capture its match or scores. The bytes
+      # are never bound to a local and nothing that can raise runs while they're held, so no traceback renders them.
+      scan_data: tuple[bytes | None, ScanImage | None] = (None, None)
       if probe is not None:
         try:
-          probe_bytes = bytes(probe.serialize())
           raw = probe.get_image()
-          image = None if raw is None else ScanImage(bytes(raw.get_data()), raw.get_width(), raw.get_height())
-        except GLib.Error as e:
-          LOGGER.warning("the probe's scan data is unavailable: %s", e.message)  # message only, never bytes
-      return Capture(
-        # libfprint hands back the gallery object it matched, so identity finds its id.
-        next((print_id for print_id, print_ in self._prints.items() if print_ is match), None),
-        tuple((print_id, print_.get_identify_score()) for print_id, print_ in self._prints.items()),
-        probe_bytes,
-        image,
-      )
+          scan_data = (
+            bytes(probe.serialize()),
+            None if raw is None else ScanImage(bytes(raw.get_data()), raw.get_width(), raw.get_height()),
+          )
+        except Exception as e:  # noqa: BLE001 - best effort; anything escaping here would kill the reader thread
+          LOGGER.warning("the probe's scan data is unavailable: %s: %s", type(e).__name__, e)  # never bytes
+      return Capture(match_id, scores, *scan_data)
 
     def matched(_device: FPrint.Device, match: FPrint.Print | None, probe: FPrint.Print, _user_data: object, error: object) -> None:
       if error is None:  # a retry reports its error here too, and the call then raises it
