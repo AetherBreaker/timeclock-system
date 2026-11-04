@@ -111,6 +111,7 @@ _SCAN_COLUMNS: Final[set[str]] = {
 }  # fmt: skip
 
 _BACKOFF_START, _BACKOFF_MAX = 1.0, 60.0
+_SCAN_BATCH = 50
 _PING_AFTER_SECS = 30.0
 _LAST_CONTACT_KEY: Final = "last_contact"
 
@@ -376,7 +377,10 @@ class DatabaseSync:
         continue
       await asyncio.to_thread(self._store.mark_bypass_synced, b.id)
     # Last: scan rows have no foreign keys, so none waits on another record, and a backlog can't delay a punch.
-    for scan in await asyncio.to_thread(self._store.unsynced_scans):
+    scans = await asyncio.to_thread(self._store.unsynced_scans, _SCAN_BATCH)
+    if len(scans) == _SCAN_BATCH:
+      self._wake.set()  # a full batch means more may wait; the loop pushes again between notifications and punches
+    for scan in scans:
       try:
         await conn.execute(
           _INSERT_SCAN,
@@ -387,8 +391,8 @@ class DatabaseSync:
             "best_finger": scan.best_finger and scan.best_finger.value,
             "other_finger": scan.other_finger and scan.other_finger.value,
             "scores": Jsonb({str(print_id): score for print_id, score in scan.scores.items()}),
-            "probe": scan.probe and scan.probe.get_secret_value(),
-            "image": scan.image and scan.image.get_secret_value(),
+            "probe": None if scan.probe is None else scan.probe.get_secret_value(),
+            "image": None if scan.image is None else scan.image.get_secret_value(),
           },
         )
       except (psycopg.errors.IntegrityError, psycopg.errors.DataError) as err:

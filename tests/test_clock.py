@@ -2,6 +2,7 @@
 
 # Standard library imports
 import dataclasses
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -622,7 +623,7 @@ def scan_report(result: ScanResult = ScanResult.MATCHED) -> ScanReport:
   best = ScoredPrint(uuid4(), 1, Finger.LEFT_INDEX, 90)
   other = ScoredPrint(uuid4(), 2, Finger.RIGHT_THUMB, 40)
   scores = ((best.print_id, 90), (other.print_id, 40))
-  return ScanReport(result, best, other, scores, 15, probe=b"probe", image=ScanImage(b"img", 2, 3))
+  return ScanReport(result, best, other, scores, 15, probe=b"probe", image=ScanImage(b"img", 2, 3), retry_message="Remove finger")
 
 
 async def test_record_scan_fills_the_row(env: Env) -> None:
@@ -649,6 +650,7 @@ async def test_record_scan_fills_the_row(env: Env) -> None:
     40,
   )
   assert row.scores == dict(report.scores)
+  assert row.retry_message == report.retry_message
 
 
 @pytest.mark.parametrize("result", [ScanResult.NO_MATCH, ScanResult.TOO_CLOSE, ScanResult.RETRY])
@@ -688,3 +690,11 @@ async def test_scan_log_failure_never_raises(env: Env, caplog: pytest.LogCapture
   assert await env.clock.record_scan(scan_report()) is None
   await env.clock.settle_scan(uuid4(), ScanOutcome.CANCELLED)
   assert len(caplog.records) == 2  # noqa: PLR2004
+
+
+async def test_load_survives_a_failing_scan_log(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+  def broken() -> None:
+    raise sqlite3.OperationalError("database or disk is full")
+
+  monkeypatch.setattr(env.store, "settle_open_scans", broken)
+  await env.clock.load()  # startup must not depend on the scan log

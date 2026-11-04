@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS fingerprint_changes (id TEXT PRIMARY KEY, employee_id
 CREATE TABLE IF NOT EXISTS fingerprint_scans (
   id TEXT PRIMARY KEY, at TEXT NOT NULL, settled INTEGER NOT NULL, json TEXT NOT NULL, probe BLOB, image BLOB
 );
+-- The push reads settled scans oldest first; this keeps it from sorting every row's blobs.
+CREATE INDEX IF NOT EXISTS fingerprint_scans_settled_at ON fingerprint_scans (settled, at);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -487,11 +489,18 @@ class LocalStore:
 
   def insert_scan(self, s: FingerprintScan, *, settled: bool) -> None:
     """Queue a scan for the push; an open one (`settled` false) waits for `settle_scan`."""
-    probe, image = (None if b is None else b.get_secret_value() for b in (s.probe, s.image))
+    # The raw bytes stay inline, never in a named local: a failed insert's traceback renders its frame's locals.
     with self._lock, self._conn:
       self._conn.execute(
         "INSERT OR IGNORE INTO fingerprint_scans (id, at, settled, json, probe, image) VALUES (?, ?, ?, ?, ?, ?)",
-        (str(s.id), _iso(s.at), int(settled), s.model_dump_json(context=REVEAL, exclude={"probe", "image"}), probe, image),
+        (
+          str(s.id),
+          _iso(s.at),
+          int(settled),
+          s.model_dump_json(context=REVEAL, exclude={"probe", "image"}),
+          None if s.probe is None else s.probe.get_secret_value(),
+          None if s.image is None else s.image.get_secret_value(),
+        ),
       )
 
   def settle_scan(self, scan_id: UUID, outcome: ScanOutcome, punch_id: UUID | None = None) -> None:
@@ -513,16 +522,24 @@ class LocalStore:
 
   def unsynced_scans(self, limit: int = 50) -> list[FingerprintScan]:
     """Return up to `limit` settled scans not yet pushed, oldest first."""
+    # Blobs are fetched per row after the JSON parses, so no frame that can fail holds raw bytes in a local.
+    scans: list[FingerprintScan] = []
     with self._lock:
-      rows = self._conn.execute(
-        "SELECT json, probe, image FROM fingerprint_scans WHERE settled = 1 ORDER BY at, rowid LIMIT ?", (limit,)
+      ids_json = self._conn.execute(
+        "SELECT id, json FROM fingerprint_scans WHERE settled = 1 ORDER BY at, rowid LIMIT ?", (limit,)
       ).fetchall()
-    return [
-      FingerprintScan.model_validate_json(j).model_copy(
-        update={"probe": None if p is None else SecretBytes(p), "image": None if i is None else SecretBytes(i)}
-      )
-      for j, p, i in rows
-    ]
+      for scan_id, scan_json in ids_json:
+        scan = FingerprintScan.model_validate_json(scan_json)
+        blobs = self._conn.execute("SELECT probe, image FROM fingerprint_scans WHERE id = ?", (scan_id,)).fetchone()
+        scans.append(
+          scan.model_copy(
+            update={
+              "probe": None if blobs[0] is None else SecretBytes(blobs[0]),
+              "image": None if blobs[1] is None else SecretBytes(blobs[1]),
+            }
+          )
+        )
+    return scans
 
   def delete_scan(self, scan_id: UUID) -> None:
     """Delete a pushed scan."""

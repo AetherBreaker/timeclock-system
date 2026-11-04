@@ -113,6 +113,7 @@ def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of ev
     write_status(settings.status_dir, "Loading employees and punches")  # shown on the host's standby page
     await clock.load()
     clock.add_record_listener(lambda _record: sync.wake())
+    clock.add_scan_listener(sync.wake)
     clock.add_change_listener(lambda tables: keep("Gallery refresh", refresh_gallery()) if tables & _GALLERY_TABLES else None)
     await refresh_gallery()
     write_status(settings.status_dir, "Starting the fingerprint reader")

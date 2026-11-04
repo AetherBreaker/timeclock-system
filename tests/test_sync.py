@@ -34,6 +34,7 @@ from timeclock_schema.shifts import EmployeeState
 
 # First party imports
 from timeclock_system.clock import Approval, Clock, NewEmployee
+from timeclock_system.scanner import ScanReport
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DatabaseSync, DbStatus
 
@@ -134,6 +135,7 @@ async def rig(pg: Pg, tmp_path: Path) -> AsyncIterator[Callable[[], Awaitable[Ri
     await clock.load()
     alerts: list[tuple[str, str]] = []
     sync = DatabaseSync(clock, store, pg.clock_dsn, alert=lambda reason, details: alerts.append((reason, details)))
+    clock.add_scan_listener(sync.wake)  # as app.py wires it
     statuses: list[bool] = []
     sync.add_status_listener(lambda s: statuses.append(s.connected))
     tasks.append(asyncio.create_task(sync.run()))
@@ -554,6 +556,31 @@ async def test_pushes_scans_and_deletes_them_here(pg: Pg, rig: Callable[[], Awai
   assert row == ("no_match", "left_index", {str(print_id): 12}, b"probe", b"image", 2, 3, None, pg.role)
   await eventually(lambda: r.store.unsynced_scans() == [], "the local scan to be deleted")
   assert r.alerts == []
+
+
+async def test_a_settled_scan_reaches_the_database_without_a_wake(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
+  r = await rig()
+  empty = ScanReport(ScanResult.NO_MATCH, None, None, (), 15, probe=b"", image=None)  # empty bytes must reach psycopg as bytes
+  scan_id = await r.clock.record_scan(empty)
+
+  async def pushed() -> bool:
+    return bool(await admin_execute(pg, "SELECT 1 FROM fingerprint_scans WHERE id = %(id)s", {"id": scan_id}))
+
+  await eventually(pushed, "the scan to reach PostgreSQL")
+  [(probe,)] = await admin_execute(pg, "SELECT probe FROM fingerprint_scans WHERE id = %(id)s", {"id": scan_id})
+  assert probe == b""
+  assert r.alerts == []
+
+
+async def test_a_backlog_drains_without_further_wakes(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
+  r = await rig()
+  for _ in range(120):  # more than two batches
+    r.store.insert_scan(
+      FingerprintScan(id=uuid4(), at=datetime.now(UTC), instance_id="1", result=ScanResult.NO_MATCH, margin=15), settled=True
+    )
+  r.sync.wake()
+  await eventually(lambda: r.store.unsynced_scans(limit=1) == [], "the backlog to drain")
+  assert await admin_execute(pg, "SELECT count(*) FROM fingerprint_scans") == [(120,)]
 
 
 async def test_catch_up_mirrors_the_scan_switches(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
