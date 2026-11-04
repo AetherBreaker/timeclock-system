@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 # Third party imports
 from pydantic import SecretStr
 from timeclock_schema.alerts import CONFIRMATION_NOTICE
-from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, ScanOutcome
+from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, ScanOutcome, ScanResult
 from timeclock_schema.models import EMAIL_PATTERN
 
 # First party imports
@@ -603,9 +603,11 @@ class KioskController:
           self._on_finger_status(s, ev)
         case ReaderPaused(seconds=seconds):
           self._paused_until = now + seconds
-        case NoMatch():
+        case NoMatch(scan=scan):
           self._outcome = ReaderIndicator.UNRECOGNIZED
-          message = ReaderMessage(text.NOT_RECOGNIZED, "unrecognized", now)
+          # A margin rejection looks like a no-match everywhere else; only the wording differs, and never names the rival.
+          too_close = scan is not None and scan.result is ScanResult.TOO_CLOSE
+          message = ReaderMessage(text.MATCHES_MORE_THAN_ONE if too_close else text.NOT_RECOGNIZED, "unrecognized", now)
         case Retry():
           self._failed_at = now
           message = ReaderMessage(text.RETRY, "error", now)
