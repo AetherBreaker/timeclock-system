@@ -132,9 +132,36 @@ def test_stray_press_elsewhere_is_b_not_a():
 
 
 def test_whole_finger_resembles_is_c():
+  # 0 and 1 resemble them and agree with 2-4, which don't: the finger as a whole resembles them.
   x = other()
   on_x = {x.print_id: (0, 0, SIMILAR, 0, SIMILAR)}
   presses = [press(i, vs_gallery=on_x if i in {0, 1} else None) for i in range(PRESSES)]
+  assert run(Session((x,), S), presses)[-1] == TooSimilar(other=x, chosen=(0, 1, 2, 3, 4), flagged=(), also_similar=())
+
+
+@pytest.mark.parametrize(
+  "like_x",
+  [{0: (SIMILAR, 0, 0, 0, 0), 1: (SIMILAR, 0, 0, 0, 0)}, {0: (SIMILAR, SIMILAR, 0, 0, 0), 1: (0, 0, SIMILAR, 0, SIMILAR)}],
+  ids=["one of their presses", "several of their presses"],
+)
+def test_own_stray_presses_behind_a_resemblance_are_replaced(like_x: dict[int, tuple[int, ...]]):
+  # 0 and 1 resemble them and agree with each other, but not with 2-4: the registrant's own stray presses, not C. The
+  # one agreeing less goes first.
+  x = other()
+  stray = {0: LOW, 1: LOW - 10}
+  presses = [
+    press(i, vs_session=None if i in like_x else stray, vs_gallery={x.print_id: like_x[i]} if i in like_x else None)
+    for i in range(PRESSES)
+  ]
+  session = Session((x,), S)
+  assert run(session, presses)[-1] == NextPress(Failure.DISAGREES)
+  assert [p.press_id for p in session.kept] == [0, 2, 3, 4]
+
+
+def test_every_press_resembling_is_c():
+  # No kept press stands apart from the resemblance to judge the others against.
+  x = other()
+  presses = [press(i, vs_gallery={x.print_id: (SIMILAR, 0, 0, 0, 0)}) for i in range(PRESSES)]
   assert run(Session((x,), S), presses)[-1] == TooSimilar(other=x, chosen=(0, 1, 2, 3, 4), flagged=(), also_similar=())
 
 
