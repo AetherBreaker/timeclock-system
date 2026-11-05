@@ -10,3 +10,6 @@
 [submodule "host"]
 	path = host
 	url = https://github.com/AetherBreaker/timeclock-host.git
+[submodule "extras"]
+	path = extras
+	url = https://github.com/AetherBreaker/timeclock-extras.git

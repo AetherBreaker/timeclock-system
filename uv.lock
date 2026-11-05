@@ -1117,8 +1117,10 @@ wheels = [
 [[package]]
 name = "pycairo"
 version = "1.29.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/bb/5e/19ab2572981a996ce96b853a189d2dcced40506b67d9555a7568457abcf2/pycairo-1.29.2.tar.gz", hash = "sha256:3e69fff74fe64f5ba2dfa31f67c6bdf26413342574047437d2ac520d35e9a489", size = 666308, upload-time = "2026-10-04T19:11:03.81Z" }
+source = { registry = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" }
+wheels = [
+    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/152/0af2bf523dd7a/pycairo-1.29.2-cp314-cp314-linux_x86_64.whl", hash = "sha256:1520af2bf523dd7a3b6e8a1bd42cbbbf13f7cb122559e9e9e66c1db5be6fbfc9" },
+]
 
 [[package]]
 name = "pydantic"
@@ -1234,11 +1236,13 @@ wheels = [
 [[package]]
 name = "pygobject"
 version = "3.58.1"
-source = { registry = "https://pypi.org/simple" }
+source = { registry = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" }
 dependencies = [
     { name = "pycairo" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/65/1e/d590f82e14db75945b03f6b63e0f19662e0340babd8f574fdb1bb5a015e2/pygobject-3.58.1.tar.gz", hash = "sha256:4c80598ade17fbaa7798e01a25d0bf29ce109740786026a074c5c62bb3e79d23", size = 1408671, upload-time = "2026-10-09T11:29:48.929Z" }
+wheels = [
+    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/c98/5c1a7dc5fadb2/pygobject-3.58.1-cp314-cp314-linux_x86_64.whl", hash = "sha256:c985c1a7dc5fadb22603b9e7f2d01f08f257067761d9406c675ace54c33b78b1" },
+]
 
 [[package]]
 name = "pyright"
@@ -1566,6 +1570,14 @@ dev = [
 ]
 
 [[package]]
+name = "timeclock-libfprint"
+version = "1.94.100.post1"
+source = { registry = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" }
+wheels = [
+    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/14c/37ed36ed3c95f/timeclock_libfprint-1.94.100.post1-py3-none-linux_x86_64.whl", hash = "sha256:14c37ed36ed3c95fe3fce02bf1c778472aab6819c8d6ddbba7ff6c769a25964a" },
+]
+
+[[package]]
 name = "timeclock-schema"
 version = "0.9.6"
 source = { registry = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" }
@@ -1587,7 +1599,9 @@ dependencies = [
     { name = "devkit-container" },
     { name = "nicegui" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pycairo", marker = "sys_platform == 'linux'" },
     { name = "pygobject", marker = "sys_platform == 'linux'" },
+    { name = "timeclock-libfprint", marker = "sys_platform == 'linux'" },
     { name = "timeclock-schema" },
     { name = "uvicorn" },
     { name = "uvloop", marker = "sys_platform == 'linux'" },
@@ -1619,7 +1633,9 @@ requires-dist = [
     { name = "devkit-container", specifier = ">=2.3.1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "nicegui", specifier = ">=3.18,<4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
-    { name = "pygobject", marker = "sys_platform == 'linux'", specifier = ">=3.58.1" },
+    { name = "pycairo", marker = "sys_platform == 'linux'", specifier = ">=1.29.2", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "pygobject", marker = "sys_platform == 'linux'", specifier = ">=3.58.1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "timeclock-libfprint", marker = "sys_platform == 'linux'", specifier = ">=1.94.100.post1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "timeclock-schema", specifier = ">=0.9.6", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "uvicorn", specifier = ">=0.54,<0.55" },
     { name = "uvloop", marker = "sys_platform == 'linux'", specifier = ">=0.23" },

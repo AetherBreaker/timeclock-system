@@ -5,12 +5,14 @@
   readme          = "README.md"
   requires-python = ">=3.14"
   dependencies    = [
-    "PyGObject>=3.58.1; sys_platform == 'linux'",                          # built in the image (builder-setup window); not on Windows
+    "PyGObject>=3.58.1; sys_platform == 'linux'",                          # prebuilt by timeclock-extras, from SFTPyPI; not on Windows
     "aeth-ext>=10.0.0",
     "bcrypt>=5.0",
     "devkit-container>=2.3.1",
     "nicegui>=3.18,<4",
     "psycopg[binary]>=3.3.6",
+    "pycairo>=1.29.2; sys_platform == 'linux'",                            # direct so its SFTPyPI source applies: uv ignores sources of indirect deps
+    "timeclock-libfprint>=1.94.100.post1; sys_platform == 'linux'",        # patched libfprint, prebuilt by timeclock-extras
     "timeclock-schema>=0.9.6",
     "uvicorn>=0.54,<0.55",                                                 # pinned: app.py replaces Server.capture_signals (R21)
     "uvloop>=0.23; sys_platform == 'linux'",
@@ -112,9 +114,9 @@
 
   executionEnvironments = [{ root = "src", extraPaths = ["src"] }]
 
-  # backend/, host/, schema/ and standby/ are submodules with their own environments and checks (ruff and tombi skip
-  # them too). Setting exclude replaces pyright's defaults, so they're restated.
-  exclude = ["backend", "host", "schema", "standby", "**/node_modules", "**/__pycache__", "**/.*"]
+  # backend/, extras/, host/, schema/ and standby/ are submodules with their own environments and checks (ruff and tombi
+  # skip them too). Setting exclude replaces pyright's defaults, so they're restated.
+  exclude = ["backend", "extras", "host", "schema", "standby", "**/node_modules", "**/__pycache__", "**/.*"]
 
 [tool.pytest.ini_options]
   addopts      = [
@@ -137,6 +139,7 @@
   exclude = [
     # The submodules: their own projects and checks (with fix on, ours rewrote their files).
     "backend",
+    "extras",
     "host",
     "schema",
     "standby",
@@ -236,6 +239,7 @@
     exclude = [
       # The submodules: their own projects and checks.
       "backend",
+      "extras",
       "host",
       "schema",
       "standby",
@@ -277,6 +281,10 @@
   [tool.uv.sources]
     aeth-ext            = [{ index = "SFTPyPI" }]
     timeclock-schema    = [{ index = "SFTPyPI" }]
+    # Prebuilt by timeclock-extras.
+    timeclock-libfprint = [{ index = "SFTPyPI" }]
+    pygobject           = [{ index = "SFTPyPI" }]
+    pycairo             = [{ index = "SFTPyPI" }]
     aeth-devkit         = [{ index = "SFTPyPI" }]
     devkit-templates    = [{ index = "SFTPyPI" }]
     devkit-container    = [{ index = "SFTPyPI" }]
