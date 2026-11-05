@@ -684,6 +684,29 @@ async def test_no_print_the_finger_resembles_approves_its_review(kiosk: Kiosk) -
   assert isinstance(screen, TooSimilarReview) and screen.approval == Approval(ADA, pin_only=False)
 
 
+async def test_a_scan_on_the_too_similar_screens_changes_nothing(kiosk: Kiosk) -> None:
+  # Review Focus 3: the reader is READY on both, so a finger there arrives as a scan, not a press.
+  scans = (Matched(uuid4(), ADA), matched(ANN), scanned(ANN), NoMatch(), unmatched())
+  await bob_registers(kiosk)
+  await give_presses(kiosk, others=(mias_print(),), like_mia=True)
+  blocked = kiosk.ctl.screen
+  assert isinstance(blocked, TooSimilarBlocked) and kiosk.reader.modes[-1] is ReaderMode.READY
+  for ev in scans:
+    await kiosk.ctl.on_scanner_event(ev)
+    assert kiosk.ctl.screen == blocked
+  await kiosk.ctl.ask_admin()
+  await kiosk.ctl.on_scanner_event(Matched(uuid4(), ADA))
+  review = kiosk.ctl.screen
+  assert isinstance(review, TooSimilarReview) and kiosk.reader.modes[-1] is ReaderMode.READY
+  for ev in scans:
+    await kiosk.ctl.on_scanner_event(ev)
+    assert kiosk.ctl.screen == review
+  assert blocked.registering.session is not None and len(blocked.registering.session.kept) == PRESSES
+  assert len(kiosk.reader.merges) == 1
+  assert kiosk.store.punches() == []
+  assert not await kiosk.clock.has_fingerprint(BOB)
+
+
 async def test_an_admins_pin_steps_in_too(kiosk: Kiosk) -> None:
   await bob_registers(kiosk)
   await give_presses(kiosk, others=(mias_print(),), like_mia=True)
