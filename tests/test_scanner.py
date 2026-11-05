@@ -16,6 +16,7 @@ from timeclock_schema.enums import Finger, ScanResult
 
 # First party imports
 from timeclock_system import scanner as scanner_module
+from timeclock_system.registration import OtherPrint, Press
 from timeclock_system.scanner import (
   CancelToken,
   Capture,
@@ -25,12 +26,16 @@ from timeclock_system.scanner import (
   FingerStatus,
   GalleryPrint,
   Matched,
+  Merged,
   NoMatch,
+  Pressed,
+  PressRetry,
   ReaderFailure,
   ReaderGone,
   ReaderMode,
   ReaderPaused,
   ReaderTooHot,
+  RegisterGallery,
   Retry,
   RetryScan,
   ScanCancelled,
@@ -43,16 +48,15 @@ from timeclock_system.scanner import (
 
 if TYPE_CHECKING:
   # Standard library imports
-
-  # Standard library imports
-  from collections.abc import Callable, Iterator, Sequence
+  from collections.abc import Callable, Iterator, Mapping, Sequence
 
   # First party imports
   from timeclock_system.registration import Minutiae
 
 WAIT = 2.0
 TICK = 0.02  # a wait on Windows can return up to a timer tick (~16 ms) early by time.monotonic()
-BLOCK = object()  # identify/enroll outcome: block until the token is cancelled, then raise ScanCancelled
+BLOCK = object()  # identify/capture/enroll outcome: block until the token is cancelled, then raise ScanCancelled
+ONE_PRESS: tuple[Minutiae, ...] = (((1, 2, 3),),)  # what the fake decodes a template it wasn't given into
 
 
 @dataclass(frozen=True)
@@ -89,31 +93,73 @@ class FakeToken:
 
 
 class FakeReader:
-  """Scripted reader; every call is recorded in `calls` as (name, monotonic time, detail)."""
+  """Scripted reader; every call is recorded in `calls` as (name, monotonic time, detail), and in `history` as (name, detail)."""
 
   def __init__(
     self,
     script: Sequence[Outcome] = (),
     *,
     default: Outcome = BLOCK,
+    captures: Sequence[Outcome] = (),
+    decoded: Mapping[bytes, tuple[Minutiae, ...]] | None = None,
+    scores: Mapping[tuple[bytes, int, bytes], tuple[int, ...]] | None = None,
+    merge_error: Exception | None = None,
     enroll_stages: int = 5,
     stage_oks: Sequence[bool] | None = None,
     enroll_statuses: bool = False,
     stage_gap: float = 0.0,
     enroll_result: bytes | object = b"template",
   ) -> None:
-    """`stage_oks`: each enroll press's ok, None for all ok; `enroll_statuses`: report a finger down before each press."""
+    """`script` drives identify and `captures` drives capture, each falling back to `default`.
+
+    `decoded`: what `presses` returns per template (else `ONE_PRESS`); `scores`: what `score` returns per (press, index,
+    other) (else a 0 per press of `other`); `merge` joins its presses with b"+" unless `merge_error` is set.
+    `stage_oks`: each enroll press's ok, None for all ok; `enroll_statuses`: report a finger down before each press.
+    """
     self.script: deque[Outcome] = deque(script)
     self.default = default
+    self.captures: deque[Outcome] = deque(captures)
+    self.decoded = dict(decoded or {})
+    self.scores = dict(scores or {})
+    self.merge_error = merge_error
     self.enroll_stages = enroll_stages
     self.stage_oks = stage_oks
     self.enroll_statuses = enroll_statuses
     self.stage_gap = stage_gap
     self.enroll_result = enroll_result
     self.calls: queue.Queue[tuple[str, float, object]] = queue.Queue()
+    self.history: list[tuple[str, object]] = []
 
   def _record(self, name: str, detail: object = None) -> None:
+    self.history.append((name, detail))
     self.calls.put((name, time.monotonic(), detail))
+
+  def _play(
+    self,
+    script: deque[Outcome],
+    cancel: CancelToken,
+    on_status: Callable[[FingerStatus], None],
+    on_result: Callable[[Capture], None] | None = None,
+  ) -> object:
+    """Run `script`'s entries up to its next outcome; return it, or raise it (BLOCK: once cancelled)."""
+    assert isinstance(cancel, FakeToken)
+    while True:
+      outcome = script.popleft() if script else self.default
+      if isinstance(outcome, Status):
+        on_status(FingerStatus(outcome.present, outcome.waiting))
+      elif isinstance(outcome, Do):
+        outcome.action()
+      elif isinstance(outcome, Early):
+        assert on_result is not None, "Early is an identify entry"
+        on_result(outcome.capture)
+      else:
+        break
+    if outcome is BLOCK:
+      cancel.event.wait()
+      raise ScanCancelled
+    if isinstance(outcome, Exception):
+      raise outcome
+    return outcome
 
   def new_cancel(self) -> FakeToken:
     return FakeToken()
@@ -131,40 +177,36 @@ class FakeReader:
     on_status: Callable[[FingerStatus], None],
     on_result: Callable[[Capture], None],
   ) -> Capture:
-    assert isinstance(cancel, FakeToken)
     self._record("identify", tuple(gallery))
     try:
-      while True:
-        outcome = self.script.popleft() if self.script else self.default
-        if isinstance(outcome, Status):
-          on_status(FingerStatus(outcome.present, outcome.waiting))
-        elif isinstance(outcome, Do):
-          outcome.action()
-        elif isinstance(outcome, Early):
-          on_result(outcome.capture)
-        else:
-          break
-      if outcome is BLOCK:
-        cancel.event.wait()
-        raise ScanCancelled
-      if isinstance(outcome, Exception):
-        raise outcome
+      outcome = self._play(self.script, cancel, on_status, on_result)
       assert isinstance(outcome, Capture)
       return outcome
     finally:
       self._record("identify_end")
 
   def capture(self, cancel: CancelToken, on_status: Callable[[FingerStatus], None]) -> bytes:
-    raise NotImplementedError
+    self._record("capture")
+    try:
+      outcome = self._play(self.captures, cancel, on_status)
+      assert isinstance(outcome, bytes)
+      return outcome
+    finally:
+      self._record("capture_end")
 
   def presses(self, template: bytes) -> tuple[Minutiae, ...]:
-    raise NotImplementedError
+    self._record("presses", template)
+    return self.decoded.get(template, ONE_PRESS)
 
   def score(self, press: bytes, index: int, other: bytes) -> tuple[int, ...]:
-    raise NotImplementedError
+    self._record("score", (press, index, other))
+    return self.scores.get((press, index, other), (0,) * len(self.decoded.get(other, ONE_PRESS)))
 
   def merge(self, presses: Sequence[bytes]) -> bytes:
-    raise NotImplementedError
+    self._record("merge", tuple(presses))
+    if self.merge_error is not None:
+      raise self.merge_error
+    return b"+".join(presses)
 
   def enroll(
     self, cancel: CancelToken, on_stage: Callable[[int, int, bool], None], on_status: Callable[[FingerStatus], None]
@@ -254,15 +296,22 @@ def no_match(event: ScannerEvent) -> NoMatch:
 
 @pytest.fixture
 def make() -> Iterator[Callable[..., Harness]]:
-  """Build and start a scanner in READY with GALLERY; on teardown stop it and check no threads leak."""
+  """Build and start a scanner in `mode` (REGISTER for `registrant` if given) with GALLERY; on teardown stop it and check no threads leak."""
   harnesses: list[Harness] = []
 
   def build(
-    reader: FakeReader, timings: ScannerTimings = DEFAULT_TIMINGS, mode: ReaderMode = ReaderMode.READY, margin: int = MARGIN
+    reader: FakeReader,
+    timings: ScannerTimings = DEFAULT_TIMINGS,
+    mode: ReaderMode = ReaderMode.READY,
+    margin: int = MARGIN,
+    registrant: int | None = None,
   ) -> Harness:
     harness = Harness(reader, timings)
     harness.scanner.set_gallery(GALLERY, margin)
-    harness.scanner.set_mode(mode)
+    if registrant is None:
+      harness.scanner.set_mode(mode)
+    else:
+      harness.scanner.register(registrant)
     harness.scanner.start()
     harnesses.append(harness)
     return harness
@@ -599,6 +648,142 @@ def test_an_uncounted_press_restarts_the_idle_timer(make: Callable[..., Harness]
   )
   events = [h.event() for _ in range(5)]
   assert events[-1] == Enrolled(b"template")
+
+
+FAST = ScannerTimings(finger_off_pause=0.01, retry_pause=0.01)
+TB: tuple[Minutiae, ...] = (((1, 1, 1),), ((2, 2, 2),))  # B's print, two presses
+B_OWN = {(b"tb", 0, b"tb"): (99, 30), (b"tb", 1, b"tb"): (45, 99)}  # B's presses against each other
+B_GALLERY = RegisterGallery((OtherPrint(B, 2, Finger.RIGHT_THUMB, TB, ((-1, 45), (45, -1))),))
+M0, M1, M2 = ((10, 10, 0),), ((20, 20, 0),), ((30, 30, 0),)
+
+
+def gallery_of(event: ScannerEvent) -> RegisterGallery:
+  assert isinstance(event, RegisterGallery)
+  return event
+
+
+def test_register_posts_gallery_without_registrant(make: Callable[..., Harness]) -> None:
+  # Employee 1's own prints (A, A2) never count as resemblance; B's agreement keeps the higher direction, -1 on itself.
+  h = make(FakeReader(decoded={b"tb": TB}, scores=B_OWN), FAST, registrant=1)
+  assert h.event() == B_GALLERY
+  assert [d for name, d in h.reader.history if name == "presses"] == [b"tb"]
+
+
+def test_register_decodes_each_gallery_print_once(make: Callable[..., Harness]) -> None:
+  h = make(FakeReader(decoded={b"tb": TB, b"tb-new": TB}, scores=B_OWN), FAST, registrant=1)
+  assert h.event() == B_GALLERY
+  h.scanner.set_mode(ReaderMode.READY)
+  h.scanner.register(1)
+  assert h.event() == B_GALLERY
+  # A print whose template changed is decoded again.
+  h.scanner.set_gallery([*GALLERY[:2], GalleryPrint(B, 2, b"tb-new", Finger.RIGHT_THUMB)], MARGIN)
+  h.scanner.set_mode(ReaderMode.READY)
+  h.scanner.register(1)
+  gallery_of(h.event())
+  assert [d for name, d in h.reader.history if name == "presses"] == [b"tb", b"tb-new"]
+
+
+def test_register_posts_pressed_with_scores(make: Callable[..., Harness]) -> None:
+  scores = {
+    **B_OWN,
+    (b"p0", 0, b"tb"): (12, 34),
+    (b"p1", 0, b"tb"): (5, 6),
+    (b"p1", 0, b"p0"): (30,),
+    (b"p0", 0, b"p1"): (45,),  # the earlier press's direction scores higher
+    (b"p2", 0, b"p0"): (50,),  # the new press's direction scores higher
+    (b"p0", 0, b"p2"): (20,),
+  }
+  reader = FakeReader(captures=[b"p0", b"p1", b"p2"], decoded={b"tb": TB, b"p0": (M0,), b"p1": (M1,), b"p2": (M2,)}, scores=scores)
+  h = make(reader, FAST, registrant=1)
+  assert h.event() == B_GALLERY
+  assert h.event() == Pressed(Press(0, M0, b"p0", {}, {B: (12, 34)}))
+  assert h.event() == Pressed(Press(1, M1, b"p1", {0: 45}, {B: (5, 6)}))
+  assert h.event() == Pressed(Press(2, M2, b"p2", {0: 50, 1: 0}, {B: (0, 0)}))
+
+
+def test_register_retry_posts_press_retry_and_restarts_the_idle_timer(make: Callable[..., Harness]) -> None:
+  # Each capture takes 0.15 s, under the 0.25 s idle timeout, though both together outlast it; the retry isn't counted.
+  slow = Do(lambda: time.sleep(0.15))
+  timings = ScannerTimings(enroll_idle_timeout=0.25, finger_off_pause=0.01, retry_pause=0.01)
+  h = make(FakeReader(captures=[slow, RetryScan("Remove finger"), slow, b"p0"]), timings, registrant=1)
+  gallery_of(h.event())
+  assert h.event() == PressRetry()
+  pressed = h.event()
+  assert isinstance(pressed, Pressed)
+  assert pressed.press.press_id == 0
+
+
+def test_register_idle_timeout(make: Callable[..., Harness]) -> None:
+  h = make(FakeReader(), ScannerTimings(enroll_idle_timeout=0.1, finger_off_pause=0.01), registrant=1)
+  gallery_of(h.event())
+  assert h.event() == EnrollFailed("timeout")
+  h.reader.next_call("identify")
+  assert h.scanner.mode is ReaderMode.READY
+
+
+@pytest.mark.parametrize("error", [ReaderFailure("usb error"), ReaderTooHot()])
+def test_register_reader_error_posts_enroll_failed(make: Callable[..., Harness], error: Exception) -> None:
+  h = make(FakeReader(captures=[error]), FAST, registrant=1)
+  gallery_of(h.event())
+  assert h.event() == EnrollFailed("error")
+  h.reader.next_call("identify")
+  assert h.scanner.mode is ReaderMode.READY
+
+
+def test_set_mode_ends_register(make: Callable[..., Harness]) -> None:
+  # The user's Cancel is not a failed registration (R16); coming back starts a new session.
+  h = make(FakeReader(captures=[b"p0", Status(present=True, waiting=False), BLOCK, b"p1"]), FAST, registrant=1)
+  gallery_of(h.event())
+  first = h.event()
+  assert isinstance(first, Pressed)
+  assert h.event() == FingerStatus(present=True, waiting=False)
+  h.scanner.set_mode(ReaderMode.READY)
+  assert h.event() == FingerStatus(present=False, waiting=False)  # a cancelled capture may never report the lift
+  h.reader.next_call("identify")
+  h.no_event(0.2)
+  h.scanner.register(1)
+  gallery_of(h.event())
+  assert h.event() == Pressed(Press(0, ONE_PRESS[0], b"p1", {}, {B: (0,)}))
+
+
+def test_register_again_for_the_same_registrant_changes_nothing(make: Callable[..., Harness]) -> None:
+  h = make(FakeReader(), registrant=1)
+  gallery_of(h.event())
+  h.reader.next_call("capture")
+  h.scanner.register(1)
+  with pytest.raises(queue.Empty):
+    h.reader.next_call("capture_end", timeout=0.3)
+  h.no_event(0.0)  # no new session's gallery
+
+
+def test_merge_posts_merged(make: Callable[..., Harness]) -> None:
+  h = make(FakeReader(), FAST, registrant=1)
+  gallery_of(h.event())
+  h.reader.next_call("capture")
+  h.scanner.merge([b"p0", b"p1"])
+  h.reader.next_call("capture_end")  # the waiting capture is cancelled, not waited out
+  assert h.event() == Merged(b"p0+p1")
+  # The session goes on until the mode changes: no new gallery.
+  h.reader.next_call("capture")
+  assert h.scanner.mode is ReaderMode.REGISTER
+  h.no_event(0.2)
+
+
+@pytest.mark.parametrize("mode", [ReaderMode.CLOSED, ReaderMode.READY])
+def test_merge_runs_in_any_mode(make: Callable[..., Harness], mode: ReaderMode) -> None:
+  h = make(FakeReader(), mode=mode)
+  h.scanner.merge([b"p0"])
+  assert h.event() == Merged(b"p0")
+  assert h.scanner.mode is mode
+  if mode is ReaderMode.CLOSED:
+    assert "open" not in [name for name, _ in h.reader.history]  # merging needs no device
+
+
+def test_a_failed_merge_posts_enroll_failed(make: Callable[..., Harness]) -> None:
+  h = make(FakeReader(merge_error=ReaderFailure("bad press")), FAST, registrant=1)
+  gallery_of(h.event())
+  h.scanner.merge([b"p0"])
+  assert h.event() == EnrollFailed("error")
 
 
 def scan_of(event: ScannerEvent):
