@@ -134,24 +134,8 @@ class ReaderPaused:
 
 
 @dataclass(frozen=True)
-class EnrollStage:
-  """An enrollment press: `done` of `total` stages counted so far."""
-
-  done: int
-  total: int
-  ok: bool = True  # False: libfprint reported a retry; the press wasn't counted
-
-
-@dataclass(frozen=True)
-class Enrolled:
-  """Enrollment finished with this serialized template."""
-
-  template: bytes = field(repr=False)  # R15
-
-
-@dataclass(frozen=True)
 class EnrollFailed:
-  """Enrollment or registration ended without a template (REGISTER: a press timed out or the reader failed), or a merge failed."""
+  """A registration ended without a template: a press timed out or the reader failed, or a merge failed."""
 
   reason: Literal["timeout", "error"]
 
@@ -183,18 +167,7 @@ class Merged:
 
 
 type ScannerEvent = (
-  Matched
-  | NoMatch
-  | Retry
-  | FingerStatus
-  | ReaderPaused
-  | EnrollStage
-  | Enrolled
-  | EnrollFailed
-  | RegisterGallery
-  | Pressed
-  | PressRetry
-  | Merged
+  Matched | NoMatch | Retry | FingerStatus | ReaderPaused | EnrollFailed | RegisterGallery | Pressed | PressRetry | Merged
 )
 
 
@@ -203,7 +176,6 @@ class ReaderMode(StrEnum):
 
   CLOSED = "closed"
   READY = "ready"
-  ENROLL = "enroll"
   REGISTER = "register"  # entered through `Scanner.register`, for one registrant
 
 
@@ -259,15 +231,6 @@ class Reader(Protocol):
 
     `on_status` gets every finger-status change. `on_result` gets the capture the moment it's made, while the finger may
     still be down; the call itself returns only after the lift.
-    """
-    ...
-
-  def enroll(
-    self, cancel: CancelToken, on_stage: Callable[[int, int, bool], None], on_status: Callable[[FingerStatus], None]
-  ) -> bytes:
-    """Run every enrollment stage; return the serialized template.
-
-    `on_stage(done, total, ok)` gets every press, `ok` False for one the reader couldn't use (not counted).
     """
     ...
 
@@ -434,8 +397,8 @@ class Scanner:
   def set_gallery(self, prints: Sequence[GalleryPrint], margin: int) -> None:
     """Replace the gallery, restarting a running identify when its prints change; an equal gallery changes nothing (R6).
 
-    Only an identify is restarted: an enrollment doesn't use the gallery, a registration reads it once as its session
-    begins, and cancelling either would lose the user's presses.
+    Only an identify is restarted: a registration reads the gallery once as its session begins, and cancelling it would
+    lose the user's presses.
     A new `margin`, or a new order alone (every punch moves its employee first), applies from the next call without a
     restart: libfprint drops a cancel that lands while it's still starting the reader, and the call then runs until
     the next press.
@@ -518,9 +481,7 @@ class Scanner:
     if not self._opened:
       self._blocking(self._reader.open)
       self._opened = True
-    if mode is ReaderMode.ENROLL:
-      self._enroll_once(mode_changes)
-    elif mode is ReaderMode.REGISTER:
+    if mode is ReaderMode.REGISTER:
       self._register_once(mode_changes)
     else:
       self._ready_once()
@@ -603,60 +564,10 @@ class Scanner:
       self._last_status = None
     return (early[-1], True) if early else (_decide(capture, gallery, margin), False)
 
-  def _enroll_once(self, mode_changes: int) -> None:
-    token = self._reader.new_cancel()
-    with self._lock:
-      if self._stopping or self._mode_changes != mode_changes:
-        return
-      self._token = token
-    timed_out = threading.Event()
-
-    def expire() -> None:
-      timed_out.set()
-      token.cancel()
-
-    idle = threading.Timer(self._timings.enroll_idle_timeout, expire)
-
-    def on_stage(done: int, total: int, ok: bool) -> None:
-      nonlocal idle
-      idle.cancel()  # any press, counted or not, shows someone is there
-      idle = threading.Timer(self._timings.enroll_idle_timeout, expire)
-      idle.daemon = True
-      idle.start()
-      self._post(EnrollStage(done, total, ok))
-
-    idle.daemon = True
-    idle.start()
-    outcome: ScannerEvent | None
-    try:
-      outcome = Enrolled(self._blocking(self._reader.enroll, token, on_stage, self._on_status))
-    except ScanCancelled:
-      outcome = EnrollFailed("timeout") if timed_out.is_set() else None
-    except RetryScan, ReaderTooHot, ReaderFailure:
-      outcome = EnrollFailed("error")
-    finally:
-      idle.cancel()
-      if self._last_status not in {None, _NO_FINGER}:
-        self._post(_NO_FINGER)  # libfprint completes before the last press lifts and doesn't report that lift
-      self._last_status = None
-    with self._lock:
-      self._token = None
-      # A set_mode or stop during the call supersedes it: its cancel is the user's Cancel, not a failure (R16).
-      superseded = self._stopping or self._mode_changes != mode_changes
-      if not superseded:
-        self._mode = ReaderMode.READY
-    if superseded:
-      return
-    if outcome is not None:
-      self._post(outcome)
-    # Posted first so the UI shows the result at once. libfprint can finish before the last stage's finger lifts, and
-    # READY's identify would match it as the employee who just enrolled: the same pause as _ready_once.
-    self._wake.wait(self._timings.finger_off_pause)
-
   def _register_once(self, mode_changes: int) -> None:
-    # One capture of the REGISTER session that began at `mode_changes`; the session's first call posts RegisterGallery. As
-    # in _enroll_once, a set_mode or stop supersedes the call and posts nothing (R16), while a timed-out press or a reader
-    # error ends the session in READY.
+    # One capture of the REGISTER session that began at `mode_changes`; the session's first call posts RegisterGallery. A
+    # set_mode or stop supersedes the call and posts nothing (its cancel is the user's Cancel, not a failure: R16), while a
+    # timed-out press or a reader error ends the session in READY.
     token = self._reader.new_cancel()
     with self._lock:
       if self._stopping or self._mode_changes != mode_changes or self._merge is not None:

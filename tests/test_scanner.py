@@ -7,7 +7,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 # Third party imports
@@ -20,9 +20,7 @@ from timeclock_system.registration import OtherPrint, Press
 from timeclock_system.scanner import (
   CancelToken,
   Capture,
-  Enrolled,
   EnrollFailed,
-  EnrollStage,
   FingerStatus,
   GalleryPrint,
   Matched,
@@ -55,7 +53,7 @@ if TYPE_CHECKING:
 
 WAIT = 2.0
 TICK = 0.02  # a wait on Windows can return up to a timer tick (~16 ms) early by time.monotonic()
-BLOCK = object()  # identify/capture/enroll outcome: block until the token is cancelled, then raise ScanCancelled
+BLOCK = object()  # identify/capture outcome: block until the token is cancelled, then raise ScanCancelled
 ONE_PRESS: tuple[Minutiae, ...] = (((1, 2, 3),),)  # what the fake decodes a template it wasn't given into
 
 
@@ -104,17 +102,11 @@ class FakeReader:
     decoded: Mapping[bytes, tuple[Minutiae, ...]] | None = None,
     scores: Mapping[tuple[bytes, int, bytes], tuple[int, ...]] | None = None,
     merge_error: Exception | None = None,
-    enroll_stages: int = 5,
-    stage_oks: Sequence[bool] | None = None,
-    enroll_statuses: bool = False,
-    stage_gap: float = 0.0,
-    enroll_result: bytes | object = b"template",
   ) -> None:
     """`script` drives identify and `captures` drives capture, each falling back to `default`.
 
     `decoded`: what `presses` returns per template (else `ONE_PRESS`); `scores`: what `score` returns per (press, index,
     other) (else a 0 per press of `other`); `merge` joins its presses with b"+" unless `merge_error` is set.
-    `stage_oks`: each enroll press's ok, None for all ok; `enroll_statuses`: report a finger down before each press.
     """
     self.script: deque[Outcome] = deque(script)
     self.default = default
@@ -122,11 +114,6 @@ class FakeReader:
     self.decoded = dict(decoded or {})
     self.scores = dict(scores or {})
     self.merge_error = merge_error
-    self.enroll_stages = enroll_stages
-    self.stage_oks = stage_oks
-    self.enroll_statuses = enroll_statuses
-    self.stage_gap = stage_gap
-    self.enroll_result = enroll_result
     self.calls: queue.Queue[tuple[str, float, object]] = queue.Queue()
     self.history: list[tuple[str, object]] = []
 
@@ -207,27 +194,6 @@ class FakeReader:
     if self.merge_error is not None:
       raise self.merge_error
     return b"+".join(presses)
-
-  def enroll(
-    self, cancel: CancelToken, on_stage: Callable[[int, int, bool], None], on_status: Callable[[FingerStatus], None]
-  ) -> bytes:
-    assert isinstance(cancel, FakeToken)
-    self._record("enroll")
-    done = 0
-    for ok in [True] * self.enroll_stages if self.stage_oks is None else self.stage_oks:
-      if done == self.enroll_stages:
-        break
-      if cancel.event.wait(self.stage_gap):
-        raise ScanCancelled
-      if self.enroll_statuses:
-        on_status(FingerStatus(present=True, waiting=False))
-      done += ok
-      on_stage(done, self.enroll_stages, ok)
-    if self.enroll_result is BLOCK:
-      cancel.event.wait()
-      raise ScanCancelled
-    assert isinstance(self.enroll_result, bytes)
-    return self.enroll_result
 
   def next_call(self, name: str, timeout: float = WAIT) -> tuple[float, object]:
     """Wait for the next call named `name`, skipping others."""
@@ -464,63 +430,6 @@ def test_busy_seconds_reports_a_running_call(make: Callable[..., Harness]) -> No
   assert h.scanner.busy_seconds() == 0.0
 
 
-def test_enroll_posts_stages_then_enrolled_and_returns_to_ready(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader(enroll_result=b"new-template"), PAUSE, mode=ReaderMode.ENROLL)
-  assert [h.event() for _ in range(6)] == [*(EnrollStage(done, 5, ok=True) for done in range(1, 6)), Enrolled(b"new-template")]
-  enrolled_at = time.monotonic()
-  # The last stage's finger may still be down when enroll returns; identifying at once would match the new employee.
-  identify_at, _ = h.reader.next_call("identify")
-  assert identify_at - enrolled_at >= 0.25  # noqa: PLR2004
-  assert h.scanner.mode is ReaderMode.READY
-
-
-def test_enroll_stages_restart_the_idle_timer(make: Callable[..., Harness]) -> None:
-  # Stages 0.1 s apart outlast the 0.25 s idle timeout in total, but never between two stages.
-  h = make(FakeReader(stage_gap=0.1), ScannerTimings(enroll_idle_timeout=0.25), mode=ReaderMode.ENROLL)
-  events = [h.event() for _ in range(6)]
-  assert events[-1] == Enrolled(b"template")
-
-
-def test_enroll_idle_timeout_posts_enroll_failed(make: Callable[..., Harness]) -> None:
-  h = make(
-    FakeReader(enroll_stages=0, enroll_result=BLOCK),
-    ScannerTimings(enroll_idle_timeout=0.1, finger_off_pause=0.01),
-    mode=ReaderMode.ENROLL,
-  )
-  assert h.event() == EnrollFailed("timeout")
-  h.reader.next_call("identify")
-  assert h.scanner.mode is ReaderMode.READY
-
-
-def test_enroll_reader_error_posts_enroll_failed() -> None:
-  class FailingEnroll(FakeReader):
-    @override
-    def enroll(
-      self, cancel: CancelToken, on_stage: Callable[[int, int, bool], None], on_status: Callable[[FingerStatus], None]
-    ) -> bytes:
-      raise ReaderFailure("usb error")
-
-  reader = FailingEnroll()
-  harness = Harness(reader, ScannerTimings(finger_off_pause=0.01))
-  harness.scanner.set_mode(ReaderMode.ENROLL)
-  harness.scanner.start()
-  try:
-    assert harness.event() == EnrollFailed("error")
-    reader.next_call("identify")
-  finally:
-    harness.scanner.stop()
-
-
-def test_cancelling_enroll_posts_nothing(make: Callable[..., Harness]) -> None:
-  # The user's Cancel during registration is not a failed registration (R16).
-  h = make(FakeReader(enroll_stages=0, enroll_result=BLOCK), mode=ReaderMode.ENROLL)
-  h.reader.next_call("enroll")
-  h.scanner.set_mode(ReaderMode.READY)
-  h.reader.next_call("identify")
-  h.no_event(0.2)
-  assert h.scanner.mode is ReaderMode.READY
-
-
 def test_set_gallery_restarts_identify_with_the_new_gallery(make: Callable[..., Harness]) -> None:
   h = make(FakeReader())
   _, gallery = h.reader.next_call("identify")
@@ -593,20 +502,22 @@ def test_a_cancel_after_an_early_result_is_no_failure_and_still_pauses(make: Cal
 
 
 def test_a_mode_change_after_an_early_result_posts_nothing_more(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader([Early(HIT_A), BLOCK]), PAUSE)
+  h = make(FakeReader([Early(HIT_A), BLOCK], captures=[b"p0"]), PAUSE)
   matched(h.event(), A)
-  h.scanner.set_mode(ReaderMode.ENROLL)
-  h.reader.next_call("enroll")
-  assert [h.event() for _ in range(6)] == [*(EnrollStage(i, 5, ok=True) for i in range(1, 6)), Enrolled(b"template")]
+  h.scanner.register(1)
+  gallery_of(h.event())
+  pressed = h.event()
+  assert isinstance(pressed, Pressed)
+  assert pressed.press.probe == b"p0"
 
 
 def test_a_mode_change_after_an_early_result_waits_out_the_pause(make: Callable[..., Harness]) -> None:
-  # An admin's approving finger may still be down: enrolling at once would read it as the new print's first press.
+  # An admin's approving finger may still be down: registering at once would read it as the new print's first press.
   h = make(FakeReader([Early(HIT_A), BLOCK]), PAUSE)
   matched(h.event(), A)
   changed = time.monotonic()
-  h.scanner.set_mode(ReaderMode.ENROLL)
-  started, _ = h.reader.next_call("enroll")
+  h.scanner.register(1)
+  started, _ = h.reader.next_call("capture")
   assert started - changed >= PAUSE.finger_off_pause - TICK
 
 
@@ -618,36 +529,6 @@ def test_stop_ends_the_pause_after_an_early_result(make: Callable[..., Harness])
   h.scanner.stop()
   thread.join(1.0)
   assert not thread.is_alive()
-
-
-def test_enroll_posts_uncounted_presses(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader(enroll_stages=3, stage_oks=[True, False, True, True]), mode=ReaderMode.ENROLL)
-  assert [h.event() for _ in range(4)] == [
-    EnrollStage(1, 3, ok=True),
-    EnrollStage(1, 3, ok=False),
-    EnrollStage(2, 3, ok=True),
-    EnrollStage(3, 3, ok=True),
-  ]
-  assert h.event() == Enrolled(b"template")
-
-
-def test_enroll_posts_finger_status(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader(enroll_stages=1, enroll_statuses=True), mode=ReaderMode.ENROLL)
-  assert h.event() == FingerStatus(present=True, waiting=False)
-  assert h.event() == EnrollStage(1, 1, ok=True)
-  assert h.event() == FingerStatus(present=False, waiting=False)
-  assert h.event() == Enrolled(b"template")
-
-
-def test_an_uncounted_press_restarts_the_idle_timer(make: Callable[..., Harness]) -> None:
-  # Presses 0.1 s apart outlast the 0.25 s idle timeout in total; uncounted ones keep it alive like counted ones.
-  h = make(
-    FakeReader(enroll_stages=2, stage_oks=[True, False, False, True], stage_gap=0.1),
-    ScannerTimings(enroll_idle_timeout=0.25),
-    mode=ReaderMode.ENROLL,
-  )
-  events = [h.event() for _ in range(5)]
-  assert events[-1] == Enrolled(b"template")
 
 
 FAST = ScannerTimings(finger_off_pause=0.01, retry_pause=0.01)
