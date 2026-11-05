@@ -613,7 +613,8 @@ async def test_too_similar_alone_admin_steps_in(kiosk: Kiosk, alerts: list[tuple
   assert alerts == []
 
 
-async def test_an_admin_who_steps_in_sees_the_reregister_advice(kiosk: Kiosk, alerts: list[tuple[str, str]]) -> None:
+async def test_an_admin_who_steps_in_leaves_no_reregister_advice(kiosk: Kiosk, alerts: list[tuple[str, str]]) -> None:
+  # The employee keeps the punch menu after the admin leaves: naming a coworker's print there is the alert's job only.
   careless = OtherPrint(uuid4(), EVE, Finger.RIGHT_THUMB, (points(),) * PRESSES, mias_print(careless=True).agreement)
   on_both = {MIA_PRINT: (0, 0, SIMILAR, 0, SIMILAR), careless.print_id: (SIMILAR,) * PRESSES}
   await bob_registers(kiosk)
@@ -626,9 +627,35 @@ async def test_an_admin_who_steps_in_sees_the_reregister_advice(kiosk: Kiosk, al
   await kiosk.ctl.allow()
   await kiosk.ctl.on_scanner_event(Merged(b"bob"))
   screen = kiosk.ctl.screen
-  assert isinstance(screen, Menu) and screen.info.employee_id == BOB
-  assert screen.notice == text.REREGISTER_ADVICE.format(name="Eve Lee", finger="right thumb")
-  assert len(alerts) == 1
+  assert isinstance(screen, Menu) and screen.info.employee_id == BOB and screen.notice is None
+  [(subject, body)] = alerts
+  assert subject == "Fingerprint print needs re-registering" and "Eve Lee's right thumb" in body
+
+
+async def test_the_resembled_print_approves_no_review_of_it(kiosk: Kiosk) -> None:
+  # Case C against an admin's print: the registrant's own finger can be identified as that print, so it mustn't pass
+  # the admin check, on the prompt or on its PIN pad. The admin's other fingers and PIN still do.
+  ada_print = uuid4()
+  adas = OtherPrint(ada_print, ADA, Finger.LEFT_INDEX, (points(),) * PRESSES, mias_print().agreement)
+  await bob_registers(kiosk)
+  await kiosk.ctl.on_scanner_event(RegisterGallery((adas,)))
+  for i in range(PRESSES):
+    p = press(i)
+    like_ada = {ada_print: (0, 0, SIMILAR, 0, SIMILAR)} if i < 2 else {}  # noqa: PLR2004
+    await kiosk.ctl.on_scanner_event(Pressed(Press(i, p.minutiae, p.probe, p.vs_session, like_ada)))
+  blocked = kiosk.ctl.screen
+  assert isinstance(blocked, TooSimilarBlocked)
+  await kiosk.ctl.ask_admin()
+  prompt = ApprovalPrompt(SimilarReview(blocked.registering, blocked.verdict), touched_at=kiosk.t.mono, message=text.NOT_AN_ADMIN)
+  await kiosk.ctl.on_scanner_event(Matched(ada_print, ADA))
+  assert kiosk.ctl.screen == prompt
+  await kiosk.ctl.use_pin()
+  await kiosk.ctl.on_scanner_event(Matched(ada_print, ADA))
+  assert kiosk.ctl.screen == prompt
+  assert kiosk.reader.merges == []
+  await kiosk.ctl.on_scanner_event(Matched(uuid4(), ADA))  # another of Ada's fingers
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, TooSimilarReview) and screen.approval == Approval(ADA, pin_only=False)
 
 
 async def test_an_admins_pin_steps_in_too(kiosk: Kiosk) -> None:

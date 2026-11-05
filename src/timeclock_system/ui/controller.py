@@ -681,13 +681,13 @@ class KioskController:
         case Retry():
           self._failed_at = now
           message = ReaderMessage(text.RETRY, "error", now)
-        case Matched(employee_id=employee_id):
+        case Matched():
           self._outcome = ReaderIndicator.READ
           message = ReaderMessage(text.SCAN_SUCCESSFUL, "success", now)
           if scan_id is None:
-            await self._on_match(s, employee_id)  # no scan recorded: no open scan to open, move or settle
+            await self._on_match(s, ev)  # no scan recorded: no open scan to open, move or settle
           else:
-            await self._on_scanned_match(s, employee_id, scan_id)
+            await self._on_scanned_match(s, ev, scan_id)
         case RegisterGallery() | Pressed() | PressRetry() | Merged() | EnrollFailed() if isinstance(s, Registering | TooSimilarReview):
           message = await self._on_register(s, ev)
         case _:
@@ -704,10 +704,10 @@ class KioskController:
       await self._settle_open(ScanOutcome.RESCANNED)
     return await self._clock.record_scan(ev.scan)
 
-  async def _on_scanned_match(self, s: Screen, employee_id: int, scan_id: UUID) -> None:
+  async def _on_scanned_match(self, s: Screen, ev: Matched, scan_id: UUID) -> None:
     # Split out of on_scanner_event for C901. A match opens its scan before `_on_match`, so a punch made inside counts for it.
-    self._open_scan = _OpenScan(scan_id, employee_id, type(s))
-    await self._on_match(s, employee_id)
+    self._open_scan = _OpenScan(scan_id, ev.employee_id, type(s))
+    await self._on_match(s, ev)
     if self._open_scan is not None:  # pyright: ignore[reportUnnecessaryComparison]  # a punch inside `_on_match` may have settled it
       self._open_scan = replace(self._open_scan, screen=type(self._screen))
       # The match left its employee nothing to act on (`_on_match` ignored it, or it ended on Idle or on a confirmation of
@@ -779,10 +779,14 @@ class KioskController:
     self._reader.merge([p.probe for p in r.session.kept])  # pyright: ignore[reportOptionalMemberAccess]  # a verdict came from it
     owner = self._clock.employee(verdict.other.employee_id)
     name = str(verdict.other.employee_id) if owner is None else owner.display_name
-    return TooSimilarReview(replace(r, admin_id=approval.admin_id), verdict, name, approval, self._mono())
+    return TooSimilarReview(r, verdict, name, approval, self._mono())
 
   async def _saved(self, r: Registering, template: bytes, approval: Approval | None, flagged: tuple[OtherPrint, ...]) -> Screen:
-    """Save the registration's print, then alert each careless print it found (case B); an admin present sees the advice."""
+    """Save the registration's print, then alert each careless print it found (case B).
+
+    Only an approved change or the add-employee flow shows the advice too. A first registration ends on the employee's
+    punch menu, where it would name a coworker to them, even after an admin stepped in for a review.
+    """
     replaces = None if r.change is None else r.change.fingerprint_id
     await self._clock.register_fingerprint(r.employee_id, template, r.finger, approval=approval, replaces=replaces)
     lines: list[str] = []
@@ -791,13 +795,13 @@ class KioskController:
       name = str(p.employee_id) if owner is None else owner.display_name
       lines.append(text.REREGISTER_ADVICE.format(name=name, finger=text.FINGER_LABELS[p.finger].lower()))
       alert("Fingerprint print needs re-registering", f"{lines[-1]}\nPrint id: {p.print_id}", in_except_block=False, wait=False)
-    advice = " ".join(lines) if lines and r.admin_id is not None else None  # alone, it would name a coworker to the employee
+    advice = " ".join(lines) or None
     now = self._mono()
     if r.change is not None:
       return Idle(text.FINGERPRINT_SAVED, until=now + (MESSAGE_SECS if advice is None else ADVICE_SECS), advice=advice)
     if r.added is not None:
       return EmployeeAdded(r.added.display_name, r.added.id, now, advice)
-    return await self._open_menu(r.employee_id, notice=advice)
+    return await self._open_menu(r.employee_id)
 
   async def _not_saved(self, r: Registering, message: str) -> Screen:
     """End a registration with nothing saved; a re-registration's old print stays."""
@@ -809,7 +813,7 @@ class KioskController:
     # In the add-employee flow the employee is already saved: back to the optional step, to retry or skip.
     return NewFingerprint(r.admin_id, r.added, self._mono(), message)
 
-  async def _on_pad_match(self, pad: PinEntry, employee_id: int) -> None:
+  async def _on_pad_match(self, pad: PinEntry, ev: Matched) -> None:
     """A finger on a PIN pad does what it would have done on the screen before Use PIN; typed digits are discarded.
 
     The new employee's pad (NewPin) isn't a login, so a finger there stays ignored. Split out of `_on_match` for PLR0912.
@@ -825,15 +829,16 @@ class KioskController:
       case FingerChange() | SimilarReview():
         before = ApprovalPrompt(p, now)
       case FingerprintLogin():
-        if (employee := self._clock.employee(employee_id)) is not None:
+        if (employee := self._clock.employee(ev.employee_id)) is not None:
           self._screen = await self._fingerprint_actions(employee.id, employee.display_name)
         return
-    await self._on_match(before, employee_id)
+    await self._on_match(before, ev)
 
-  async def _on_match(self, s: Screen, employee_id: int) -> None:
+  async def _on_match(self, s: Screen, ev: Matched) -> None:
     # Split out of on_scanner_event for C901.
+    employee_id = ev.employee_id
     if isinstance(s, PinEntry):
-      await self._on_pad_match(s, employee_id)
+      await self._on_pad_match(s, ev)
     elif isinstance(s, Idle | Menu | Confirmation):
       self._screen = await self._open_menu(employee_id)  # a new scan switches the menu (R45.4)
     elif isinstance(s, AdminReconfirm):
@@ -856,7 +861,10 @@ class KioskController:
         self._screen = replace(s, message=text.NOT_A_MANAGER)
     elif isinstance(s, ApprovalPrompt):
       admin = self._clock.employee(employee_id)
-      if admin is not None and self._clock.fingerprint_approver(admin):
+      # The registrant's own finger may be identified as the print it resembles: that print approves no review of it, so
+      # its owner uses another finger or their PIN.
+      resembled = isinstance(s.change, SimilarReview) and ev.print_id == s.change.verdict.other.print_id
+      if admin is not None and self._clock.fingerprint_approver(admin) and not resembled:
         self._screen = await self._approved(s.change, Approval(admin.id, pin_only=False))
       else:
         self._screen = replace(s, message=text.NOT_AN_ADMIN)
