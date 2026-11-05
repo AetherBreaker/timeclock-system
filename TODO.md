@@ -69,3 +69,13 @@ Each needs its own design before it's built.
 - [ ] **Turn the screen off after hours, waking on touch** (owner: later, 2026-10-29). sway can power the display off
   (`output * power off`); first check on each clock's monitor that its touch panel keeps working while the screen sleeps,
   and catch the waking touch with an overlay so it doesn't press a key on the page.
+- [ ] **Payroll previews in the punch-editing page's test mode** (owner, 2026-11-05): while the page is switched to the
+  test database, buttons beside the shift editor's save button preview the result in each format payroll will receive
+  by email. Waits on the automatic payroll emails, which don't exist yet.
+- [ ] **The clock prompts for a new PIN** (owner, 2026-11-05): the shift-corrections page's Employees menu gets a
+  "prompt for a new PIN" flag. The next time a clock knows it's really that employee (a fingerprint scan, or a login with
+  their current PIN), it asks them to set a new one. For someone without a fingerprint, an editor first sets a PIN on the
+  page, gives it to them, and sets the flag; they log in with it and reach the prompt. Clocks never get permission to
+  change PINs: they insert the new hash into a dedicated insert-only table, and a database trigger applies it (and clears
+  the flag) only while the employee's flag is set, refusing it otherwise the way it refuses a clock-made admin. The first
+  version of the page only sets a PIN directly. Related: "Employees without a PIN" above could reuse this prompt.
