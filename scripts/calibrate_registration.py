@@ -1,20 +1,25 @@
-"""Calibration replay for registration's bars (`registration.py`): run in the image's Python with the patched libfprint.
+r"""Calibration replay for registration's bars (`registration.py`): run in the image's Python with the patched libfprint.
 
 Scores every press of every exported print against its own print's other presses and against every other person's
 presses, then prints how candidate bars sort the known-bad prints from the healthy ones. Output is counts and
 distributions only: no print ids, employee ids or names. The export and the score cache are biometric data: keep them in
 a scratch directory and delete them afterwards.
 
-  python calibrate_registration.py PRINTS OUT_DIR --stray PRINT_ID [--old PRINTS]
+  python calibrate_registration.py PRINTS OUT_DIR --stray PRINT_ID [--old PRINTS] [--scans SCANS]
 
 PRINTS: one print per line, whitespace-separated: id, employee_id, finger, base64 FP3 template (the clocks' gallery).
 --stray: the print whose single stray press resembles other people's prints. --old: replaced prints known to have drawn
-near-collisions; scored against the gallery but never part of it.
+near-collisions; scored against the gallery but never part of it. --scans: the scan log, one scan per line,
+`|`-separated, exported by `SELECT extract(epoch FROM at), instance_id, result, coalesce(best_fingerprint_id::text, ''),
+translate(encode(probe, 'base64'), E'\n', '') FROM fingerprint_scans WHERE probe IS NOT NULL ORDER BY at`; probes are
+biometric data too.
 
 The 2026-11-05 replay over 39 production prints and 2 replaced ones, at the defaults (detail points 20-120, centroid
 within 100 px, agreement 41 by 1 of the other 4, resemblance 40): every press of the 7 weak prints and the stray press is
-replaced, one old print goes to an admin and the other loses its colliding press; 15 of 155 healthy presses are asked
-again, no healthy print needs an admin, no healthy print is flagged.
+replaced, the 2 old prints lose their resembling presses to the own-stray rule instead of going to an admin; 15 of 155
+healthy presses are asked again, no healthy print needs an admin or is flagged. That day's 97 attributed real scans (17
+prints) favour the 1-partner rule: it re-asks presses that carry 1 of the 54 scans reaching 40, 2 partners at 41 would
+lose 17 and an every-pair floor of 10 already 8, since presses with a single partner carry the most real matches.
 """
 
 # Standard library imports
@@ -25,6 +30,7 @@ import json
 import math
 import statistics
 import sys
+from collections import Counter
 from pathlib import Path
 
 # Third party imports
@@ -41,6 +47,7 @@ WHOLE_PRINT_FAILS = 2  # more failing presses than this and the other print fail
 MARGIN = 15  # the scan's match margin
 RESEMBLANCE_BARS = (25, 30, 33, 36, 38, 40, 43)
 CHOSEN = ((20, 120, 100, None, 41, 1), 40)  # (min, max, centre, edge, agreement bar, needed), resemblance bar
+SCAN_WINDOW = 60  # seconds: a failed scan is the person's who matches next on the same clock within this
 
 
 def presses_of(template: bytes) -> list[list[tuple[int, int, int]]]:
@@ -125,6 +132,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
   parser.add_argument("out", type=Path)
   parser.add_argument("--stray", required=True)
   parser.add_argument("--old", type=Path)
+  parser.add_argument("--scans", type=Path)
   args = parser.parse_args()
 
   gallery = load(args.prints)
@@ -199,8 +207,13 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
           b_flags.add(qid)
         elif len(new) == 1:
           reask[pid] |= new
-        else:
-          c_raised.add(pid)
+        else:  # as `Session.add`: resembling presses agreeing with too few of the other kept presses are its own strays
+          own, rest = scores[pid]["own"], set(range(len(feats[pid]))) - fails[pid] - new
+          strays = {i for i in new if rest and sum(max(own[i][j], own[j][i]) >= quality[4] for j in rest) < quality[5]}
+          if strays:
+            reask[pid] |= strays
+          else:
+            c_raised.add(pid)
     caught = {(pid, i) for pid, idx in bad.items() for i in idx if i in reask[pid] or pid in c_raised}
     return {
       "per_bad": sorted(
@@ -272,6 +285,114 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
   print(f"  the stray press's best other-person score: {max(stray[i]['cross'] for i in bad[args.stray])}")
   for p in old:
     print(f"  an old print's presses, best other-person score each: {[round(f['cross']) for f in feats[p['id']]]}")
+  if args.scans:
+    real_scans(args.scans, args.out, gallery, scores)
+
+
+def real_scans(path: Path, out: Path, gallery: list[dict], scores: dict) -> None:  # noqa: PLR0915
+  """Score the scan log's real scans against each registered press: which presses carry them, what each rule would cost."""
+  rows = [
+    dict(zip(("at", "clock", "result", "best", "probe"), line.split("|"), strict=True))
+    for line in path.read_text(encoding="utf-8").splitlines()
+    if line.strip()
+  ]
+  ids = {p["id"] for p in gallery}
+  owner: list[int | None] = []  # the scan whose print is the person's: a match itself, a failure the next match
+  for k, r in enumerate(rows):
+    m = next(
+      (
+        m
+        for m in range(k, len(rows))
+        if rows[m]["clock"] == r["clock"] and rows[m]["result"] == "matched" and float(rows[m]["at"]) - float(r["at"]) <= SCAN_WINDOW
+      ),
+      None,
+    )
+    owner.append(m if m is not None and rows[m]["best"] in ids else None)
+  cache = out / "scan_scores.json"
+  if cache.exists():
+    cached = json.loads(cache.read_text())
+  else:
+    probes = [FPrint.Print.deserialize(base64.b64decode(r["probe"])) for r in rows]
+    prints = {p["id"]: FPrint.Print.deserialize(p["template"]) for p in gallery}
+    both = lambda a, b: max(probes[a].score_press(0, probes[b])[0], probes[b].score_press(0, probes[a])[0])
+    matched = [k for k, m in enumerate(owner) if m == k]
+    cached = {
+      "presses": [  # each attributed scan against each press of its person's print, both directions
+        None
+        if m is None
+        else [
+          max(s, prints[rows[m]["best"]].score_press(j, probes[k])[0])
+          for j, s in enumerate(probes[k].score_press(0, prints[rows[m]["best"]]))
+        ]
+        for k, m in enumerate(owner)
+      ],
+      "next": [None if m is None or m == k else both(k, m) for k, m in enumerate(owner)],
+      "same": [both(a, b) for a, b in itertools.combinations(matched, 2) if rows[a]["best"] == rows[b]["best"]],
+    }
+    cache.write_text(json.dumps(cached))
+  presses, nxt = cached["presses"], cached["next"]
+  pair = lambda pid, i, j: max(scores[pid]["own"][i][j], scores[pid]["own"][j][i])
+  count = lambda pid: len(scores[pid]["own"])
+  partners = lambda pid, bar: [sum(pair(pid, i, j) >= bar for j in range(count(pid)) if j != i) for i in range(count(pid))]
+
+  def connected(pid: str, bar: int) -> set[int]:
+    """The presses outside the largest group that pairs at or above `bar` link."""
+    groups = [{i} for i in range(count(pid))]
+    for i, j in itertools.combinations(range(count(pid)), 2):
+      a, b = next(g for g in groups if i in g), next(g for g in groups if j in g)
+      if a is not b and pair(pid, i, j) >= bar:
+        a |= b
+        groups.remove(b)
+    return set(range(count(pid))) - max(groups, key=len)
+
+  def floor(pid: str, low: int) -> set[int]:
+    """The presses dropped, worst pair first, until every remaining pair scores at least `low`."""
+    keep = set(range(count(pid)))
+    while any(pair(pid, i, j) < low for i, j in itertools.combinations(keep, 2)):
+      keep.remove(min(keep, key=lambda i: min(pair(pid, i, j) for j in keep - {i})))
+    return set(range(count(pid))) - keep
+
+  bar = CHOSEN[0][4]
+  attributed = [k for k, m in enumerate(owner) if m is not None]
+  failed = [k for k in attributed if owner[k] != k]
+  of = lambda k: rows[owner[k]]["best"]
+  print(
+    f"\n== real scans: {len(rows)}; {len(attributed)} attributed to {len({of(k) for k in attributed})} prints, {len(failed)} of them failed"
+    f" (each linked to the next match on its clock within {SCAN_WINDOW} s)"
+  )
+  print(
+    f"  failed, under {GENUINE_BAR} against the print and the person's next scan (a poor press): "
+    f"{sum(nxt[k] < GENUINE_BAR and max(presses[k]) < GENUINE_BAR for k in failed)}; matching the next scan but not the print "
+    f"(a part of the finger the registration lacks): {sum(nxt[k] >= GENUINE_BAR > max(presses[k]) for k in failed)}"
+  )
+  print(f"  one person's matched scans against each other: {stats(cached['same'])}")
+  reach = [k for k in attributed if max(presses[k]) >= GENUINE_BAR]
+  carried = Counter(partners(of(k), bar)[presses[k].index(max(presses[k]))] for k in reach)
+  everyone = Counter(c for pid in {of(k) for k in attributed} for c in partners(pid, bar))
+  print(
+    f"  scans reaching {GENUINE_BAR}, by the partners at {bar} of the press they score best on: {dict(sorted(carried.items()))};"
+    f" those prints' presses: {dict(sorted(everyone.items()))}"
+  )
+  rules = [
+    (f"{n} partner(s) at {b}", lambda pid, b=b, n=n: {i for i, c in enumerate(partners(pid, b)) if c < n})
+    for b in (35, bar, 45, 50, 60)
+    for n in (1, 2, 3)
+  ]
+  rules.append(
+    (
+      f"1 partner at {bar}, all connected at {bar}",
+      lambda pid: {i for i, c in enumerate(partners(pid, bar)) if not c} | connected(pid, bar),
+    )
+  )
+  rules += [(f"every pair at {low}", lambda pid, low=low: floor(pid, low)) for low in (10, 20, 30)]
+  total = sum(count(p["id"]) for p in gallery)
+  print(
+    f"  per rule: presses re-asked of {total}, prints touched, scans of {len(reach)} reaching {GENUINE_BAR} only on a re-asked press"
+  )
+  for name, rule in rules:
+    drops = {p["id"]: rule(p["id"]) for p in gallery}
+    lost = sum(max((s for j, s in enumerate(presses[k]) if j not in drops[of(k)]), default=0) < GENUINE_BAR for k in reach)
+    print(f"    {name:34} re-asked {sum(map(len, drops.values())):3}  prints {sum(map(bool, drops.values())):2}  lost {lost}")
 
 
 if __name__ == "__main__":
