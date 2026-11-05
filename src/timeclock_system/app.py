@@ -38,7 +38,8 @@ if TYPE_CHECKING:
   from timeclock_system.scanner import ScannerEvent
 
 _TICK_SECS = 0.5
-_GALLERY_TABLES: frozenset[ChangeTable] = frozenset({"employees", "fingerprints", "punches", "settings"})
+# punch_corrections: a correction can open or close an inactive employee's shift, which moves their prints in or out.
+_GALLERY_TABLES: frozenset[ChangeTable] = frozenset({"employees", "fingerprints", "punches", "punch_corrections", "settings"})
 
 
 def _send_alert(reason: str, details: str) -> None:
