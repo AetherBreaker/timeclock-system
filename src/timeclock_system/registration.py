@@ -136,9 +136,9 @@ class Session:
     """Keep `press`; once `PRESSES` are kept, replace the worst failing one, else judge the finger as a whole.
 
     Resemblance pairs a kept press with another person's press scoring at least the resemblance bar. Per other print:
-    when that print mostly fails its own checks, or every one of its presses involved is a failing (stray) one, it's
-    flagged (case B) so no careless existing print can fail the registrant's presses; else one kept press alone is
-    replaced (case A); else the finger resembles it (case C, the most resembling print first).
+    when it mostly fails its own checks, or only its failing (stray) presses are resembled, it's flagged (case B), so no
+    careless existing print can fail the registrant's presses. Else the pairs on its stray presses are ignored and the
+    rest decide: one kept press alone is replaced (case A), several mean the finger resembles it (case C).
     """
     s = self._settings
     self._kept.append(press)
@@ -164,15 +164,16 @@ class Session:
             for j, score in enumerate(p.vs_gallery.get(other.print_id, ()))
             if score >= s.registration_resemblance_bar
           ]
-          failing = self._failing[other.print_id]
           if not pairs:
             continue
-          if len(failing) * 2 > len(other.presses) or {j for _, j, _ in pairs} <= failing:
+          failing = self._failing[other.print_id]
+          healthy = [(i, score) for i, j, score in pairs if j not in failing]
+          if len(failing) * 2 > len(other.presses) or not healthy:
             flagged.append(other)
-          elif len(new := {i for i, _, _ in pairs}) == 1:
+          elif len(new := {i for i, _ in healthy}) == 1:
             failures[new.pop()] = Failure.DISAGREES  # case A: the message for a press whose own checks pass
           else:
-            similar.append((max(score for _, _, score in pairs), other))
+            similar.append((max(score for _, score in healthy), other))
       chosen = tuple(p.press_id for p in kept)
       if failures:
         worst = min(failures, key=lambda i: (list(Failure).index(failures[i]), max(agreement[i], default=0)))

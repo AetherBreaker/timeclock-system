@@ -145,6 +145,37 @@ def test_too_similar_keeps_flags():
   assert run(Session((x, careless), S), presses)[-1] == TooSimilar(other=x, chosen=(0, 1, 2, 3, 4), flagged=(careless,))
 
 
+def test_stray_pairs_left_out_of_c():
+  # One new press on their stray press, two on healthy ones: C from the healthy pairs, and the print isn't flagged too.
+  x = other(failing=frozenset({3}))
+  on_x = {0: (0, 0, 0, SIMILAR, 0), 1: (SIMILAR, 0, 0, 0, 0), 2: (0, SIMILAR, 0, 0, 0)}
+  presses = [press(i, vs_gallery={x.print_id: on_x[i]} if i in on_x else None) for i in range(PRESSES)]
+  assert run(Session((x,), S), presses)[-1] == TooSimilar(other=x, chosen=(0, 1, 2, 3, 4), flagged=())
+
+
+def test_stray_pairs_left_out_of_a():
+  # Two new presses on their stray press, one on a healthy one: that one alone resembles them (A); the stray pairs
+  # never count against the registrant, so once it's replaced the print is flagged (B).
+  x = other(failing=frozenset({3}))
+  on_stray, on_healthy = {x.print_id: (0, 0, 0, SIMILAR, 0)}, {x.print_id: (SIMILAR, 0, 0, 0, 0)}
+  session = Session((x,), S)
+  presses = [press(i, vs_gallery=on_stray if i in {0, 1} else on_healthy if i == ODD else None) for i in range(PRESSES)]
+  assert run(session, presses)[-1] == NextPress(Failure.DISAGREES)
+  assert [p.press_id for p in session.kept] == [0, 1, 3, 4]
+  assert session.add(press(5)) == Done(chosen=(0, 1, 3, 4, 5), flagged=(x,))
+
+
+def test_stray_resemblance_through_a_replacement_is_b():
+  # Review Focus 1: a press like their stray press, then, after another press is replaced, its replacement like it too.
+  x = other(failing=frozenset({3}))
+  on_stray = {x.print_id: (0, 0, 0, SIMILAR, 0)}
+  light = minutiae(S.registration_min_detail_points - 1)
+  session = Session((x,), S)
+  presses = [press(i, points=light if i == PRESSES - 1 else None, vs_gallery=on_stray if i == ODD else None) for i in range(PRESSES)]
+  assert run(session, presses)[-1] == NextPress(Failure.TOO_FEW)
+  assert session.add(press(5, vs_gallery=on_stray)) == Done(chosen=(0, 1, 2, 3, 5), flagged=(x,))
+
+
 def test_careless_other_print_is_b():
   x = other(failing=frozenset({0, 1, 2}))
   on_x = {x.print_id: (0, 0, SIMILAR, 0, SIMILAR)}
