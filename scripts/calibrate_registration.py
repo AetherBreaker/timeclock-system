@@ -10,6 +10,11 @@ a scratch directory and delete them afterwards.
 PRINTS: one print per line, whitespace-separated: id, employee_id, finger, base64 FP3 template (the clocks' gallery).
 --stray: the print whose single stray press resembles other people's prints. --old: replaced prints known to have drawn
 near-collisions; scored against the gallery but never part of it.
+
+The 2026-11-05 replay over 39 production prints and 2 replaced ones, at the defaults (detail points 20-120, centroid
+within 100 px, agreement 41 by 1 of the other 4, resemblance 40): every press of the 7 weak prints and the stray press is
+replaced, one old print goes to an admin and the other loses its colliding press; 15 of 155 healthy presses are asked
+again, no healthy print needs an admin, no healthy print is flagged.
 """
 
 # Standard library imports
@@ -188,10 +193,9 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         ]
         if not pairs:
           continue
-        new, theirs = {i for i, _ in pairs}, {j for _, j in pairs}
-        if (
-          len(fails[qid]) > WHOLE_PRINT_FAILS or theirs <= fails[qid] or (lone_their_press_is_b and len(theirs) == 1 and len(new) > 1)
-        ):
+        healthy = [(i, j) for i, j in pairs if j not in fails[qid]]  # as `Session.add`: pairs on their stray presses don't count
+        new, theirs = {i for i, _ in healthy}, {j for _, j in healthy}
+        if len(fails[qid]) > WHOLE_PRINT_FAILS or not healthy or (lone_their_press_is_b and len(theirs) == 1 and len(new) > 1):
           b_flags.add(qid)
         elif len(new) == 1:
           reask[pid] |= new
