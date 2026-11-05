@@ -25,16 +25,6 @@
   Fingerprints screen takes only a PIN; a finger does nothing there. It should run on the same system as the other PIN
   pads, which always accept a print in place of the PIN. The controller already routes a finger on that pad
   (`_on_pad_match`, the `FingerprintLogin` case), so start by finding out why it doesn't take effect.
-- [ ] **libfprint drops a cancel during reader start-up** (main-warehouse, 2026-11-05: 08:30 on v0.8.2, 10:17 on
-  v0.8.3). `fpi_image_device_deactivate` ignores a cancel while the device isn't active yet (`fpi-image-device.c:72`),
-  so activation finishes into `AWAIT_FINGER_ON` with the cancel spent, and the 60 s re-arm is a no-op (a GCancellable
-  fires once). The reader still works: the next press matches and ends the call. Until then the call keeps the old
-  gallery and ignores mode changes, and after 90 s the heartbeat stops, so the container goes unhealthy and
-  healthchecks.io gets a failure ping. Both times the cancel was a punch's gallery reorder, tapped 1.2–1.4 s after the
-  match (every other punch that day: 1.5 s or more); a reorder alone no longer restarts an identify. Left: a libfprint
-  patch that applies a cancel which arrived during activation once activation completes, for the other cancels (a
-  changed gallery, a mode change). It goes into timeclock-extras once that repo exists. Evidence: the gitignored
-  `build/incidents/2026-11-05-reader-hang/` and `-hang-2/`.
 
 ## Deferred features
 
