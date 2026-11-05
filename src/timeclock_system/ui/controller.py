@@ -816,6 +816,9 @@ class KioskController:
         self._screen = await self._open_menu(employee.id)
       elif await self._clock.has_fingerprint(employee.id):
         self._screen = PinScan(employee.id, touched_at=now)
+      elif not employee.active:
+        # Finishing a shift, never registering a first print (owner, 2026-11-05): a manager authorizes instead.
+        self._screen = OverridePrompt(OverrideRequest(employee.id, BypassReason.OVERRIDE_NO_FINGERPRINT, None), touched_at=now)
       else:
         self._screen = RegisterPrompt(employee.id, touched_at=now)
 

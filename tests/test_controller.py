@@ -315,6 +315,20 @@ async def test_pin_login_without_print_prompts_registration(kiosk: Kiosk) -> Non
   assert kiosk.ctl.screen == RegisterPrompt(BOB, touched_at=kiosk.t.mono)
 
 
+async def test_an_inactive_employee_without_a_print_is_sent_to_a_manager_not_registration(kiosk: Kiosk) -> None:
+  kiosk.store.insert_punch(
+    Punch(id=uuid4(), employee_id=BOB, kind=PunchKind.CLOCK_IN, at=START - timedelta(hours=1), instance_id="1"), origin="db"
+  )
+  bob = kiosk.clock.employee(BOB)
+  assert bob is not None
+  others = [e for e in cast("list[Employee]", kiosk.store.load("employees")) if e.id != BOB]
+  kiosk.store.replace_table("employees", [*others, bob.model_copy(update={"active": False})])
+  kiosk.clock.notify_changed({"employees"})
+  await kiosk.pin_login(BOB)
+  request = OverrideRequest(BOB, BypassReason.OVERRIDE_NO_FINGERPRINT, None)
+  assert kiosk.ctl.screen == OverridePrompt(request, touched_at=kiosk.t.mono)
+
+
 async def test_pin_login_with_print_requires_that_employees_finger(kiosk: Kiosk) -> None:
   await kiosk.pin_login(ANN)
   assert kiosk.ctl.screen == PinScan(ANN, touched_at=kiosk.t.mono)
