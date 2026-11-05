@@ -658,6 +658,30 @@ async def test_the_resembled_print_approves_no_review_of_it(kiosk: Kiosk) -> Non
   assert isinstance(screen, TooSimilarReview) and screen.approval == Approval(ADA, pin_only=False)
 
 
+async def test_no_print_the_finger_resembles_approves_its_review(kiosk: Kiosk) -> None:
+  # Not only the most resembling print: the finger may be identified as a further case-C candidate or a flagged print.
+  second, careless = uuid4(), uuid4()
+  adas = OtherPrint(second, ADA, Finger.LEFT_INDEX, (points(),) * PRESSES, mias_print().agreement)
+  adas_careless = OtherPrint(careless, ADA, Finger.RIGHT_INDEX, (points(),) * PRESSES, mias_print(careless=True).agreement)
+  like = {MIA_PRINT: (0, 0, SIMILAR + 1, 0, SIMILAR), second: (0, 0, SIMILAR, 0, SIMILAR), careless: (SIMILAR,) * PRESSES}
+  await bob_registers(kiosk)
+  await kiosk.ctl.on_scanner_event(RegisterGallery((mias_print(), adas, adas_careless)))
+  for i in range(PRESSES):
+    p = press(i)
+    await kiosk.ctl.on_scanner_event(Pressed(Press(i, p.minutiae, p.probe, p.vs_session, like if i < 2 else {})))  # noqa: PLR2004
+  blocked = kiosk.ctl.screen
+  assert isinstance(blocked, TooSimilarBlocked) and blocked.verdict.other.print_id == MIA_PRINT
+  await kiosk.ctl.ask_admin()
+  prompt = ApprovalPrompt(SimilarReview(blocked.registering, blocked.verdict), touched_at=kiosk.t.mono, message=text.NOT_AN_ADMIN)
+  for print_id in (second, careless):
+    await kiosk.ctl.on_scanner_event(Matched(print_id, ADA))
+    assert kiosk.ctl.screen == prompt
+  assert kiosk.reader.merges == []
+  await kiosk.ctl.on_scanner_event(Matched(uuid4(), ADA))  # an admin's print the finger doesn't resemble
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, TooSimilarReview) and screen.approval == Approval(ADA, pin_only=False)
+
+
 async def test_an_admins_pin_steps_in_too(kiosk: Kiosk) -> None:
   await bob_registers(kiosk)
   await give_presses(kiosk, others=(mias_print(),), like_mia=True)
@@ -789,7 +813,7 @@ async def test_an_allowed_c_alerts_its_flags_and_a_rejected_one_doesnt(kiosk: Ki
       p = press(i)
       await kiosk.ctl.on_scanner_event(Pressed(Press(i, p.minutiae, p.probe, p.vs_session, on_both if i < 2 else {})))  # noqa: PLR2004
     review = kiosk.ctl.screen
-    assert isinstance(review, TooSimilarReview) and review.verdict == TooSimilar(mias_print(), (0, 1, 2, 3, 4), (careless,))
+    assert isinstance(review, TooSimilarReview) and review.verdict == TooSimilar(mias_print(), (0, 1, 2, 3, 4), (careless,), ())
     await kiosk.ctl.on_scanner_event(Merged(b"ann-new"))
     await decide()
     assert len(alerts) == alerted

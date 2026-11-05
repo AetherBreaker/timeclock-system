@@ -861,9 +861,10 @@ class KioskController:
         self._screen = replace(s, message=text.NOT_A_MANAGER)
     elif isinstance(s, ApprovalPrompt):
       admin = self._clock.employee(employee_id)
-      # The registrant's own finger may be identified as the print it resembles: that print approves no review of it, so
-      # its owner uses another finger or their PIN.
-      resembled = isinstance(s.change, SimilarReview) and ev.print_id == s.change.verdict.other.print_id
+      # The registrant's own finger may be identified as any print it resembles: none approves a review of it, so its
+      # owner uses another finger or their PIN.
+      v = s.change.verdict if isinstance(s.change, SimilarReview) else None
+      resembled = v is not None and ev.print_id in {p.print_id for p in (v.other, *v.also_similar, *v.flagged)}
       if admin is not None and self._clock.fingerprint_approver(admin) and not resembled:
         self._screen = await self._approved(s.change, Approval(admin.id, pin_only=False))
       else:

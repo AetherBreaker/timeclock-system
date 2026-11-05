@@ -70,11 +70,16 @@ class NextPress:
 
 @dataclass(frozen=True)
 class TooSimilar:
-  """Case C: the finger as a whole resembles `other`; an admin allows or rejects it. `chosen`, `flagged` as `Done`."""
+  """Case C: the finger as a whole resembles `other`; an admin allows or rejects it. `chosen`, `flagged` as `Done`.
+
+  `also_similar`: the other prints it resembles as a whole, most resembling first. With `other` and `flagged`, every
+  print the registrant's finger may be identified as.
+  """
 
   other: OtherPrint
   chosen: tuple[int, ...]
   flagged: tuple[OtherPrint, ...]
+  also_similar: tuple[OtherPrint, ...]
 
 
 @dataclass(frozen=True)
@@ -184,8 +189,9 @@ class Session:
           self._kept = [p for p in kept if p.press_id != worst]
           verdict, outcome = NextPress(failures[worst]), f"replacing press {worst}: {failures[worst]}"
       elif similar:
-        other = max(similar, key=lambda pair: pair[0])[1]
-        verdict, outcome = TooSimilar(other, chosen, tuple(flagged)), f"too similar to print {other.print_id}"
+        similar.sort(key=lambda pair: pair[0], reverse=True)  # stable: equal scores keep the gallery's order
+        other, *rest = (o for _, o in similar)
+        verdict, outcome = TooSimilar(other, chosen, tuple(flagged), tuple(rest)), f"too similar to print {other.print_id}"
       else:
         verdict, outcome = Done(chosen, tuple(flagged)), "done"
       if flagged:

@@ -135,14 +135,31 @@ def test_whole_finger_resembles_is_c():
   x = other()
   on_x = {x.print_id: (0, 0, SIMILAR, 0, SIMILAR)}
   presses = [press(i, vs_gallery=on_x if i in {0, 1} else None) for i in range(PRESSES)]
-  assert run(Session((x,), S), presses)[-1] == TooSimilar(other=x, chosen=(0, 1, 2, 3, 4), flagged=())
+  assert run(Session((x,), S), presses)[-1] == TooSimilar(other=x, chosen=(0, 1, 2, 3, 4), flagged=(), also_similar=())
 
 
 def test_too_similar_keeps_flags():
   x, careless = other(), other(failing=frozenset({0, 1, 2}))
   on_both = {x.print_id: (SIMILAR, SIMILAR, 0, 0, 0), careless.print_id: (SIMILAR,) * PRESSES}
   presses = [press(i, vs_gallery=on_both if i in {0, 1} else None) for i in range(PRESSES)]
-  assert run(Session((x, careless), S), presses)[-1] == TooSimilar(other=x, chosen=(0, 1, 2, 3, 4), flagged=(careless,))
+  assert run(Session((x, careless), S), presses)[-1] == TooSimilar(
+    other=x, chosen=(0, 1, 2, 3, 4), flagged=(careless,), also_similar=()
+  )
+
+
+def test_too_similar_carries_every_resembled_print():
+  # The registrant's finger may later be identified as any print it resembles, so the verdict carries each.
+  x, y, z, careless = other(), other(), other(), other(failing=frozenset({0, 1, 2}))
+  on_all = {
+    x.print_id: (SIMILAR, SIMILAR, 0, 0, 0),
+    y.print_id: (SIMILAR + 2, 0, 0, 0, 0),
+    z.print_id: (0, SIMILAR + 1, 0, 0, 0),
+    careless.print_id: (SIMILAR,) * PRESSES,
+  }
+  presses = [press(i, vs_gallery=on_all if i in {0, 1} else None) for i in range(PRESSES)]
+  assert run(Session((x, y, z, careless), S), presses)[-1] == TooSimilar(
+    other=y, chosen=(0, 1, 2, 3, 4), flagged=(careless,), also_similar=(z, x)
+  )
 
 
 def test_stray_pairs_left_out_of_c():
@@ -150,7 +167,7 @@ def test_stray_pairs_left_out_of_c():
   x = other(failing=frozenset({3}))
   on_x = {0: (0, 0, 0, SIMILAR, 0), 1: (SIMILAR, 0, 0, 0, 0), 2: (0, SIMILAR, 0, 0, 0)}
   presses = [press(i, vs_gallery={x.print_id: on_x[i]} if i in on_x else None) for i in range(PRESSES)]
-  assert run(Session((x,), S), presses)[-1] == TooSimilar(other=x, chosen=(0, 1, 2, 3, 4), flagged=())
+  assert run(Session((x,), S), presses)[-1] == TooSimilar(other=x, chosen=(0, 1, 2, 3, 4), flagged=(), also_similar=())
 
 
 def test_stray_pairs_left_out_of_a():
