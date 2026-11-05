@@ -23,6 +23,9 @@ if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Callable, Sequence
 
+  # First party imports
+  from timeclock_system.registration import Minutiae
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -223,6 +226,22 @@ class Reader(Protocol):
 
     `on_stage(done, total, ok)` gets every press, `ok` False for one the reader couldn't use (not counted).
     """
+    ...
+
+  def capture(self, cancel: CancelToken, on_status: Callable[[FingerStatus], None]) -> bytes:
+    """Capture one press and return it as a serialized one-press template. Raises like `identify`."""
+    ...
+
+  def presses(self, template: bytes) -> tuple[Minutiae, ...]:
+    """Decode a template's presses into their detail points."""
+    ...
+
+  def score(self, press: bytes, index: int, other: bytes) -> tuple[int, ...]:
+    """Score `press`'s press `index` against each of `other`'s presses."""
+    ...
+
+  def merge(self, presses: Sequence[bytes]) -> bytes:
+    """Merge one-press templates into one template, in order."""
     ...
 
 
