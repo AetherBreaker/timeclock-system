@@ -330,18 +330,21 @@ class Scanner:
       token.cancel()
 
   def set_gallery(self, prints: Sequence[GalleryPrint], margin: int) -> None:
-    """Replace the gallery, restarting a running identify; an equal gallery changes nothing (R6).
+    """Replace the gallery, restarting a running identify when its prints change; an equal gallery changes nothing (R6).
 
     Only an identify is restarted: an enrollment doesn't use the gallery, and cancelling it would lose the user's stages.
-    A new `margin` applies from the next capture, without a restart.
+    A new `margin`, or a new order alone (every punch moves its employee first), applies from the next call without a
+    restart: libfprint drops a cancel that lands while it's still starting the reader, and the call then runs until
+    the next press.
     """
     gallery = tuple(prints)
     with self._lock:
       self._margin = margin
       if gallery == self._gallery:
         return
+      reordered = set(gallery) == set(self._gallery)
       self._gallery = gallery
-      token = self._token if self._mode is ReaderMode.READY else None
+      token = self._token if self._mode is ReaderMode.READY and not reordered else None
     if token is not None:
       token.cancel()
 
