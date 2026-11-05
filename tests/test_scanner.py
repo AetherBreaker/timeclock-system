@@ -474,6 +474,18 @@ def test_set_gallery_with_an_equal_gallery_does_not_restart(make: Callable[..., 
     h.reader.next_call("identify_end", timeout=0.3)
 
 
+def test_set_gallery_with_a_reordered_gallery_applies_from_the_next_identify(make: Callable[..., Harness]) -> None:
+  # Every punch moves its employee first. A restart for that alone can land while libfprint is still starting the reader,
+  # where the cancel is dropped and the call waits for the next press (main-warehouse, 2026-11-05).
+  h = make(FakeReader(), ScannerTimings(rearm_every=0.5))
+  h.reader.next_call("identify")
+  h.scanner.set_gallery(GALLERY[::-1], MARGIN)
+  with pytest.raises(queue.Empty):
+    h.reader.next_call("identify_end", timeout=0.3)
+  _, gallery = h.reader.next_call("identify")  # after the re-arm
+  assert gallery == tuple(GALLERY[::-1])
+
+
 def test_finger_status_is_posted_then_cleared_when_the_call_ends(make: Callable[..., Harness]) -> None:
   h = make(FakeReader([Status(present=True, waiting=False), HIT_A]))
   assert h.event() == FingerStatus(present=True, waiting=False)
