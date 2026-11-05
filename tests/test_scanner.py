@@ -99,14 +99,14 @@ class FakeReader:
     *,
     default: Outcome = BLOCK,
     captures: Sequence[Outcome] = (),
-    decoded: Mapping[bytes, tuple[Minutiae, ...]] | None = None,
+    decoded: Mapping[bytes, tuple[Minutiae, ...] | Exception] | None = None,
     scores: Mapping[tuple[bytes, int, bytes], tuple[int, ...]] | None = None,
     merge_error: Exception | None = None,
   ) -> None:
     """`script` drives identify and `captures` drives capture, each falling back to `default`.
 
-    `decoded`: what `presses` returns per template (else `ONE_PRESS`); `scores`: what `score` returns per (press, index,
-    other) (else a 0 per press of `other`); `merge` joins its presses with b"+" unless `merge_error` is set.
+    `decoded`: what `presses` returns (or raises) per template (else `ONE_PRESS`); `scores`: what `score` returns per
+    (press, index, other) (else a 0 per press of `other`); `merge` joins its presses with b"+" unless `merge_error` is set.
     """
     self.script: deque[Outcome] = deque(script)
     self.default = default
@@ -183,11 +183,15 @@ class FakeReader:
 
   def presses(self, template: bytes) -> tuple[Minutiae, ...]:
     self._record("presses", template)
-    return self.decoded.get(template, ONE_PRESS)
+    decoded = self.decoded.get(template, ONE_PRESS)
+    if isinstance(decoded, Exception):
+      raise decoded
+    return decoded
 
   def score(self, press: bytes, index: int, other: bytes) -> tuple[int, ...]:
     self._record("score", (press, index, other))
-    return self.scores.get((press, index, other), (0,) * len(self.decoded.get(other, ONE_PRESS)))
+    decoded = self.decoded.get(other, ONE_PRESS)
+    return self.scores.get((press, index, other), (0,) * (1 if isinstance(decoded, Exception) else len(decoded)))
 
   def merge(self, presses: Sequence[bytes]) -> bytes:
     self._record("merge", tuple(presses))
@@ -606,6 +610,18 @@ def test_register_idle_timeout(make: Callable[..., Harness]) -> None:
 def test_register_reader_error_posts_enroll_failed(make: Callable[..., Harness], error: Exception) -> None:
   h = make(FakeReader(captures=[error]), FAST, registrant=1)
   gallery_of(h.event())
+  assert h.event() == EnrollFailed("error")
+  h.reader.next_call("identify")
+  assert h.scanner.mode is ReaderMode.READY
+
+
+@pytest.mark.parametrize("undecodable", [b"tb", b"p0"], ids=["gallery print", "press"])
+def test_an_undecodable_template_ends_register(make: Callable[..., Harness], undecodable: bytes) -> None:
+  # The reader raises ReaderFailure for a template that doesn't decode: the registration fails, the thread goes on.
+  reader = FakeReader(captures=[b"p0"], decoded={undecodable: ReaderFailure("undecodable template: ValueError")})
+  h = make(reader, FAST, registrant=1)
+  if undecodable == b"p0":
+    gallery_of(h.event())
   assert h.event() == EnrollFailed("error")
   h.reader.next_call("identify")
   assert h.scanner.mode is ReaderMode.READY
