@@ -627,6 +627,24 @@ def test_an_undecodable_template_ends_register(make: Callable[..., Harness], und
   assert h.scanner.mode is ReaderMode.READY
 
 
+@pytest.mark.parametrize(
+  ("decoded", "scores"),
+  [({b"p0": ()}, {}), ({b"tb": TB}, {**B_OWN, (b"tb", 0, b"tb"): (99,)})],
+  ids=["press decoding to no press", "gallery print scoring short"],
+)
+def test_a_short_decode_ends_register(
+  make: Callable[..., Harness], decoded: dict[bytes, tuple[Minutiae, ...]], scores: dict[tuple[bytes, int, bytes], tuple[int, ...]]
+) -> None:
+  # Indexing either would raise IndexError, which escaping would end the scanner thread.
+  h = make(FakeReader(captures=[b"p0"], decoded=decoded, scores=scores), FAST, registrant=1)
+  if b"p0" in decoded:
+    gallery_of(h.event())
+  assert h.event() == EnrollFailed("error")
+  h.reader.next_call("identify")
+  assert h.scanner.mode is ReaderMode.READY
+  assert not [score for name, score in h.reader.history if name == "score" and score[0] == b"p0"]  # nothing scored it
+
+
 def test_set_mode_ends_register(make: Callable[..., Harness]) -> None:
   # The user's Cancel is not a failed registration (R16); coming back starts a new session.
   h = make(FakeReader(captures=[b"p0", Status(present=True, waiting=False), BLOCK, b"p1"]), FAST, registrant=1)
