@@ -13,7 +13,7 @@
     "psycopg[binary]>=3.3.6",
     "pycairo>=1.29.2; sys_platform == 'linux'",                            # direct so its SFTPyPI source applies: uv ignores sources of indirect deps
     "timeclock-libfprint>=1.94.100.post1; sys_platform == 'linux'",        # patched libfprint, prebuilt by timeclock-extras
-    "timeclock-schema>=0.9.6",
+    "timeclock-schema>=0.9.8",
     "uvicorn>=0.54,<0.55",                                                 # pinned: app.py replaces Server.capture_signals (R21)
     "uvloop>=0.23; sys_platform == 'linux'",
   ]
