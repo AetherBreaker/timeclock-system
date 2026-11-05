@@ -181,6 +181,14 @@ def test_kept_follows_replacements():
   assert [p.press_id for p in session.kept] == [0, 2, 3, 4]
 
 
+def test_reprs_hide_biometrics():
+  # R15: detail points and probes are biometric, like templates.
+  p, x = press(0), other()
+  assert "probe-secret" not in repr(p)
+  assert str(p.minutiae[0]) not in repr(p)
+  assert str(x.presses[0][0]) not in repr(x)
+
+
 def test_logs_each_press(caplog: pytest.LogCaptureFixture):
   with caplog.at_level(logging.INFO, logger="timeclock_system.registration"):
     run(Session((), S), [press(i) for i in range(PRESSES)])

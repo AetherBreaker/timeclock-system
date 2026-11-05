@@ -44,7 +44,7 @@ class Press:
   """One captured press, scored on the scanner thread."""
 
   press_id: int  # the session's capture count, from 0
-  minutiae: Minutiae
+  minutiae: Minutiae = field(repr=False)  # R15: biometric, like the probe
   probe: bytes = field(repr=False)  # R15: biometric; the single-press print a template is merged from
   vs_session: Mapping[int, int]  # agreement with each earlier press by press_id: the higher of both directions' scores
   vs_gallery: Mapping[UUID, tuple[int, ...]]  # score against each press of each other person's print, by print id
@@ -57,7 +57,7 @@ class OtherPrint:
   print_id: UUID
   employee_id: int
   finger: Finger
-  presses: tuple[Minutiae, ...]
+  presses: tuple[Minutiae, ...] = field(repr=False)  # R15: biometric
   agreement: tuple[tuple[int, ...], ...]  # its presses against each other, as `Press.vs_session`; diagonal -1
 
 
