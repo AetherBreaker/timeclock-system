@@ -74,6 +74,7 @@ PRESS_ADVICE: Final[Mapping[Failure, str]] = MappingProxyType(
 TOO_SIMILAR_REVIEW: Final = "This finger is too similar to {name}'s {finger} to be reliable."
 ALLOW: Final = "Allow it"
 REJECT: Final = "Reject"
+TOO_SIMILAR_REJECTED: Final = "This finger wasn't saved. Use another finger."
 TOO_SIMILAR_BLOCKED: Final = "This finger can't be used without an admin."  # names no one: the employee is alone
 TRY_ANOTHER_FINGER: Final = "Try another finger"
 ADMIN_CHECK: Final = "Have an admin check it"

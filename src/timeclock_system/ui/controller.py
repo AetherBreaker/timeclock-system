@@ -1051,11 +1051,11 @@ class KioskController:
           self._screen = await self._saved(s.registering, s.template, s.approval, s.verdict.flagged)
 
   async def reject(self) -> None:
-    """The admin rejects a too-similar finger: nothing is saved, as when a registration fails."""
+    """The admin rejects a too-similar finger: nothing is saved, as when a registration fails, and another finger is asked for."""
     async with self._transition():
       s = self._screen
       if isinstance(s, TooSimilarReview):
-        self._screen = await self._not_saved(s.registering, text.REGISTRATION_FAILED)
+        self._screen = await self._not_saved(s.registering, text.TOO_SIMILAR_REJECTED)
 
   async def try_another_finger(self) -> None:
     """The employee alone, blocked on a too-similar finger, picks another."""
