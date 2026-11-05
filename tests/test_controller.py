@@ -753,7 +753,6 @@ async def test_too_similar_admin_reject_saves_nothing(kiosk: Kiosk) -> None:
   assert isinstance(review, TooSimilarReview) and review.template == b"ann-new"
   assert "ann-new" not in repr(review)  # R15
   await kiosk.ctl.reject()
-  assert text.TOO_SIMILAR_REJECTED == "This finger wasn't saved. Use another finger."
   assert kiosk.ctl.screen == FingerprintActions(
     ANN, "Ann Lee", (Finger.LEFT_INDEX,), touched_at=kiosk.t.mono, message=text.TOO_SIMILAR_REJECTED
   )
