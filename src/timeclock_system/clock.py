@@ -310,8 +310,8 @@ class Clock:
   async def verify_pin(self, username: str, pin: SecretStr) -> Employee | None:
     """Return the employee with this PIN username if the password matches its bcrypt hash.
 
-    An inactive employee passes only while their shift is open, so they can finish it (spec 2026-11-05 §10); checked
-    before the hash, so a shut-out employee costs no bcrypt.
+    An inactive employee passes only while their shift is open (see `menu_info`); checked before the hash, so a shut-out
+    employee costs no bcrypt.
     """
     e = next((e for e in self._employees.values() if e.pin_username == username), None)
     if e is None:
@@ -377,7 +377,7 @@ class Clock:
     # can still clock out by hand, which makes the automatic one the ignored repeat.
     timeline = build_timeline(punches, corrections, as_of=now)
     if not e.active and timeline.open_shift is None:
-      raise PunchRefused(_UNKNOWN_EMPLOYEE)  # an inactive employee may only finish an open shift (spec 2026-11-05 §10)
+      raise PunchRefused(_UNKNOWN_EMPLOYEE)  # inactive: may finish an open shift, never clock in (owner, 2026-11-05)
     # "Clocked in since" names the clock-in, not a lunch that followed it; a break or lunch shows its own start.
     open_shift = timeline.open_shift
     if open_shift is None:
@@ -417,7 +417,7 @@ class Clock:
       punches, corrections = await asyncio.to_thread(lambda: (self._store.punches(employee_id), self._store.corrections(employee_id)))
       now = self._now()
       timeline = build_timeline(punches, corrections, as_of=now)  # as in menu_info
-      # An inactive employee may only finish an open shift, and only the off state offers a clock-in (spec 2026-11-05 §10).
+      # Inactive (see menu_info): only the off state offers a clock-in, so this shuts them out once clocked out.
       if not e.active and kind is PunchKind.CLOCK_IN:
         raise PunchRefused(_UNKNOWN_EMPLOYEE)
       # The menu only offers valid punches (R26.3); re-checked here since state may have changed since it was drawn.
@@ -608,7 +608,7 @@ class Clock:
   async def gallery(self) -> list[GalleryPrint]:
     """Return the prints of active employees and of inactive ones on an open shift, latest punch here first (R36.4).
 
-    An inactive employee's prints stay until their shift ends, so they can finish it (spec 2026-11-05 §10).
+    An inactive employee's prints stay until their shift ends (see `menu_info`).
     """
     fingerprints, punches, corrections = await asyncio.to_thread(
       lambda: (self._store.fingerprints(), self._store.punches(), self._store.corrections())

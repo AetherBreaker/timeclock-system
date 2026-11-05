@@ -779,6 +779,31 @@ async def test_admin_reconfirm_by_pin_is_recorded_and_must_be_their_own(kiosk: K
   assert [b.reason for b in kiosk.store.unsynced_bypasses()] == [BypassReason.ADMIN_PIN_LOGIN]
 
 
+@pytest.mark.parametrize("by", ["finger", "pin"])
+async def test_an_admin_switched_off_mid_shift_gets_their_punch_menu_not_the_admin_menu(kiosk: Kiosk, by: str) -> None:
+  # Switched off after their menu was drawn: the reconfirm leads back to the punch menu, without the Admin button.
+  kiosk.store.insert_punch(
+    Punch(id=uuid4(), employee_id=ADA, kind=PunchKind.CLOCK_IN, at=START - timedelta(hours=1), instance_id="1"), origin="db"
+  )
+  ada = kiosk.clock.employee(ADA)
+  assert ada is not None
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  await kiosk.ctl.admin()
+  others = [e for e in cast("list[Employee]", kiosk.store.load("employees")) if e.id != ADA]
+  kiosk.store.replace_table("employees", [*others, ada.model_copy(update={"active": False})])
+  kiosk.clock.notify_changed({"employees"})
+  if by == "finger":
+    await kiosk.ctl.on_scanner_event(matched(ADA))
+  else:
+    await kiosk.ctl.use_pin()
+    await kiosk.type_and_enter(PINS[ADA])
+    await kiosk.type_and_enter("1234")
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu)
+  assert (screen.info.employee_id, screen.info.is_admin) == (ADA, False)
+  assert kiosk.store.unsynced_bypasses() == []  # no admin PIN login was recorded
+
+
 async def test_an_admins_rescan_takes_their_pin(kiosk: Kiosk) -> None:
   await kiosk.pin_login(ADA)
   kiosk.t.advance(31)
