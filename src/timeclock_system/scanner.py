@@ -589,14 +589,8 @@ class Scanner:
       idle.start()
       probe = self._blocking(self._reader.capture, token, self._on_status)
       idle.cancel()
-      score = self._reader.score
-      vs_session = {
-        i: max(self._blocking(score, probe, 0, e)[0], self._blocking(score, e, 0, probe)[0]) for i, e in enumerate(self._probes)
-      }
-      vs_gallery = {p.print_id: self._blocking(score, probe, 0, p.template) for p in self._others}
-      press = Press(len(self._probes), self._blocking(self._reader.presses, probe)[0], probe, vs_session, vs_gallery)
+      outcome = Pressed(self._press(probe))
       self._probes.append(probe)
-      outcome = Pressed(press)
     except ScanCancelled:
       outcome = EnrollFailed("timeout") if timed_out.is_set() else None  # else a merge, set_mode or stop
     except RetryScan:
@@ -620,6 +614,18 @@ class Scanner:
     # as READY's next match).
     self._wake.wait(self._timings.retry_pause if isinstance(outcome, PressRetry) else self._timings.finger_off_pause)
 
+  def _press(self, probe: bytes) -> Press:
+    # Split out of _register_once for C901: the captured press, scored against the session's earlier presses and others.
+    # A ReaderFailure, not the IndexError that would end the thread; decoded before scoring asks for its press 0.
+    if not (minutiae := self._blocking(self._reader.presses, probe)):
+      raise ReaderFailure("the press decoded to no press")
+    score = self._reader.score
+    vs_session = {
+      i: max(self._blocking(score, probe, 0, e)[0], self._blocking(score, e, 0, probe)[0]) for i, e in enumerate(self._probes)
+    }
+    vs_gallery = {p.print_id: self._blocking(score, probe, 0, p.template) for p in self._others}
+    return Press(len(self._probes), minutiae[0], probe, vs_session, vs_gallery)
+
   def _start_session(self, mode_changes: int, gallery: tuple[GalleryPrint, ...], registrant: int | None) -> None:
     # Split out of _register_once for C901: score every other person's print against itself, then post RegisterGallery.
     others = tuple(p for p in gallery if p.employee_id != registrant)
@@ -629,6 +635,8 @@ class Scanner:
         presses = self._blocking(self._reader.presses, p.template)
         n = range(len(presses))
         own = [self._blocking(self._reader.score, p.template, i, p.template) for i in n]
+        if any(len(row) < len(presses) for row in own):
+          raise ReaderFailure("a print's press scores are fewer than its presses")  # not the IndexError below, as in _press
         cached = presses, tuple(tuple(-1 if i == j else max(own[i][j], own[j][i]) for j in n) for i in n)
       decoded[p] = cached
     self._decoded, self._session, self._others, self._probes = decoded, mode_changes, others, []
