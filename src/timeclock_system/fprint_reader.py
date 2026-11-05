@@ -168,23 +168,6 @@ class FprintReader:
       self._device.disconnect(handler)
     return capture_of(match, probe)
 
-  def enroll(
-    self, cancel: Gio.Cancellable, on_stage: Callable[[int, int, bool], None], on_status: Callable[[FingerStatus], None]
-  ) -> bytes:
-    """Run every enrollment stage; return the serialized template. A press with an error (a retry) isn't counted."""
-
-    def progress(device: FPrint.Device, completed_stages: int, _print: object, _user_data: object, error: object) -> None:
-      on_stage(completed_stages, device.get_nr_enroll_stages(), error is None)
-
-    handler = self._watch_finger(on_status)
-    try:
-      enrolled = self._device.enroll_sync(FPrint.Print.new(self._device), cancel, progress, None)
-    except GLib.Error as e:
-      raise _reader_error(e) from e
-    finally:
-      self._device.disconnect(handler)
-    return bytes(enrolled.serialize())
-
   def capture(self, cancel: Gio.Cancellable, on_status: Callable[[FingerStatus], None]) -> bytes:
     """Capture one press: an empty-gallery identify's probe, serialized (FP3, one press). Raises like `identify`."""
     handler = self._watch_finger(on_status)
@@ -225,7 +208,7 @@ def _probe_identify(reader: FprintReader) -> None:
   # Split out of main for PLR0915.
   reader.open()
   try:
-    print("enroll: press the same finger 5 times")
+    print("register: press the same finger 5 times")
     captured = []
     while len(captured) < 5:  # noqa: PLR2004
       try:
@@ -289,7 +272,7 @@ def main(argv: Sequence[str] | None = None) -> None:
   """Run one hardware check (Task 12); each prints plain lines for the PR."""
   parser = argparse.ArgumentParser(prog="python -m timeclock_system.fprint_reader")
   commands = parser.add_subparsers(dest="command", required=True)
-  commands.add_parser("probe-identify", help="enroll one finger, then identify it 3 times")
+  commands.add_parser("probe-identify", help="register one finger from 5 presses, then identify it 3 times")
   soak = commands.add_parser("soak", help="keep identify waiting with the 60 s re-arm; count TOO_HOT")
   soak.add_argument("minutes", type=float)
   hold = commands.add_parser("closed-hold", help="open, close, then hold the Context (the autosuspend check)")
