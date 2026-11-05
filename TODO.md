@@ -31,16 +31,16 @@
   release is cut, attach the build to the release, and have the Dockerfile download and checksum-check it. The same
   goes for anything else we compile with our own patch. Open: whether PyGObject and pycairo (compiled from source at
   deploy, unpatched, versions locked by uv.lock) go the same way.
-- [ ] **A cancel during reader start-up hangs the scanner** (main-warehouse, 2026-11-05 08:31–08:51, v0.8.2). The
-  identify started right after an 08:30:24 match was cancelled while libfprint was still activating the reader:
-  `fpi_image_device_deactivate` ignores a cancel while the device isn't active yet, so activation finished into
-  `AWAIT_FINGER_ON` and `identify_sync` never returned. Both cancellables read cancelled, so the 60 s re-arm was a no-op
-  (a GCancellable fires once). The screen showed Ready throughout; only the stale heartbeat (healthchecks.io) noticed,
-  and nothing restarts an unhealthy container. A restart cleared it. Evidence (gdb dump of libfprint's device state,
-  thread stacks, logs, screenshot) is in the gitignored `build/incidents/2026-11-05-reader-hang/`. Open: what sent the
-  cancel during activation (business hours keep the mode READY, and `set_gallery` skips an equal gallery), and the fix
-  (e.g. the libfprint patch applies a cancel that arrived during activation once it completes, or the app reopens the
-  reader when a call outlives the re-arm).
+- [ ] **libfprint drops a cancel during reader start-up** (main-warehouse, 2026-11-05: 08:30 on v0.8.2, 10:17 on
+  v0.8.3). `fpi_image_device_deactivate` ignores a cancel while the device isn't active yet (`fpi-image-device.c:72`),
+  so activation finishes into `AWAIT_FINGER_ON` with the cancel spent, and the 60 s re-arm is a no-op (a GCancellable
+  fires once). The reader still works: the next press matches and ends the call. Until then the call keeps the old
+  gallery and ignores mode changes, and after 90 s the heartbeat stops, so the container goes unhealthy and
+  healthchecks.io gets a failure ping. Both times the cancel was a punch's gallery reorder, tapped 1.2–1.4 s after the
+  match (every other punch that day: 1.5 s or more); a reorder alone no longer restarts an identify. Left: a libfprint
+  patch that applies a cancel which arrived during activation once activation completes, for the other cancels (a
+  changed gallery, a mode change). It goes into timeclock-extras once that repo exists. Evidence: the gitignored
+  `build/incidents/2026-11-05-reader-hang/` and `-hang-2/`.
 
 ## Deferred features
 
