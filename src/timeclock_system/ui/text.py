@@ -10,6 +10,9 @@ from typing import TYPE_CHECKING, Final
 from timeclock_schema.enums import Finger, PunchKind
 from timeclock_schema.shifts import EmployeeState
 
+# First party imports
+from timeclock_system.registration import Failure
+
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Mapping
@@ -57,6 +60,25 @@ REGISTER: Final = "Register"
 REGISTERING: Final = "Press your {finger} on the reader ({done} of {total})"  # the finger label, lower-cased
 REGISTRATION_TIMED_OUT: Final = "Registration timed out"
 REGISTRATION_FAILED: Final = "Registration failed, try again"
+REGISTRATION_GAVE_UP: Final = "Couldn't get a clean registration. Try again or use another finger."
+# Why a registration press was dropped, as the advice for its replacement.
+PRESS_ADVICE: Final[Mapping[Failure, str]] = MappingProxyType(
+  {
+    Failure.TOO_FEW: "Press your finger flat on the reader",
+    Failure.TOO_MANY: "Clean and dry your finger, then press again",
+    Failure.OFF_CENTRE: "Keep your finger centred on the reader",
+    Failure.DISAGREES: "Press the same finger the same way each time",
+  }
+)
+# Too similar to another person's print (case C). {finger}: the label, lower-cased, here and in REREGISTER_ADVICE.
+TOO_SIMILAR_REVIEW: Final = "This finger is too similar to {name}'s {finger} to be reliable."
+ALLOW: Final = "Allow it"
+REJECT: Final = "Reject"
+TOO_SIMILAR_BLOCKED: Final = "This finger can't be used without an admin."  # names no one: the employee is alone
+TRY_ANOTHER_FINGER: Final = "Try another finger"
+ADMIN_CHECK: Final = "Have an admin check it"
+APPROVE_SIMILAR: Final = "Admin: check this finger"
+REREGISTER_ADVICE: Final = "{name}'s {finger} print looks carelessly registered: have them re-register it."  # case B
 RESCAN: Final = "Scan your finger to confirm"
 MANAGER_PROMPT: Final = "Manager: scan your finger or enter your PIN"
 NOT_A_MANAGER: Final = "A manager must authorize this"

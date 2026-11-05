@@ -14,6 +14,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, Protocol
 
 # Third party imports
+from aeth_ext.errors import alert
 from pydantic import SecretStr
 from timeclock_schema.alerts import CONFIRMATION_NOTICE
 from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, ScanOutcome, ScanResult
@@ -32,22 +33,25 @@ from timeclock_system.clock import (
   normalize_phone,
 )
 from timeclock_system.hours import is_open
+from timeclock_system.registration import Done, GaveUp, NextPress, Session, TooSimilar
 from timeclock_system.scanner import (
-  Enrolled,
   EnrollFailed,
-  EnrollStage,
   FingerStatus,
   Matched,
+  Merged,
   NoMatch,
+  Pressed,
+  PressRetry,
   ReaderMode,
   ReaderPaused,
+  RegisterGallery,
   Retry,
 )
 from timeclock_system.ui import text
 
 if TYPE_CHECKING:
   # Standard library imports
-  from collections.abc import AsyncGenerator, Callable
+  from collections.abc import AsyncGenerator, Callable, Sequence
   from pathlib import Path
   from uuid import UUID
   from zoneinfo import ZoneInfo
@@ -58,12 +62,14 @@ if TYPE_CHECKING:
 
   # First party imports
   from timeclock_system.clock import Clock
+  from timeclock_system.registration import OtherPrint, Verdict
   from timeclock_system.scanner import ScannerEvent
 
 RESCAN_AFTER_SECS = 30  # R45.2
 IDLE_CLOSE_SECS = 120  # R45.4, for every non-idle screen
 CONFIRM_SECS = 5
 MESSAGE_SECS = 3  # also how long a success or unrecognized reader message lingers
+ADVICE_SECS = 15  # "Fingerprint saved" with a re-register advice under it: long enough to read the advice
 FAILED_MIN_SECS = 1.0  # the failed read's red never shows shorter
 IDLE_ERROR_SECS = 15  # a reader error message on the idle screen
 WAKE_SECS = 30  # R40.2
@@ -105,10 +111,11 @@ class ReaderMessage:
 
 @dataclass(frozen=True)
 class Idle:
-  """The idle screen, optionally with a message that clears at `until`."""
+  """The idle screen, optionally with a message that clears at `until`, and a re-register advice under it."""
 
   message: str | None = None
   until: float | None = None
+  advice: str | None = None
 
 
 @dataclass(frozen=True)
@@ -191,7 +198,7 @@ class PinEntry:
   field: Literal["username", "password"]
   username: str  # typed first; not secret
   pin: SecretStr  # typed second; a SecretStr until bcrypt checks it, so no repr, log or alert shows it
-  purpose: OverrideRequest | PinRecheck | FingerprintLogin | FingerChange | None
+  purpose: OverrideRequest | PinRecheck | FingerprintLogin | FingerChange | SimilarReview | None
   touched_at: float
   error: str | None = None
 
@@ -215,16 +222,58 @@ class RegisterPrompt:
 
 @dataclass(frozen=True)
 class Registering:
-  """Enrollment in progress; `added` in the add-employee flow's optional step, `change` for an approved gear-menu change."""
+  """A registration in progress: `kept` of `PRESSES` presses kept so far, and `advice` for the press last dropped.
+
+  `added` in the add-employee flow's optional step, `change` for an approved gear-menu change; `admin_id` is the admin
+  present in either (None: the employee registers alone). `session` judges the presses from `RegisterGallery` on;
+  `verdict` holds the passing set while its merge runs.
+  """
 
   employee_id: int
-  done: int
-  total: int
   touched_at: float
   finger: Finger
   added: Employee | None = None
   change: FingerChange | None = None
   approval: Approval | None = None
+  admin_id: int | None = None
+  session: Session | None = None
+  kept: int = 0
+  advice: str | None = None
+  verdict: Done | None = None
+
+
+@dataclass(frozen=True)
+class TooSimilarReview:
+  """Case C with an admin present: the finger resembles `name`'s print, and the admin allows it or rejects it.
+
+  The kept presses merge while the admin decides: `template` arrives with `Merged`, and an Allow before then (`allowed`)
+  saves on its arrival, with `approval` recorded.
+  """
+
+  registering: Registering
+  verdict: TooSimilar
+  name: str  # the resembled print's owner
+  approval: Approval
+  touched_at: float
+  template: bytes | None = field(default=None, repr=False)  # R15
+  allowed: bool = False
+
+
+@dataclass(frozen=True)
+class TooSimilarBlocked:
+  """Case C with the employee alone: another finger, or an admin's check. Never names whose print it resembles."""
+
+  registering: Registering
+  verdict: TooSimilar
+  touched_at: float
+
+
+@dataclass(frozen=True)
+class SimilarReview:
+  """An admin's check of a too-similar finger, asked for by the employee registering alone; an approval's purpose."""
+
+  registering: Registering
+  verdict: TooSimilar
 
 
 @dataclass(frozen=True)
@@ -296,6 +345,7 @@ class NewPin:
 class NewFingerprint:
   """The new employee is saved; registering their print is optional and needs no override (§6.4 step 3)."""
 
+  admin_id: int  # the admin adding them, who is present for the registration
   employee: Employee
   touched_at: float
   message: str | None = None
@@ -303,11 +353,12 @@ class NewFingerprint:
 
 @dataclass(frozen=True)
 class EmployeeAdded:
-  """The add-employee flow's last screen: the name and number, until OK (§6.4 step 4)."""
+  """The add-employee flow's last screen: the name, the number and any re-register advice, until OK (§6.4 step 4)."""
 
   name: str
   number: int
   touched_at: float
+  advice: str | None = None
 
 
 @dataclass(frozen=True)
@@ -330,7 +381,7 @@ class FingerprintActions:
 
 @dataclass(frozen=True)
 class FingerPick:
-  """Choosing the finger: for a Fingerprints action, or (`action` None) a first registration, `added` as in Registering.
+  """Choosing the finger: for a Fingerprints action, or (`action` None) a first registration; `added`, `admin_id` as in Registering.
 
   `approval` is the admin's for an add, which is approved before this screen; the pick then registers at once.
   """
@@ -341,13 +392,14 @@ class FingerPick:
   touched_at: float
   added: Employee | None = None
   approval: Approval | None = None
+  admin_id: int | None = None
 
 
 @dataclass(frozen=True)
 class ApprovalPrompt:
-  """Waiting for an admin's finger or PIN to approve `change`, immediately before it runs."""
+  """Waiting for an admin's finger or PIN to approve `change` (or a too-similar finger's review), immediately before it runs."""
 
-  change: FingerChange
+  change: FingerChange | SimilarReview
   touched_at: float
   message: str | None = None
 
@@ -361,6 +413,8 @@ type Screen = (
   | PinScan
   | RegisterPrompt
   | Registering
+  | TooSimilarReview
+  | TooSimilarBlocked
   | OverridePrompt
   | AdminReconfirm
   | AdminMenu
@@ -384,7 +438,13 @@ class ReaderPort(Protocol):
   """The part of the scanner the controller drives."""
 
   def set_mode(self, mode: ReaderMode) -> None:
-    """Switch the reader's mode."""
+    """Switch the reader's mode; never to REGISTER, which `register` enters."""
+
+  def register(self, employee_id: int) -> None:
+    """Enter REGISTER for `employee_id`; a new session unless already registering them."""
+
+  def merge(self, presses: Sequence[bytes]) -> None:
+    """Queue a merge of one-press templates; posts `Merged`, or `EnrollFailed` if it fails."""
 
 
 class KioskController:
@@ -482,15 +542,17 @@ class KioskController:
     self._listeners.append(cb)
 
   def _sync_reader(self) -> None:
-    now = self._mono()
-    if isinstance(self._screen, Registering):
-      # Not while a finger from before is down: it's the approving admin's, and enrolling would read it as the first
-      # press. Once enrolling, the presses are the registration's own.
-      mode = ReaderMode.ENROLL if self._mode is ReaderMode.ENROLL or not self._present else ReaderMode.READY
+    # `_mode` is what was last sent. After a press times out or the reader fails, the scanner returns to READY by itself,
+    # but that always ends the registration, so the next screen's READY (a no-op there) brings the two back in step.
+    now, s = self._mono(), self._screen
+    if isinstance(s, Registering):
+      # Not while a finger from before is down: it's the approving admin's, and registering would read it as the first
+      # press. Once registering, the presses are the registration's own.
+      mode = ReaderMode.REGISTER if self._mode is ReaderMode.REGISTER or not self._present else ReaderMode.READY
     elif (
       is_open(self._clock.business_hours(), self._wall(), self._tz)
       or now < self._wake_until
-      or self._screen != Idle()
+      or s != Idle()
       or self._present  # a scan in progress at closing finishes first (R40.2)
     ):
       mode = ReaderMode.READY
@@ -498,7 +560,10 @@ class KioskController:
       mode = ReaderMode.CLOSED
     if mode is not self._mode:
       self._mode = mode
-      self._reader.set_mode(mode)
+      if isinstance(s, Registering) and mode is ReaderMode.REGISTER:
+        self._reader.register(s.employee_id)
+      else:
+        self._reader.set_mode(mode)
 
   @contextlib.asynccontextmanager
   async def _transition(self) -> AsyncGenerator[None]:
@@ -569,14 +634,19 @@ class KioskController:
     on_file = await self._clock.prints_by_finger(employee_id)
     return FingerprintActions(employee_id, name, tuple(f for f in Finger if f in on_file), self._mono(), message)
 
-  async def _approved(self, change: FingerChange, approval: Approval) -> Screen:
-    """Run an approved change: a removal at once, a registration through its touches; an add first asks the finger."""
+  async def _approved(self, change: FingerChange | SimilarReview, approval: Approval) -> Screen:
+    """Run an approved change: a removal at once, a registration through its touches; an add first asks the finger.
+
+    A too-similar finger's review goes to the approving admin.
+    """
     now = self._mono()
+    if isinstance(change, SimilarReview):
+      return self._review(change.registering, change.verdict, approval)
     if change.finger is None:
       on_file = await self._clock.prints_by_finger(change.employee_id)
       return FingerPick(change.employee_id, "add", tuple(f for f in Finger if f not in on_file), now, approval=approval)
     if change.action != "remove":
-      return Registering(change.employee_id, 0, 5, now, change.finger, change=change, approval=approval)
+      return Registering(change.employee_id, now, change.finger, change=change, approval=approval, admin_id=approval.admin_id)
     if change.fingerprint_id is not None:
       await self._clock.remove_fingerprint(change.employee_id, change.fingerprint_id, change.finger, approval)
     return Idle(text.FINGERPRINT_REMOVED, until=now + MESSAGE_SECS)
@@ -618,8 +688,8 @@ class KioskController:
             await self._on_match(s, employee_id)  # no scan recorded: no open scan to open, move or settle
           else:
             await self._on_scanned_match(s, employee_id, scan_id)
-        case EnrollStage() | Enrolled() | EnrollFailed() if isinstance(s, Registering):
-          message = await self._on_enroll(s, ev)
+        case RegisterGallery() | Pressed() | PressRetry() | Merged() | EnrollFailed() if isinstance(s, Registering | TooSimilarReview):
+          message = await self._on_register(s, ev)
         case _:
           pass  # every (screen, event) pair the table doesn't list is ignored (R7f)
       if message is not None and isinstance(s, _FINGER_SCREENS):
@@ -655,34 +725,89 @@ class KioskController:
         self._screen = replace(s, touched_at=self._mono())
     self._present, self._waiting = ev.present, ev.waiting
 
-  async def _on_enroll(self, s: Registering, ev: EnrollStage | Enrolled | EnrollFailed) -> ReaderMessage | None:
+  async def _on_register(
+    self, s: Registering | TooSimilarReview, ev: RegisterGallery | Pressed | PressRetry | Merged | EnrollFailed
+  ) -> ReaderMessage | None:
     # Split out of on_scanner_event for C901. Returns a press's reader message; registration never shows unrecognized:
     # the indicator doesn't tell a new print from a known one, which is the screen's job.
     now = self._mono()
-    match ev:
-      case EnrollStage(done=done, total=total, ok=ok):
-        self._screen = replace(s, done=done, total=total, touched_at=now)
-        if ok:
-          self._outcome = ReaderIndicator.READ
-          return ReaderMessage(text.SCAN_SUCCESSFUL, "success", now)
-        self._failed_at = now
+    match s, ev:
+      case Registering(), RegisterGallery(others=others):
+        # The bars current now hold for the whole registration, so a settings change applies from the next one.
+        self._screen = replace(s, session=Session(others, self._clock.settings()), kept=0, advice=None)
+      case Registering(session=Session() as session, verdict=None), Pressed(press=press):
+        self._outcome = ReaderIndicator.READ
+        self._screen = await self._judged(replace(s, touched_at=now), session, session.add(press))
+        return ReaderMessage(text.SCAN_SUCCESSFUL, "success", now)
+      case Registering(), PressRetry():
+        self._screen, self._failed_at = replace(s, touched_at=now), now
         return ReaderMessage(text.RETRY, "error", now)
-      case Enrolled(template=template) if s.change is not None:
-        replaces = s.change.fingerprint_id
-        await self._clock.register_fingerprint(s.employee_id, template, s.finger, approval=s.approval, replaces=replaces)
-        self._screen = Idle(text.FINGERPRINT_SAVED, until=now + MESSAGE_SECS)
-      case Enrolled(template=template):
-        await self._clock.register_fingerprint(s.employee_id, template, s.finger)
-        added = s.added
-        self._screen = await self._open_menu(s.employee_id) if added is None else EmployeeAdded(added.display_name, added.id, now)
-      case EnrollFailed(reason=reason):
+      case Registering(verdict=Done(flagged=flagged)), Merged(template=template):
+        self._screen = await self._saved(s, template, s.approval, flagged)
+      case TooSimilarReview(allowed=True), Merged(template=template):
+        self._screen = await self._saved(s.registering, template, s.approval, s.verdict.flagged)
+      case TooSimilarReview(), Merged(template=template):
+        self._screen = replace(s, template=template)
+      case _, EnrollFailed(reason=reason):
+        # A press timed out or the reader failed (the scanner is back in READY by itself), or the merge failed.
         message = text.REGISTRATION_TIMED_OUT if reason == "timeout" else text.REGISTRATION_FAILED
-        if s.change is not None:
-          # Back to the actions, still logged in; the old print is untouched, and the next choice needs a new approval.
-          self._screen = await self._fingerprint_actions(s.employee_id, s.change.name, message)
-        else:
-          # In the add-employee flow the employee is already saved: back to the optional step, to retry or skip.
-          self._screen = Idle(message, until=now + MESSAGE_SECS) if s.added is None else NewFingerprint(s.added, now, message)
+        self._screen = await self._not_saved(s if isinstance(s, Registering) else s.registering, message)
+      case _:
+        pass  # e.g. a press after the verdict: the scanner captures until its mode changes, and a review takes no presses
+    return None
+
+  async def _judged(self, s: Registering, session: Session, verdict: Verdict) -> Screen:
+    # Split out of _on_register for C901: what a press's verdict makes of the registration.
+    s = replace(s, kept=len(session.kept), advice=None)
+    match verdict:
+      case NextPress(failure=failure):
+        return s if failure is None else replace(s, advice=text.PRESS_ADVICE[failure])
+      case GaveUp():
+        return await self._not_saved(s, text.REGISTRATION_GAVE_UP)
+      case Done():
+        self._reader.merge([p.probe for p in session.kept])
+        return replace(s, verdict=verdict)
+      case TooSimilar() if s.admin_id is not None:
+        # The add-employee flow's admin proved who they are at the admin menu, by a finger or PIN that isn't kept: the
+        # record claims the weaker.
+        return self._review(s, verdict, s.approval or Approval(s.admin_id, pin_only=True))
+      case TooSimilar():
+        return TooSimilarBlocked(s, verdict, s.touched_at)  # nothing merges until an admin steps in
+
+  def _review(self, r: Registering, verdict: TooSimilar, approval: Approval) -> TooSimilarReview:
+    """The approving admin's review of a too-similar finger; its presses merge meanwhile, so an Allow saves at once."""
+    self._reader.merge([p.probe for p in r.session.kept])  # pyright: ignore[reportOptionalMemberAccess]  # a verdict came from it
+    owner = self._clock.employee(verdict.other.employee_id)
+    name = str(verdict.other.employee_id) if owner is None else owner.display_name
+    return TooSimilarReview(replace(r, admin_id=approval.admin_id), verdict, name, approval, self._mono())
+
+  async def _saved(self, r: Registering, template: bytes, approval: Approval | None, flagged: tuple[OtherPrint, ...]) -> Screen:
+    """Save the registration's print, then alert each careless print it found (case B); an admin present sees the advice."""
+    replaces = None if r.change is None else r.change.fingerprint_id
+    await self._clock.register_fingerprint(r.employee_id, template, r.finger, approval=approval, replaces=replaces)
+    lines: list[str] = []
+    for p in flagged:
+      owner = self._clock.employee(p.employee_id)
+      name = str(p.employee_id) if owner is None else owner.display_name
+      lines.append(text.REREGISTER_ADVICE.format(name=name, finger=text.FINGER_LABELS[p.finger].lower()))
+      alert("Fingerprint print needs re-registering", f"{lines[-1]}\nPrint id: {p.print_id}", in_except_block=False, wait=False)
+    advice = " ".join(lines) if lines and r.admin_id is not None else None  # alone, it would name a coworker to the employee
+    now = self._mono()
+    if r.change is not None:
+      return Idle(text.FINGERPRINT_SAVED, until=now + (MESSAGE_SECS if advice is None else ADVICE_SECS), advice=advice)
+    if r.added is not None:
+      return EmployeeAdded(r.added.display_name, r.added.id, now, advice)
+    return await self._open_menu(r.employee_id, notice=advice)
+
+  async def _not_saved(self, r: Registering, message: str) -> Screen:
+    """End a registration with nothing saved; a re-registration's old print stays."""
+    if r.change is not None:
+      # Back to the actions, still logged in; the next choice needs a new approval.
+      return await self._fingerprint_actions(r.employee_id, r.change.name, message)
+    if r.added is None or r.admin_id is None:
+      return Idle(message, until=self._mono() + MESSAGE_SECS)
+    # In the add-employee flow the employee is already saved: back to the optional step, to retry or skip.
+    return NewFingerprint(r.admin_id, r.added, self._mono(), message)
 
   async def _on_pad_match(self, pad: PinEntry, employee_id: int) -> None:
     """A finger on a PIN pad does what it would have done on the screen before Use PIN; typed digits are discarded.
@@ -697,7 +822,7 @@ class KioskController:
         before = AdminReconfirm(owner, now) if kind is None else Rescan(owner, kind, None, now, pin_ok=True)
       case OverrideRequest():
         before = OverridePrompt(p, now)
-      case FingerChange():
+      case FingerChange() | SimilarReview():
         before = ApprovalPrompt(p, now)
       case FingerprintLogin():
         if (employee := self._clock.employee(employee_id)) is not None:
@@ -822,7 +947,9 @@ class KioskController:
       else:
         self._screen = RegisterPrompt(employee.id, touched_at=now)
 
-  async def _purpose_pin(self, purpose: OverrideRequest | FingerprintLogin | FingerChange, employee: Employee) -> Screen:
+  async def _purpose_pin(
+    self, purpose: OverrideRequest | FingerprintLogin | FingerChange | SimilarReview, employee: Employee
+  ) -> Screen:
     """A manager's override PIN, the Fingerprints flow's login, or an admin's approval by PIN; split out of `enter` for C901."""
     if isinstance(purpose, OverrideRequest):
       if self._clock.override_manager(employee, purpose.employee_id):
@@ -858,7 +985,7 @@ class KioskController:
       employee = await self._clock.add_employee(s.details, s.pin)
     except EmployeeBlockFull:
       return AdminMenu(s.admin_id, now, message=text.BLOCK_FULL)
-    return NewFingerprint(employee, now)
+    return NewFingerprint(s.admin_id, employee, now)
 
   async def punch(self, kind: PunchKind) -> None:
     """A punch button on the menu: recorded within 30 s of the scan, else it asks for a new scan (R45.2)."""
@@ -883,7 +1010,7 @@ class KioskController:
       if isinstance(s, RegisterPrompt):
         self._screen = FingerPick(s.employee_id, None, tuple(Finger), touched_at=self._mono())
       elif isinstance(s, NewFingerprint):
-        self._screen = FingerPick(s.employee.id, None, tuple(Finger), touched_at=self._mono(), added=s.employee)
+        self._screen = FingerPick(s.employee.id, None, tuple(Finger), touched_at=self._mono(), added=s.employee, admin_id=s.admin_id)
 
   async def pick_finger(self, finger: Finger) -> None:
     """Pick the finger: a first registration or an approved add starts at once; other changes wait for an approval."""
@@ -892,7 +1019,7 @@ class KioskController:
       if not isinstance(s, FingerPick) or finger not in s.choices:
         return
       if s.action is None:
-        self._screen = Registering(s.employee_id, 0, 5, now, finger, added=s.added)
+        self._screen = Registering(s.employee_id, now, finger, added=s.added, admin_id=s.admin_id)
         return
       employee = self._clock.employee(s.employee_id)
       name = str(s.employee_id) if employee is None else employee.display_name
@@ -903,6 +1030,38 @@ class KioskController:
       else:
         change = FingerChange(s.employee_id, name, s.action, finger, fingerprint_id)
         self._screen = ApprovalPrompt(change, touched_at=now) if s.approval is None else await self._approved(change, s.approval)
+
+  async def allow(self) -> None:
+    """The admin allows a too-similar finger: saved with them as its approver, once its merge has landed."""
+    async with self._transition():
+      s = self._screen
+      if isinstance(s, TooSimilarReview):
+        if s.template is None:
+          self._screen = replace(s, allowed=True, touched_at=self._mono())
+        else:
+          self._screen = await self._saved(s.registering, s.template, s.approval, s.verdict.flagged)
+
+  async def reject(self) -> None:
+    """The admin rejects a too-similar finger: nothing is saved, as when a registration fails."""
+    async with self._transition():
+      s = self._screen
+      if isinstance(s, TooSimilarReview):
+        self._screen = await self._not_saved(s.registering, text.REGISTRATION_FAILED)
+
+  async def try_another_finger(self) -> None:
+    """The employee alone, blocked on a too-similar finger, picks another."""
+    async with self._transition():
+      s = self._screen
+      if isinstance(s, TooSimilarBlocked):
+        r = s.registering
+        self._screen = FingerPick(r.employee_id, None, tuple(f for f in Finger if f is not r.finger), touched_at=self._mono())
+
+  async def ask_admin(self) -> None:
+    """The employee alone has an admin check a too-similar finger: the admin approves by finger or PIN, then reviews it."""
+    async with self._transition():
+      s = self._screen
+      if isinstance(s, TooSimilarBlocked):
+        self._screen = ApprovalPrompt(SimilarReview(s.registering, s.verdict), touched_at=self._mono())
 
   async def gear(self) -> None:
     """The gear, on the idle screen or a punch menu (which it leaves, as Cancel would): its menu."""
@@ -1011,7 +1170,7 @@ class KioskController:
     """
     async with self._transition():
       await self._settle_open(ScanOutcome.CANCELLED)
-      if self._mode is ReaderMode.ENROLL:
+      if self._mode is ReaderMode.REGISTER:
         self._mode = ReaderMode.READY
         self._reader.set_mode(ReaderMode.READY)
       s = self._screen
@@ -1035,6 +1194,8 @@ class KioskController:
       elif now - s.touched_at >= IDLE_CLOSE_SECS:
         await self._settle_open(ScanOutcome.TIMED_OUT)
         # The new employee is already saved, so a timeout on their optional fingerprint step still shows their number.
+        if isinstance(s, TooSimilarReview | TooSimilarBlocked):
+          s = s.registering  # left undecided: nothing is saved
         if isinstance(s, NewFingerprint):
           self._screen = EmployeeAdded(s.employee.display_name, s.employee.id, touched_at=now)
         elif isinstance(s, Registering | FingerPick) and s.added is not None:

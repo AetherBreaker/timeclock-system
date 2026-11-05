@@ -19,16 +19,17 @@ from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group
 
 # First party imports
 from timeclock_system.clock import Clock
-from timeclock_system.scanner import FingerStatus, Matched, ReaderMode, ReaderPaused
+from timeclock_system.registration import PRESSES, WINDOW, OtherPrint, Press
+from timeclock_system.scanner import FingerStatus, Matched, Merged, Pressed, ReaderMode, ReaderPaused, RegisterGallery
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
-from timeclock_system.ui import page, text
+from timeclock_system.ui import controller as controller_module, page, text
 from timeclock_system.ui.controller import KioskController
 from timeclock_system.ui.page import build_root
 
 if TYPE_CHECKING:
   # Standard library imports
-  from collections.abc import AsyncIterator
+  from collections.abc import AsyncIterator, Sequence
   from pathlib import Path
 
   # Third party imports
@@ -50,6 +51,12 @@ class RecordingReader:
 
   def set_mode(self, mode: ReaderMode) -> None:
     self.modes.append(mode)
+
+  def register(self, employee_id: int) -> None:
+    self.modes.append(ReaderMode.REGISTER)
+
+  def merge(self, presses: Sequence[bytes]) -> None:
+    pass
 
 
 @pytest.fixture
@@ -480,3 +487,132 @@ async def test_banner_shown_on_idle_and_menu(controller: KioskController, tmp_pa
     await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
     await user.should_not_see(text.IDLE_READY)
     await user.should_see(banner)
+
+
+# -- registration's screens -----------------------------------------------------------------------------------------
+
+CAL_PRINT = uuid4()  # one of Cal's prints, as a registration's gallery names it
+
+
+def scored_press(press_id: int, *, n: int = 40, like_cal: bool = False) -> Press:
+  """A clean press agreeing with every earlier one; `like_cal` resembles two presses of Cal's print."""
+  points = tuple((WINDOW[0] // 2 + d, WINDOW[1] // 2, 0) for k in range(n // 2) for d in (-k - 1, k + 1))
+  return Press(press_id, points, b"probe", dict.fromkeys(range(press_id), 100), {CAL_PRINT: (0, 0, 40, 0, 40)} if like_cal else {})
+
+
+def cals_print(*, careless: bool = False) -> OtherPrint:
+  """Cal's left index; a careless one has 3 of its 5 presses agreeing with no other."""
+  failing = {0, 1, 2} if careless else set()
+  agreement = tuple(tuple(-1 if i == j else 0 if {i, j} & failing else 100 for j in range(PRESSES)) for i in range(PRESSES))
+  return OtherPrint(CAL_PRINT, 4, Finger.LEFT_INDEX, (scored_press(0).minutiae,) * PRESSES, agreement)
+
+
+async def give_presses(controller: KioskController, others: tuple[OtherPrint, ...] = (), *, like_cal: bool = False) -> None:
+  await controller.on_scanner_event(RegisterGallery(others))
+  for i in range(PRESSES):
+    await controller.on_scanner_event(Pressed(scored_press(i, like_cal=like_cal and i < 2)))  # noqa: PLR2004
+
+
+async def bob_registers(controller: KioskController) -> None:
+  """Bob, with no print, logs in by PIN and registers his left index alone."""
+  await controller.use_pin()
+  for typed in ("56", "1234"):
+    for d in typed:
+      await controller.digit(d)
+    await controller.enter()
+  await controller.register()
+  await controller.pick_finger(Finger.LEFT_INDEX)
+
+
+async def ann_reregisters(controller: KioskController) -> None:
+  """Ann re-registers her left index; Ada approves by finger."""
+  await fingerprints_as(controller, "12")
+  await controller.choose_action("replace")
+  await controller.pick_finger(Finger.LEFT_INDEX)
+  await controller.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
+
+
+async def test_registering_shows_the_kept_presses_and_advice(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await bob_registers(controller)
+    await user.should_see("Press your left index on the reader (0 of 5)")
+    await controller.on_scanner_event(RegisterGallery(()))
+    for i in range(PRESSES - 1):
+      await controller.on_scanner_event(Pressed(scored_press(i)))
+    await controller.on_scanner_event(Pressed(scored_press(PRESSES - 1, n=10)))
+    await user.should_see("Press your left index on the reader (4 of 5)")
+    assert shown_text(user, "register-advice") == "Press your finger flat on the reader"
+    await user.should_see(kind=ui.button, content=text.CANCEL)
+
+
+async def test_too_similar_review_names_the_print(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await ann_reregisters(controller)
+    await give_presses(controller, (cals_print(),), like_cal=True)
+    await user.should_see("This finger is too similar to Cal Lee's left index to be reliable.")
+    await user.should_see(kind=ui.button, content="Allow it")
+    await user.should_see(kind=ui.button, content="Reject")
+    await user.should_not_see(kind=ui.button, content=text.CANCEL)
+    user.find(kind=ui.button, content="Reject").click()
+    await user.should_see(text.REGISTRATION_FAILED)
+    await user.should_see(text.FINGERPRINT_ACTIONS.format(name="Ann Lee"))
+
+
+async def test_too_similar_alone_names_no_one(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await bob_registers(controller)
+    await give_presses(controller, (cals_print(),), like_cal=True)
+    await user.should_see("This finger can't be used without an admin.")
+    for label in ("Try another finger", "Have an admin check it", text.CANCEL):
+      await user.should_see(kind=ui.button, content=label)
+    await user.should_not_see("Cal")
+    user.find(kind=ui.button, content="Have an admin check it").click()
+    await user.should_see(text.APPROVE_SIMILAR)
+    await user.should_see(text.APPROVE_HOW)
+    await user.should_see(kind=ui.button, content=text.USE_PIN)
+    await user.should_not_see("Cal")
+    await user.should_not_see("Bob")
+    await controller.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))  # the admin steps in and sees who
+    await user.should_see("This finger is too similar to Cal Lee's left index to be reliable.")
+
+
+async def test_try_another_finger_offers_the_others(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await bob_registers(controller)
+    await give_presses(controller, (cals_print(),), like_cal=True)
+    await user.should_see(kind=ui.button, content="Try another finger")
+    user.find(kind=ui.button, content="Try another finger").click()
+    await user.should_see(text.PICK_FINGER[None])
+    await user.should_see(kind=ui.button, content="Right index")
+    await user.should_not_see(kind=ui.button, content="Left index")
+
+
+async def test_reregister_advice_shows_on_the_saved_screen(
+  controller: KioskController, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setattr(controller_module, "alert", lambda *_a, **_kw: None)
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await ann_reregisters(controller)
+    await give_presses(controller, (cals_print(careless=True),), like_cal=True)
+    await controller.on_scanner_event(Merged(b"ann-new"))
+    await user.should_see(text.FINGERPRINT_SAVED)
+    assert shown_text(user, "reregister-advice") == "Cal Lee's left index print looks carelessly registered: have them re-register it."
+
+
+async def test_no_reregister_advice_for_an_employee_alone(
+  controller: KioskController, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setattr(controller_module, "alert", lambda *_a, **_kw: None)
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await bob_registers(controller)
+    await give_presses(controller, (cals_print(careless=True),), like_cal=True)
+    await controller.on_scanner_event(Merged(b"bob"))
+    await user.should_see("Bob Lee")  # his punch menu
+    await user.should_not_see("Cal")
+    await user.should_not_see(marker="reregister-advice")

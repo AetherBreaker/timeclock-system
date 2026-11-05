@@ -20,6 +20,7 @@ from nicegui.events import KeyEventArguments  # noqa: TC002
 from timeclock_schema.enums import Finger
 
 # First party imports
+from timeclock_system.registration import PRESSES
 from timeclock_system.ui import text
 from timeclock_system.ui.controller import (
   AddEmployeeDetails,
@@ -41,6 +42,9 @@ from timeclock_system.ui.controller import (
   Registering,
   RegisterPrompt,
   Rescan,
+  SimilarReview,
+  TooSimilarBlocked,
+  TooSimilarReview,
 )
 
 if TYPE_CHECKING:
@@ -256,7 +260,15 @@ class _KioskPage:
           self._confirmation(s)
         case AdminReconfirm() | AdminMenu() | AddEmployeeDetails() | NewPin() | NewFingerprint() | EmployeeAdded():
           self._admin_screen(s)
-        case Registering() | GearMenu() | FingerprintActions() | FingerPick() | ApprovalPrompt():
+        case (
+          Registering()
+          | TooSimilarReview()
+          | TooSimilarBlocked()
+          | GearMenu()
+          | FingerprintActions()
+          | FingerPick()
+          | ApprovalPrompt()
+        ):
           self._fingerprint_screen(s)
 
   # The per-screen renderers below are split out of `screen` for C901/PLR0912.
@@ -310,6 +322,8 @@ class _KioskPage:
       if (self._branding_dir / LOGO_FILE).exists():
         ui.image(f"/branding/{LOGO_FILE}").classes("w-96")
       ui.label(s.message or (text.IDLE_READY if self._controller.reader_awake else text.IDLE_ASLEEP)).classes("sft-title")
+      if s.advice:  # a registration's re-register advice (case B), styled as the confirmation's alert notices
+        ui.label(s.advice).classes("text-3xl").style("color: var(--sft-yellow)").mark("reregister-advice")
       self._button(text.USE_PIN, self._controller.use_pin)
     self._gear()
 
@@ -372,16 +386,43 @@ class _KioskPage:
           self._button(text.REGISTER, self._controller.register, "sft-punch")
           self._button(text.SKIP, self._controller.skip_fingerprint)
       case EmployeeAdded():
-        ui.label(text.EMPLOYEE_ADDED.format(name=s.name)).classes("sft-title")
-        ui.label(text.EMPLOYEE_NUMBER.format(number=s.number)).classes("text-3xl").mark("employee-number")
-        self._button(text.OK, self._controller.cancel, "sft-punch")
+        self._employee_added(s)
 
-  def _fingerprint_screen(self, s: Registering | GearMenu | FingerprintActions | FingerPick | ApprovalPrompt) -> None:
+  def _employee_added(self, s: EmployeeAdded) -> None:
+    # Split out of _admin_screen for C901.
+    ui.label(text.EMPLOYEE_ADDED.format(name=s.name)).classes("sft-title")
+    ui.label(text.EMPLOYEE_NUMBER.format(number=s.number)).classes("text-3xl").mark("employee-number")
+    if s.advice:  # as on the idle screen
+      ui.label(s.advice).classes("text-3xl").style("color: var(--sft-yellow)").mark("reregister-advice")
+    self._button(text.OK, self._controller.cancel, "sft-punch")
+
+  def _registration(self, s: Registering | TooSimilarReview | TooSimilarBlocked) -> None:
     match s:
       case Registering():
         finger = text.FINGER_LABELS[s.finger].lower()
-        ui.label(text.REGISTERING.format(finger=finger, done=s.done, total=s.total)).classes("sft-title")
+        ui.label(text.REGISTERING.format(finger=finger, done=s.kept, total=PRESSES)).classes("sft-title")
+        if s.advice:
+          ui.label(s.advice).classes("sft-error text-3xl").mark("register-advice")
         self._button(text.CANCEL, self._controller.cancel)
+      case TooSimilarReview():
+        finger = text.FINGER_LABELS[s.verdict.other.finger].lower()
+        ui.label(text.TOO_SIMILAR_REVIEW.format(name=s.name, finger=finger)).classes("sft-title")
+        with ui.row():  # neither is the default: the admin decides
+          self._button(text.ALLOW, self._controller.allow)
+          self._button(text.REJECT, self._controller.reject)
+      case TooSimilarBlocked():
+        ui.label(text.TOO_SIMILAR_BLOCKED).classes("sft-title")
+        with ui.row():
+          self._button(text.TRY_ANOTHER_FINGER, self._controller.try_another_finger, "sft-punch")
+          self._button(text.ADMIN_CHECK, self._controller.ask_admin)
+          self._button(text.CANCEL, self._controller.cancel)
+
+  def _fingerprint_screen(
+    self, s: Registering | TooSimilarReview | TooSimilarBlocked | GearMenu | FingerprintActions | FingerPick | ApprovalPrompt
+  ) -> None:
+    match s:
+      case Registering() | TooSimilarReview() | TooSimilarBlocked():
+        self._registration(s)
       case GearMenu():
         with ui.column().classes("items-center gap-4"):
           self._button(text.FINGERPRINTS, self._controller.open_fingerprints, "sft-punch")
@@ -392,7 +433,9 @@ class _KioskPage:
         self._finger_pick(s)
       case ApprovalPrompt():
         c = s.change
-        if c.finger is None:
+        if isinstance(c, SimilarReview):
+          title = text.APPROVE_SIMILAR  # the employee is still there: no names until the admin is
+        elif c.finger is None:
           title = text.APPROVE_ADD.format(name=c.name)
         else:
           title = text.APPROVE_CHANGE[c.action].format(name=c.name, finger=text.FINGER_LABELS[c.finger].lower())
