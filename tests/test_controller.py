@@ -315,6 +315,20 @@ async def test_pin_login_without_print_prompts_registration(kiosk: Kiosk) -> Non
   assert kiosk.ctl.screen == RegisterPrompt(BOB, touched_at=kiosk.t.mono)
 
 
+async def test_an_inactive_employee_without_a_print_is_sent_to_a_manager_not_registration(kiosk: Kiosk) -> None:
+  kiosk.store.insert_punch(
+    Punch(id=uuid4(), employee_id=BOB, kind=PunchKind.CLOCK_IN, at=START - timedelta(hours=1), instance_id="1"), origin="db"
+  )
+  bob = kiosk.clock.employee(BOB)
+  assert bob is not None
+  others = [e for e in cast("list[Employee]", kiosk.store.load("employees")) if e.id != BOB]
+  kiosk.store.replace_table("employees", [*others, bob.model_copy(update={"active": False})])
+  kiosk.clock.notify_changed({"employees"})
+  await kiosk.pin_login(BOB)
+  request = OverrideRequest(BOB, BypassReason.OVERRIDE_NO_FINGERPRINT, None)
+  assert kiosk.ctl.screen == OverridePrompt(request, touched_at=kiosk.t.mono)
+
+
 async def test_pin_login_with_print_requires_that_employees_finger(kiosk: Kiosk) -> None:
   await kiosk.pin_login(ANN)
   assert kiosk.ctl.screen == PinScan(ANN, touched_at=kiosk.t.mono)
@@ -777,6 +791,31 @@ async def test_admin_reconfirm_by_pin_is_recorded_and_must_be_their_own(kiosk: K
   await kiosk.type_and_enter("1234")
   assert kiosk.ctl.screen == AdminMenu(ADA, touched_at=kiosk.t.mono)
   assert [b.reason for b in kiosk.store.unsynced_bypasses()] == [BypassReason.ADMIN_PIN_LOGIN]
+
+
+@pytest.mark.parametrize("by", ["finger", "pin"])
+async def test_an_admin_switched_off_mid_shift_gets_their_punch_menu_not_the_admin_menu(kiosk: Kiosk, by: str) -> None:
+  # Switched off after their menu was drawn: the reconfirm leads back to the punch menu, without the Admin button.
+  kiosk.store.insert_punch(
+    Punch(id=uuid4(), employee_id=ADA, kind=PunchKind.CLOCK_IN, at=START - timedelta(hours=1), instance_id="1"), origin="db"
+  )
+  ada = kiosk.clock.employee(ADA)
+  assert ada is not None
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  await kiosk.ctl.admin()
+  others = [e for e in cast("list[Employee]", kiosk.store.load("employees")) if e.id != ADA]
+  kiosk.store.replace_table("employees", [*others, ada.model_copy(update={"active": False})])
+  kiosk.clock.notify_changed({"employees"})
+  if by == "finger":
+    await kiosk.ctl.on_scanner_event(matched(ADA))
+  else:
+    await kiosk.ctl.use_pin()
+    await kiosk.type_and_enter(PINS[ADA])
+    await kiosk.type_and_enter("1234")
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu)
+  assert (screen.info.employee_id, screen.info.is_admin) == (ADA, False)
+  assert kiosk.store.unsynced_bypasses() == []  # no admin PIN login was recorded
 
 
 async def test_an_admins_rescan_takes_their_pin(kiosk: Kiosk) -> None:

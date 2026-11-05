@@ -111,6 +111,45 @@ async def test_verify_pin_refuses_inactive(env: Env) -> None:
   assert await env.clock.verify_pin("13", SecretStr("1234")) is None
 
 
+async def test_verify_pin_accepts_inactive_with_an_open_shift(env: Env) -> None:
+  env.store.insert_punch(punch_at(3, PunchKind.CLOCK_IN, T - timedelta(hours=2)), origin="db")
+  assert await env.clock.verify_pin("13", SecretStr("1234")) == env.clock.employee(3)
+
+
+async def test_inactive_employee_finishes_their_shift_but_cannot_clock_in(env: Env) -> None:
+  # Switched off mid-shift: breaks and the clock-out still work; once clocked out, the clock shuts them out.
+  env.store.insert_punch(punch_at(3, PunchKind.CLOCK_IN, T - timedelta(hours=2)), origin="db")
+  assert (await env.clock.menu_info(3)).valid_next == (PunchKind.CLOCK_OUT, PunchKind.BREAK_START, PunchKind.LUNCH_START)
+  await env.clock.record_punch(3, PunchKind.BREAK_START)
+  assert (await env.clock.menu_info(3)).valid_next == (PunchKind.BREAK_END, PunchKind.CLOCK_OUT)
+  env.now += timedelta(minutes=10)
+  await env.clock.record_punch(3, PunchKind.BREAK_END)
+  env.now += timedelta(minutes=10)
+  await env.clock.record_punch(3, PunchKind.CLOCK_OUT)
+  with pytest.raises(PunchRefused):
+    await env.clock.menu_info(3)
+  with pytest.raises(PunchRefused):
+    await env.clock.record_punch(3, PunchKind.CLOCK_IN)
+  assert await env.clock.verify_pin("13", SecretStr("1234")) is None
+  assert [p.kind for p in env.store.punches(3)] == [
+    PunchKind.CLOCK_IN,
+    PunchKind.BREAK_START,
+    PunchKind.BREAK_END,
+    PunchKind.CLOCK_OUT,
+  ]
+
+
+async def test_inactive_admin_has_no_admin_button(env: Env) -> None:
+  admin = make_employee(5, role=EmployeeRole.ADMIN, active=False)
+  env.store.replace_table("employees", [make_employee(1), admin])
+  await env.clock.load()
+  env.store.insert_punch(punch_at(5, PunchKind.CLOCK_IN, T - timedelta(hours=2)), origin="db")
+  assert not (await env.clock.menu_info(5)).is_admin
+  env.store.replace_table("employees", [make_employee(1), admin.model_copy(update={"active": True})])
+  await env.clock.load()
+  assert (await env.clock.menu_info(5)).is_admin
+
+
 async def test_menu_info_for_a_clocked_in_employee(env: Env) -> None:
   env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=2)), origin="db")
   info = await env.clock.menu_info(1)
@@ -291,12 +330,31 @@ async def test_gallery_orders_by_latest_punch_here(env: Env) -> None:
   env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=3)), origin="db")
   env.store.insert_punch(punch_at(2, PunchKind.CLOCK_IN, T - timedelta(hours=1)), origin="db")
   env.store.insert_punch(punch_at(4, PunchKind.CLOCK_IN, T, instance_id="other"), origin="db")  # not recorded here
-  env.store.insert_punch(punch_at(3, PunchKind.CLOCK_IN, T), origin="db")
+  env.store.insert_punch(punch_at(3, PunchKind.CLOCK_IN, T - timedelta(hours=1)), origin="db")  # inactive, shift closed
+  env.store.insert_punch(punch_at(3, PunchKind.CLOCK_OUT, T), origin="db")
   gallery = await env.clock.gallery()
   assert [g.employee_id for g in gallery] == [2, 1, 4]
   assert gallery[0].template == b"t2"
   assert gallery[0].finger is Finger.LEFT_INDEX
   assert gallery[0].print_id == prints[2].id
+
+
+async def test_gallery_keeps_an_inactive_employees_prints_until_their_shift_ends(env: Env) -> None:
+  for n in (1, 3):
+    env.store.insert_fingerprint(
+      Fingerprint(id=uuid4(), employee_id=n, finger=Finger.LEFT_INDEX, template=SecretBytes(b"t"), registered_at=T, instance_id="dev"),
+      origin="db",
+    )
+  assert {g.employee_id for g in await env.clock.gallery()} == {1}
+  clock_in = punch_at(3, PunchKind.CLOCK_IN, T - timedelta(hours=2))
+  env.store.insert_punch(clock_in, origin="db")
+  assert {g.employee_id for g in await env.clock.gallery()} == {1, 3}
+  void = PunchCorrection(id=uuid4(), punch_id=clock_in.id, action=CorrectionAction.VOID, recorded_at=T)
+  env.store.upsert_correction(void)  # a correction synced from the database can end the shift too
+  assert {g.employee_id for g in await env.clock.gallery()} == {1}
+  env.store.delete_correction(void.id)
+  await env.clock.record_punch(3, PunchKind.CLOCK_OUT)
+  assert {g.employee_id for g in await env.clock.gallery()} == {1}
 
 
 async def test_override_manager_rules(env: Env) -> None:

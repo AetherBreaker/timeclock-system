@@ -167,6 +167,16 @@ async def test_a_settings_change_reaches_the_scanner_margin(wired_scanner: dict[
   assert scanner.galleries[-1][1] == NEW_MARGIN
 
 
+async def test_a_correction_refreshes_the_gallery(wired_scanner: dict[str, Any]) -> None:
+  [startup] = wired_scanner["startup"]
+  await invoke_like_nicegui(startup)
+  scanner, clock = wired_scanner["scanner"], wired_scanner["clock"]
+  before = len(scanner.galleries)
+  clock.notify_changed({"punch_corrections"})
+  await invoke_like_nicegui(lambda: None)  # the gallery refresh is a task
+  assert len(scanner.galleries) == before + 1
+
+
 async def test_a_settled_scan_wakes_the_sync(wired_scanner: dict[str, Any]) -> None:
   [startup] = wired_scanner["startup"]
   await invoke_like_nicegui(startup)

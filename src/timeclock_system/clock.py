@@ -308,12 +308,20 @@ class Clock:
     return e.role is EmployeeRole.ADMIN or e.fingerprint_exempt
 
   async def verify_pin(self, username: str, pin: SecretStr) -> Employee | None:
-    """Return the active employee with this PIN username if the password matches its bcrypt hash."""
-    for e in self._employees.values():
-      if e.active and e.pin_username == username:
-        ok = await asyncio.to_thread(bcrypt.checkpw, pin.get_secret_value().encode(), e.pin_hash.get_secret_value().encode())
-        return e if ok else None
-    return None
+    """Return the employee with this PIN username if the password matches its bcrypt hash.
+
+    An inactive employee passes only while their shift is open (see `menu_info`); checked before the hash, so a shut-out
+    employee costs no bcrypt.
+    """
+    e = next((e for e in self._employees.values() if e.pin_username == username), None)
+    if e is None:
+      return None
+    if not e.active:
+      punches, corrections = await asyncio.to_thread(lambda: (self._store.punches(e.id), self._store.corrections(e.id)))
+      if build_timeline(punches, corrections, as_of=self._now()).open_shift is None:
+        return None
+    ok = await asyncio.to_thread(bcrypt.checkpw, pin.get_secret_value().encode(), e.pin_hash.get_secret_value().encode())
+    return e if ok else None
 
   async def has_fingerprint(self, employee_id: int) -> bool:
     """Whether any print is stored for the employee."""
@@ -358,7 +366,7 @@ class Clock:
     """Return the punch menu's data for an employee.
 
     Raises:
-      PunchRefused: The employee is unknown.
+      PunchRefused: The employee is unknown, or inactive with no open shift.
     """
     e = self._employees.get(employee_id)
     if e is None:
@@ -368,6 +376,8 @@ class Clock:
     # A punch counts from its stamped time: the automatic clock-out may be stamped after its run, and until then the employee
     # can still clock out by hand, which makes the automatic one the ignored repeat.
     timeline = build_timeline(punches, corrections, as_of=now)
+    if not e.active and timeline.open_shift is None:
+      raise PunchRefused(_UNKNOWN_EMPLOYEE)  # inactive: may finish an open shift, never clock in (owner, 2026-11-05)
     # "Clocked in since" names the clock-in, not a lunch that followed it; a break or lunch shows its own start.
     open_shift = timeline.open_shift
     if open_shift is None:
@@ -383,7 +393,8 @@ class Clock:
     off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
     valid = tuple(k for k in timeline.valid_next if k not in off)
     hours = totals.worked + totals.paid_break
-    return MenuInfo(employee_id, e.display_name, timeline.state, since, valid, hours, is_admin=e.role is EmployeeRole.ADMIN)
+    is_admin = e.active and e.role is EmployeeRole.ADMIN
+    return MenuInfo(employee_id, e.display_name, timeline.state, since, valid, hours, is_admin=is_admin)
 
   async def record_punch(
     self, employee_id: int, kind: PunchKind, *, override: OverrideGrant | None = None, pin_login: bool = False
@@ -397,15 +408,18 @@ class Clock:
       pin_login: The employee's own PIN authorized it (an admin's or exempt employee's 30 s rescan), stored as a login bypass.
 
     Raises:
-      PunchRefused: The employee is unknown or inactive, the punch isn't valid now, or a REFUSE rule fired.
+      PunchRefused: The employee is unknown, or inactive and clocking in; the punch isn't valid now; or a REFUSE rule fired.
     """
     e = self._employees.get(employee_id)
-    if e is None or not e.active:
+    if e is None:
       raise PunchRefused(_UNKNOWN_EMPLOYEE)
     async with self._punch_lock:
       punches, corrections = await asyncio.to_thread(lambda: (self._store.punches(employee_id), self._store.corrections(employee_id)))
       now = self._now()
       timeline = build_timeline(punches, corrections, as_of=now)  # as in menu_info
+      # Inactive (see menu_info): only the off state offers a clock-in, so this shuts them out once clocked out.
+      if not e.active and kind is PunchKind.CLOCK_IN:
+        raise PunchRefused(_UNKNOWN_EMPLOYEE)
       # The menu only offers valid punches (R26.3); re-checked here since state may have changed since it was drawn.
       s = self._settings
       off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
@@ -592,17 +606,32 @@ class Clock:
     )
 
   async def gallery(self) -> list[GalleryPrint]:
-    """Return the active employees' prints, those who punched here most recently first (R36.4)."""
-    fingerprints, punches = await asyncio.to_thread(lambda: (self._store.fingerprints(), self._store.punches()))
+    """Return the prints of active employees and of inactive ones on an open shift, latest punch here first (R36.4).
+
+    An inactive employee's prints stay until their shift ends (see `menu_info`).
+    """
+    fingerprints, punches, corrections = await asyncio.to_thread(
+      lambda: (self._store.fingerprints(), self._store.punches(), self._store.corrections())
+    )
     latest: dict[int, datetime] = {}
+    by_employee: dict[int, list[Punch]] = defaultdict(list)
     for p in punches:  # oldest first, so the last write per employee is the newest
+      by_employee[p.employee_id].append(p)
       if p.instance_id == self.instance_id:
         latest[p.employee_id] = p.at
-    active = [f for f in fingerprints if (e := self._employees.get(f.employee_id)) is not None and e.active]
-    active.sort(
+    now = self._now()
+    finishing = {
+      employee_id
+      for employee_id, employee_punches in by_employee.items()
+      if (e := self._employees.get(employee_id)) is not None
+      and not e.active
+      and build_timeline(employee_punches, corrections, as_of=now).open_shift is not None
+    }
+    shown = [f for f in fingerprints if (e := self._employees.get(f.employee_id)) is not None and (e.active or e.id in finishing)]
+    shown.sort(
       key=lambda f: (f.employee_id not in latest, -latest[f.employee_id].timestamp() if f.employee_id in latest else 0.0, str(f.id))
     )
-    return [GalleryPrint(f.id, f.employee_id, f.template.get_secret_value(), f.finger) for f in active]
+    return [GalleryPrint(f.id, f.employee_id, f.template.get_secret_value(), f.finger) for f in shown]
 
   # -- weekly prune -------------------------------------------------------------------------------------------------
 

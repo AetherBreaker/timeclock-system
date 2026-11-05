@@ -712,8 +712,11 @@ class KioskController:
     elif isinstance(s, Idle | Menu | Confirmation):
       self._screen = await self._open_menu(employee_id)  # a new scan switches the menu (R45.4)
     elif isinstance(s, AdminReconfirm):
-      # The admin's own finger opens the admin menu; anyone else's opens their punch menu, as a rescan does.
-      self._screen = AdminMenu(employee_id, self._mono()) if employee_id == s.employee_id else await self._open_menu(employee_id)
+      # The admin's own finger opens the admin menu; anyone else's opens their punch menu, as a rescan does. So does an
+      # admin's switched off since the menu was drawn: they may finish their shift, never use the admin menu.
+      e = self._clock.employee(employee_id)
+      own = employee_id == s.employee_id and e is not None and e.active
+      self._screen = AdminMenu(employee_id, self._mono()) if own else await self._open_menu(employee_id)
     elif isinstance(s, Rescan):
       same = employee_id == s.employee_id
       self._screen = await (self._record(employee_id, s.kind, None) if same else self._open_menu(employee_id))
@@ -813,6 +816,9 @@ class KioskController:
         self._screen = await self._open_menu(employee.id)
       elif await self._clock.has_fingerprint(employee.id):
         self._screen = PinScan(employee.id, touched_at=now)
+      elif not employee.active:
+        # Finishing a shift, never registering a first print (owner, 2026-11-05): a manager authorizes instead.
+        self._screen = OverridePrompt(OverrideRequest(employee.id, BypassReason.OVERRIDE_NO_FINGERPRINT, None), touched_at=now)
       else:
         self._screen = RegisterPrompt(employee.id, touched_at=now)
 
@@ -833,6 +839,8 @@ class KioskController:
     if employee.id != purpose.employee_id:
       return PinEntry("username", "", SecretStr(""), purpose, touched_at=self._mono(), error=text.NOT_YOUR_PIN)
     if purpose.kind is None:
+      if not employee.active:  # switched off since the menu was drawn, as in _on_match
+        return await self._open_menu(employee.id)
       await self._clock.record_pin_login(employee)
       return AdminMenu(employee.id, self._mono())
     return await self._record(employee.id, purpose.kind, None, pin_login=True)
