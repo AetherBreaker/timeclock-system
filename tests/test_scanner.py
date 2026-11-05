@@ -642,7 +642,7 @@ def test_a_short_decode_ends_register(
   assert h.event() == EnrollFailed("error")
   h.reader.next_call("identify")
   assert h.scanner.mode is ReaderMode.READY
-  assert not [score for name, score in h.reader.history if name == "score" and score[0] == b"p0"]  # nothing scored it
+  assert not [d for name, d in h.reader.history if name == "score" and isinstance(d, tuple) and b"p0" in d]  # nothing scored it
 
 
 def test_set_mode_ends_register(make: Callable[..., Harness]) -> None:
