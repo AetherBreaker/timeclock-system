@@ -510,7 +510,9 @@ async def test_gave_up_message(kiosk: Kiosk) -> None:
   light = BARS.registration_min_detail_points - 2
   for i in range(PRESSES + BARS.registration_extra_presses):
     await kiosk.ctl.on_scanner_event(Pressed(press(i, n=light if i >= PRESSES - 1 else 40)))
-  assert kiosk.ctl.screen == Idle("Couldn't get a clean registration. Try again or use another finger.", until=kiosk.t.mono + 3)
+  assert kiosk.ctl.screen == Idle(
+    "Couldn't get a clean registration. Try again or use another finger.", until=kiosk.t.mono + controller_module.IDLE_ERROR_SECS
+  )
   assert kiosk.reader.modes[-1] is ReaderMode.READY
   assert kiosk.reader.merges == []
   assert not await kiosk.clock.has_fingerprint(BOB)
@@ -519,7 +521,7 @@ async def test_gave_up_message(kiosk: Kiosk) -> None:
 async def test_registration_timeout_shows_message(kiosk: Kiosk) -> None:
   await bob_registers(kiosk)
   await kiosk.ctl.on_scanner_event(EnrollFailed("timeout"))
-  assert kiosk.ctl.screen == Idle(text.REGISTRATION_TIMED_OUT, until=kiosk.t.mono + 3)
+  assert kiosk.ctl.screen == Idle(text.REGISTRATION_TIMED_OUT, until=kiosk.t.mono + controller_module.IDLE_ERROR_SECS)
   assert kiosk.reader.modes[-1] is ReaderMode.READY
 
 
@@ -527,7 +529,7 @@ async def test_a_failed_merge_saves_nothing(kiosk: Kiosk) -> None:
   await bob_registers(kiosk)
   await give_presses(kiosk)
   await kiosk.ctl.on_scanner_event(EnrollFailed("error"))
-  assert kiosk.ctl.screen == Idle(text.REGISTRATION_FAILED, until=kiosk.t.mono + 3)
+  assert kiosk.ctl.screen == Idle(text.REGISTRATION_FAILED, until=kiosk.t.mono + controller_module.IDLE_ERROR_SECS)
   assert kiosk.reader.modes[-1] is ReaderMode.READY  # a failed merge leaves the scanner in REGISTER
   assert not await kiosk.clock.has_fingerprint(BOB)
 
