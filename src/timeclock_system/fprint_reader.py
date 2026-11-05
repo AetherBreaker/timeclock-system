@@ -38,6 +38,9 @@ if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Callable, Sequence
 
+  # First party imports
+  from timeclock_system.registration import Minutiae
+
 # The domains are compared through libfprint's quark functions, not their literal strings. Older PyGObject builds expose
 # the retry quark only on the enum; the probe prints which source this build used.
 if hasattr(FPrint, "device_retry_quark"):
@@ -46,6 +49,7 @@ else:
   _RETRY_SOURCE, _RETRY_DOMAIN = "FPrint.DeviceRetry.quark", GLib.quark_to_string(FPrint.DeviceRetry.quark())
 _ERROR_DOMAIN = GLib.quark_to_string(FPrint.device_error_quark())
 LOGGER = logging.getLogger(__name__)
+_SCORED_CACHE_MAX = 1024  # deserialized templates kept for `score`; far above any gallery
 
 
 def _reader_error(e: GLib.Error) -> Exception:
@@ -79,6 +83,7 @@ class FprintReader:
     self._device = devices[0]
     # Deserialized once per print (R36.4); rebuilt from each call's gallery, so removed prints drop out.
     self._prints: dict[UUID, FPrint.Print] = {}
+    self._scored: dict[bytes, FPrint.Print] = {}  # `score`'s `other` templates, by bytes
 
   def new_cancel(self) -> Gio.Cancellable:
     """Return a fresh cancellable for one call; `cancel()` is safe from any thread."""
@@ -180,15 +185,56 @@ class FprintReader:
       self._device.disconnect(handler)
     return bytes(enrolled.serialize())
 
+  def capture(self, cancel: Gio.Cancellable, on_status: Callable[[FingerStatus], None]) -> bytes:
+    """Capture one press: an empty-gallery identify's probe, serialized (FP3, one press). Raises like `identify`."""
+    handler = self._watch_finger(on_status)
+    try:
+      _match, probe = self._device.identify_sync([], cancel, None, None)
+      return bytes(probe.serialize())
+    except GLib.Error as e:
+      raise _reader_error(e) from e
+    finally:
+      self._device.disconnect(handler)
+
+  def presses(self, template: bytes) -> tuple[Minutiae, ...]:
+    """Decode a template's presses: (x, y, theta) per detail point, from the FP3 payload after the 3-byte header."""
+    variant = GLib.Variant.new_from_bytes(GLib.VariantType("(issbymsmsia{sv}v)"), GLib.Bytes(template[3:]), False)  # noqa: FBT003
+    nbis = variant.get_child_value(9).get_variant().unpack()  # (a(aiaiai)): per press, its x, y and theta columns
+    return tuple(tuple(zip(x, y, theta, strict=True)) for x, y, theta in nbis[0])
+
+  def score(self, press: bytes, index: int, other: bytes) -> tuple[int, ...]:
+    """Score `press`'s press `index` against each of `other`'s presses (bozorth3, as the scans are scored)."""
+    try:
+      if other not in self._scored:
+        if len(self._scored) >= _SCORED_CACHE_MAX:
+          self._scored.clear()
+        self._scored[other] = FPrint.Print.deserialize(other)
+      return tuple(FPrint.Print.deserialize(press).score_press(index, self._scored[other]))
+    except GLib.Error as e:
+      raise _reader_error(e) from e
+
+  def merge(self, presses: Sequence[bytes]) -> bytes:
+    """Merge one-press templates into one template, in order."""
+    try:
+      return bytes(FPrint.Print.new_from_presses([FPrint.Print.deserialize(p) for p in presses]).serialize())
+    except GLib.Error as e:
+      raise _reader_error(e) from e
+
 
 def _probe_identify(reader: FprintReader) -> None:
   # Split out of main for PLR0915.
   reader.open()
   try:
     print("enroll: press the same finger 5 times")
-    template = reader.enroll(
-      reader.new_cancel(), lambda done, total, ok: print(f"stage {done}/{total}{'' if ok else ' (retry)'}"), lambda _status: None
-    )
+    captured = []
+    while len(captured) < 5:  # noqa: PLR2004
+      try:
+        captured.append(reader.capture(reader.new_cancel(), lambda _status: None))
+        print(f"press {len(captured)}/5")
+      except RetryScan as e:
+        print(f"press {len(captured) + 1}/5 (retry: {e})")
+      time.sleep(1.0)  # the scanner's finger_off_pause
+    template = reader.merge(captured)
     print(f"template_bytes={len(template)}")
     gallery = [GalleryPrint(uuid4(), 0, template, Finger.RIGHT_INDEX)]
     for attempt in range(1, 4):

@@ -43,7 +43,12 @@ from timeclock_system.scanner import (
 
 if TYPE_CHECKING:
   # Standard library imports
+
+  # Standard library imports
   from collections.abc import Callable, Iterator, Sequence
+
+  # First party imports
+  from timeclock_system.registration import Minutiae
 
 WAIT = 2.0
 TICK = 0.02  # a wait on Windows can return up to a timer tick (~16 ms) early by time.monotonic()
@@ -92,16 +97,16 @@ class FakeReader:
     *,
     default: Outcome = BLOCK,
     enroll_stages: int = 5,
-    presses: Sequence[bool] | None = None,
+    stage_oks: Sequence[bool] | None = None,
     enroll_statuses: bool = False,
     stage_gap: float = 0.0,
     enroll_result: bytes | object = b"template",
   ) -> None:
-    """`presses`: each enroll press's ok, None for all ok; `enroll_statuses`: report a finger down before each press."""
+    """`stage_oks`: each enroll press's ok, None for all ok; `enroll_statuses`: report a finger down before each press."""
     self.script: deque[Outcome] = deque(script)
     self.default = default
     self.enroll_stages = enroll_stages
-    self.presses = presses
+    self.stage_oks = stage_oks
     self.enroll_statuses = enroll_statuses
     self.stage_gap = stage_gap
     self.enroll_result = enroll_result
@@ -149,13 +154,25 @@ class FakeReader:
     finally:
       self._record("identify_end")
 
+  def capture(self, cancel: CancelToken, on_status: Callable[[FingerStatus], None]) -> bytes:
+    raise NotImplementedError
+
+  def presses(self, template: bytes) -> tuple[Minutiae, ...]:
+    raise NotImplementedError
+
+  def score(self, press: bytes, index: int, other: bytes) -> tuple[int, ...]:
+    raise NotImplementedError
+
+  def merge(self, presses: Sequence[bytes]) -> bytes:
+    raise NotImplementedError
+
   def enroll(
     self, cancel: CancelToken, on_stage: Callable[[int, int, bool], None], on_status: Callable[[FingerStatus], None]
   ) -> bytes:
     assert isinstance(cancel, FakeToken)
     self._record("enroll")
     done = 0
-    for ok in [True] * self.enroll_stages if self.presses is None else self.presses:
+    for ok in [True] * self.enroll_stages if self.stage_oks is None else self.stage_oks:
       if done == self.enroll_stages:
         break
       if cancel.event.wait(self.stage_gap):
@@ -555,7 +572,7 @@ def test_stop_ends_the_pause_after_an_early_result(make: Callable[..., Harness])
 
 
 def test_enroll_posts_uncounted_presses(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader(enroll_stages=3, presses=[True, False, True, True]), mode=ReaderMode.ENROLL)
+  h = make(FakeReader(enroll_stages=3, stage_oks=[True, False, True, True]), mode=ReaderMode.ENROLL)
   assert [h.event() for _ in range(4)] == [
     EnrollStage(1, 3, ok=True),
     EnrollStage(1, 3, ok=False),
@@ -576,7 +593,7 @@ def test_enroll_posts_finger_status(make: Callable[..., Harness]) -> None:
 def test_an_uncounted_press_restarts_the_idle_timer(make: Callable[..., Harness]) -> None:
   # Presses 0.1 s apart outlast the 0.25 s idle timeout in total; uncounted ones keep it alive like counted ones.
   h = make(
-    FakeReader(enroll_stages=2, presses=[True, False, False, True], stage_gap=0.1),
+    FakeReader(enroll_stages=2, stage_oks=[True, False, False, True], stage_gap=0.1),
     ScannerTimings(enroll_idle_timeout=0.25),
     mode=ReaderMode.ENROLL,
   )
