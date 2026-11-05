@@ -617,14 +617,17 @@ class Scanner:
   def _press(self, probe: bytes) -> Press:
     # Split out of _register_once for C901: the captured press, scored against the session's earlier presses and others.
     # A ReaderFailure, not the IndexError that would end the thread; decoded before scoring asks for its press 0.
-    if not (minutiae := self._blocking(self._reader.presses, probe)):
+    if not (presses := self._blocking(self._reader.presses, probe)):
       raise ReaderFailure("the press decoded to no press")
     score = self._reader.score
-    vs_session = {
-      i: max(self._blocking(score, probe, 0, e)[0], self._blocking(score, e, 0, probe)[0]) for i, e in enumerate(self._probes)
-    }
+    try:
+      vs_session = {
+        i: max(self._blocking(score, probe, 0, e)[0], self._blocking(score, e, 0, probe)[0]) for i, e in enumerate(self._probes)
+      }
+    except IndexError:
+      raise ReaderFailure("a press scored nothing against an earlier one") from None  # R15: the frames' locals hold probes
     vs_gallery = {p.print_id: self._blocking(score, probe, 0, p.template) for p in self._others}
-    return Press(len(self._probes), minutiae[0], probe, vs_session, vs_gallery)
+    return Press(len(self._probes), presses[0], probe, vs_session, vs_gallery)
 
   def _start_session(self, mode_changes: int, gallery: tuple[GalleryPrint, ...], registrant: int | None) -> None:
     # Split out of _register_once for C901: score every other person's print against itself, then post RegisterGallery.
