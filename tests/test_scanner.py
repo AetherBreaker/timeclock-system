@@ -628,21 +628,28 @@ def test_an_undecodable_template_ends_register(make: Callable[..., Harness], und
 
 
 @pytest.mark.parametrize(
-  ("decoded", "scores"),
-  [({b"p0": ()}, {}), ({b"tb": TB}, {**B_OWN, (b"tb", 0, b"tb"): (99,)})],
-  ids=["press decoding to no press", "gallery print scoring short"],
+  ("decoded", "scores", "before"),
+  [
+    ({b"tb": TB}, {**B_OWN, (b"tb", 0, b"tb"): (99,)}, 0),
+    ({b"p0": ()}, {}, 1),
+    ({}, {(b"p1", 0, b"p0"): ()}, 2),
+  ],
+  ids=["gallery print scoring short", "press decoding to no press", "press scoring nothing against an earlier one"],
 )
-def test_a_short_decode_ends_register(
-  make: Callable[..., Harness], decoded: dict[bytes, tuple[Minutiae, ...]], scores: dict[tuple[bytes, int, bytes], tuple[int, ...]]
+def test_a_short_reader_result_ends_register(
+  make: Callable[..., Harness],
+  decoded: dict[bytes, tuple[Minutiae, ...]],
+  scores: dict[tuple[bytes, int, bytes], tuple[int, ...]],
+  before: int,
 ) -> None:
-  # Indexing either would raise IndexError, which escaping would end the scanner thread.
-  h = make(FakeReader(captures=[b"p0"], decoded=decoded, scores=scores), FAST, registrant=1)
-  if b"p0" in decoded:
-    gallery_of(h.event())
+  # Indexing any of them would raise IndexError, which escaping would end the scanner thread. `before`: the events first.
+  h = make(FakeReader(captures=[b"p0", b"p1"], decoded=decoded, scores=scores), FAST, registrant=1)
+  assert [type(h.event()) for _ in range(before)] == [RegisterGallery, Pressed][:before]
   assert h.event() == EnrollFailed("error")
   h.reader.next_call("identify")
   assert h.scanner.mode is ReaderMode.READY
-  assert not [d for name, d in h.reader.history if name == "score" and isinstance(d, tuple) and b"p0" in d]  # nothing scored it
+  if decoded.get(b"p0") == ():  # never scored: libfprint would be asked for a press it doesn't have
+    assert not [d for name, d in h.reader.history if name == "score" and isinstance(d, tuple) and b"p0" in d]
 
 
 def test_set_mode_ends_register(make: Callable[..., Harness]) -> None:
