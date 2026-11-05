@@ -79,7 +79,7 @@
   typeCheckingMode = "standard"
 
   pythonPlatform = "Linux"                                    # the app only runs on Linux; Windows dev runs see Linux stubs (e.g. os.chown)
-  ignore         = ["src/timeclock_system/fprint_reader.py"]  # needs PyGObject and libfprint, which only exist in the image
+  ignore         = ["src/timeclock_system/fprint_reader.py", "scripts/calibrate_registration.py"]  # need PyGObject and libfprint, which only exist in the image
 
   verboseOutput          = true
   useLibraryCodeForTypes = true
