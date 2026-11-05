@@ -746,6 +746,19 @@ def test_set_mode_ends_register(make: Callable[..., Harness]) -> None:
   assert h.event() == Pressed(Press(0, ONE_PRESS[0], b"p1", {}, {B: (0,)}))
 
 
+def test_set_mode_rejects_register(make: Callable[..., Harness]) -> None:
+  # Without a registrant, their own prints would count as other people's; and the running session must go on.
+  h = make(FakeReader(), registrant=1)
+  gallery_of(h.event())
+  h.reader.next_call("capture")
+  with pytest.raises(ValueError, match="register"):
+    h.scanner.set_mode(ReaderMode.REGISTER)
+  with pytest.raises(queue.Empty):
+    h.reader.next_call("capture_end", timeout=0.3)
+  assert h.scanner.mode is ReaderMode.REGISTER
+  h.no_event(0.0)
+
+
 def test_register_again_for_the_same_registrant_changes_nothing(make: Callable[..., Harness]) -> None:
   h = make(FakeReader(), registrant=1)
   gallery_of(h.event())

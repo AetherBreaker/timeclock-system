@@ -391,8 +391,12 @@ class Scanner:
   def set_mode(self, mode: ReaderMode) -> None:
     """Switch mode, cancelling the current call; the same mode again is a no-op so it can't cut a capture.
 
-    REGISTER entered here has no registrant, so every gallery print counts as another person's; use `register`.
+    Raises:
+      ValueError: `mode` is REGISTER, which only `register` enters: a session needs its registrant, whose own prints must
+        never count as another person's.
     """
+    if mode is ReaderMode.REGISTER:
+      raise ValueError("REGISTER is entered through Scanner.register")
     self._switch(mode, None)
 
   def register(self, employee_id: int) -> None:
