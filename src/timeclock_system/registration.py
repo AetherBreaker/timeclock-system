@@ -73,7 +73,7 @@ class TooSimilar:
   """Case C: the finger as a whole resembles `other`; an admin allows or rejects it. `chosen`, `flagged` as `Done`.
 
   `also_similar`: the other prints it resembles as a whole, most resembling first. With `other` and `flagged`, every
-  print the registrant's finger may be identified as.
+  print its kept presses resemble.
   """
 
   other: OtherPrint
