@@ -31,6 +31,16 @@
   release is cut, attach the build to the release, and have the Dockerfile download and checksum-check it. The same
   goes for anything else we compile with our own patch. Open: whether PyGObject and pycairo (compiled from source at
   deploy, unpatched, versions locked by uv.lock) go the same way.
+- [ ] **A cancel during reader start-up hangs the scanner** (main-warehouse, 2026-11-05 08:31–08:51, v0.8.2). The
+  identify started right after an 08:30:24 match was cancelled while libfprint was still activating the reader:
+  `fpi_image_device_deactivate` ignores a cancel while the device isn't active yet, so activation finished into
+  `AWAIT_FINGER_ON` and `identify_sync` never returned. Both cancellables read cancelled, so the 60 s re-arm was a no-op
+  (a GCancellable fires once). The screen showed Ready throughout; only the stale heartbeat (healthchecks.io) noticed,
+  and nothing restarts an unhealthy container. A restart cleared it. Evidence (gdb dump of libfprint's device state,
+  thread stacks, logs, screenshot) is in the gitignored `build/incidents/2026-11-05-reader-hang/`. Open: what sent the
+  cancel during activation (business hours keep the mode READY, and `set_gallery` skips an equal gallery), and the fix
+  (e.g. the libfprint patch applies a cancel that arrived during activation once it completes, or the app reopens the
+  reader when a call outlives the re-arm).
 
 ## Deferred features
 
