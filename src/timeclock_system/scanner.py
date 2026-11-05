@@ -399,9 +399,8 @@ class Scanner:
 
     Only an identify is restarted: a registration reads the gallery once as its session begins, and cancelling it would
     lose the user's presses.
-    A new `margin`, or a new order alone (every punch moves its employee first), applies from the next call without a
-    restart: libfprint drops a cancel that lands while it's still starting the reader, and the call then runs until
-    the next press.
+    A new `margin`, or a new order alone (every punch moves its employee first), applies from the next call: neither is
+    worth starting the reader over for.
     """
     gallery = tuple(prints)
     with self._lock:

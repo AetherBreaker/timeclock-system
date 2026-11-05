@@ -1202,9 +1202,9 @@ class KioskController:
           self._screen = Idle()
       elif now - s.touched_at >= IDLE_CLOSE_SECS:
         await self._settle_open(ScanOutcome.TIMED_OUT)
-        # The new employee is already saved, so a timeout on their optional fingerprint step still shows their number.
         if isinstance(s, TooSimilarReview | TooSimilarBlocked):
           s = s.registering  # left undecided: nothing is saved
+        # The new employee is already saved, so a timeout on their optional fingerprint step still shows their number.
         if isinstance(s, NewFingerprint):
           self._screen = EmployeeAdded(s.employee.display_name, s.employee.id, touched_at=now)
         elif isinstance(s, Registering | FingerPick) and s.added is not None:
