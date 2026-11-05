@@ -549,6 +549,13 @@ async def test_press_on_review_screen_ignored(kiosk: Kiosk) -> None:
   await kiosk.ctl.on_scanner_event(Pressed(press(5)))
   assert kiosk.ctl.screen == blocked
   assert blocked.registering.session is not None and len(blocked.registering.session.kept) == PRESSES
+  await kiosk.ctl.ask_admin()
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  review = kiosk.ctl.screen
+  assert isinstance(review, TooSimilarReview)
+  await kiosk.ctl.on_scanner_event(Pressed(press(6)))
+  assert kiosk.ctl.screen == review
+  assert len(blocked.registering.session.kept) == PRESSES
 
 
 # -- too similar to another person's print (case C) and careless prints (case B) ---------------------------------------
