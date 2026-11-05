@@ -189,7 +189,7 @@ class FprintReader:
       variant = GLib.Variant.new_from_bytes(GLib.VariantType("(issbymsmsia{sv}v)"), GLib.Bytes(template[3:]), False)  # noqa: FBT003
       nbis = variant.get_child_value(9).get_variant().unpack()  # (a(aiaiai)): per press, its x, y and theta columns
       return tuple(tuple(zip(x, y, theta, strict=True)) for x, y, theta in nbis[0])
-    except (GLib.Error, IndexError, TypeError, ValueError) as e:
+    except (GLib.Error, LookupError, TypeError, ValueError) as e:
       # Escaping, these would end the scanner thread. R15: the message names only the error, and `from None` drops the
       # chained traceback, whose frames' locals hold detail points.
       raise ReaderFailure(f"undecodable template: {e.message if isinstance(e, GLib.Error) else type(e).__name__}") from None
