@@ -71,7 +71,7 @@ CONFIRM_SECS = 5
 MESSAGE_SECS = 3  # also how long a success or unrecognized reader message lingers
 ADVICE_SECS = 15  # "Fingerprint saved" with a re-register advice under it: long enough to read the advice
 FAILED_MIN_SECS = 1.0  # the failed read's red never shows shorter
-IDLE_ERROR_SECS = 15  # a reader error message on the idle screen
+IDLE_ERROR_SECS = 15  # an error message on the idle screen: the reader's, or why a registration saved nothing
 WAKE_SECS = 30  # R40.2
 DOUBLE_TAP_SECS = 0.5  # two taps this close end a confirmation early
 _MAX_DIGITS = 12
@@ -809,7 +809,7 @@ class KioskController:
       # Back to the actions, still logged in; the next choice needs a new approval.
       return await self._fingerprint_actions(r.employee_id, r.change.name, message)
     if r.added is None or r.admin_id is None:
-      return Idle(message, until=self._mono() + MESSAGE_SECS)
+      return Idle(message, until=self._mono() + IDLE_ERROR_SECS)
     # In the add-employee flow the employee is already saved: back to the optional step, to retry or skip.
     return NewFingerprint(r.admin_id, r.added, self._mono(), message)
 
