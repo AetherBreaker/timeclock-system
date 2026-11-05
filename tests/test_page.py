@@ -556,7 +556,7 @@ async def test_too_similar_review_names_the_print(controller: KioskController, t
     await user.should_see(kind=ui.button, content="Reject")
     await user.should_not_see(kind=ui.button, content=text.CANCEL)
     user.find(kind=ui.button, content="Reject").click()
-    await user.should_see(text.REGISTRATION_FAILED)
+    await user.should_see("This finger wasn't saved. Use another finger.")
     await user.should_see(text.FINGERPRINT_ACTIONS.format(name="Ann Lee"))
 
 
