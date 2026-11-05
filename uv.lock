@@ -1571,10 +1571,10 @@ dev = [
 
 [[package]]
 name = "timeclock-libfprint"
-version = "1.94.100.post2"
+version = "1.94.100.post3"
 source = { registry = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" }
 wheels = [
-    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/5e6/5d63d1ecdce2d/timeclock_libfprint-1.94.100.post2-py3-none-linux_x86_64.whl", hash = "sha256:5e65d63d1ecdce2d5a2ec8046d63d603eae0c3d6f2a30a4c2b3ff7fa1df5c8de" },
+    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/fb3/bc00fb959523a/timeclock_libfprint-1.94.100.post3-py3-none-linux_x86_64.whl", hash = "sha256:fb3bc00fb959523a67284fb0ceb0c1713a388250842dd8c9d9697f03984de51a" },
 ]
 
 [[package]]
