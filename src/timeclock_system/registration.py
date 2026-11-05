@@ -143,19 +143,27 @@ class Session:
     Resemblance pairs a kept press with another person's press scoring at least the resemblance bar. Per other print:
     when it mostly fails its own checks, or only its failing (stray) presses are resembled, it's flagged (case B), so no
     careless existing print can fail the registrant's presses. Else the pairs on its stray presses are ignored and the
-    rest decide: one kept press alone is replaced (case A), several mean the finger resembles it (case C).
+    rest decide: one kept press alone is replaced (case A). Of several, each agreeing with fewer than
+    `registration_agreement_needed` of the kept presses that don't resemble it is the registrant's own stray press,
+    replaced as in A; with none, or with every kept press resembling it, the finger resembles it (case C).
     """
     s = self._settings
     self._kept.append(press)
     kept = self._kept
-    agreement = {p.press_id: [q.vs_session.get(p.press_id, p.vs_session.get(q.press_id, 0)) for q in kept if q is not p] for p in kept}
+    # agreement[i][j]: press i's with press j, by press_id.
+    agreement = {
+      p.press_id: {q.press_id: q.vs_session.get(p.press_id, p.vs_session.get(q.press_id, 0)) for q in kept if q is not p} for p in kept
+    }
     verdict: Verdict = NextPress(None)
     outcome = "waiting for more presses"
     if len(kept) >= PRESSES:
       failures: dict[int, Failure] = {}
       for p in kept:
         failure = press_failure(p.minutiae, s)
-        if failure is None and sum(a >= s.registration_agreement_bar for a in agreement[p.press_id]) < s.registration_agreement_needed:
+        if (
+          failure is None
+          and sum(a >= s.registration_agreement_bar for a in agreement[p.press_id].values()) < s.registration_agreement_needed
+        ):
           failure = Failure.DISAGREES
         if failure is not None:
           failures[p.press_id] = failure
@@ -177,11 +185,21 @@ class Session:
             flagged.append(other)
           elif len(new := {i for i, _ in healthy}) == 1:
             failures[new.pop()] = Failure.DISAGREES  # case A: the message for a press whose own checks pass
+          elif len(new) < len(kept) and (
+            strays := [
+              i
+              for i in new
+              if sum(a >= s.registration_agreement_bar for j, a in agreement[i].items() if j not in new)
+              < s.registration_agreement_needed
+            ]
+          ):
+            failures.update(dict.fromkeys(strays, Failure.DISAGREES))  # the registrant's own stray presses
           else:
             similar.append((max(score for _, score in healthy), other))
       chosen = tuple(p.press_id for p in kept)
       if failures:
-        worst = min(failures, key=lambda i: (list(Failure).index(failures[i]), max(agreement[i], default=0)))
+        # Lowest agreement: the best score, then the next best (two strays agreeing only with each other tie on the best).
+        worst = min(failures, key=lambda i: (list(Failure).index(failures[i]), sorted(agreement[i].values(), reverse=True)))
         if self._replaced >= s.registration_extra_presses:
           verdict, outcome = GaveUp(), f"gave up, press {worst} {failures[worst]}"
         else:
@@ -203,7 +221,7 @@ class Session:
       press.press_id,
       len(press.minutiae),
       math.hypot(x - WINDOW[0] / 2, y - WINDOW[1] / 2),
-      max(agreement[press.press_id], default=None),
+      max(agreement[press.press_id].values(), default=None),
       best_other,
       outcome,
     )
