@@ -355,6 +355,21 @@ async def test_a_held_backspace_keeps_deleting(controller: KioskController, tmp_
     assert shown.text == ""  # pyright: ignore[reportAttributeAccessIssue]  # one delete would leave "12"
 
 
+async def test_a_cleared_pin_error_keeps_its_line(controller: KioskController, tmp_path: Path) -> None:
+  # The next key clears the error; if its line went with it, the keys would shift under the finger typing.
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.use_pin()
+    for typed in ("99", "0000"):  # no such username
+      for d in typed:
+        await controller.digit(d)
+      await controller.enter()
+    await user.should_see(text.WRONG_PIN)
+    await controller.digit("1")
+    await user.should_not_see(text.WRONG_PIN)
+    assert shown_text(user, "pin-error") == ""
+
+
 async def test_the_version_shows_in_the_corner(controller: KioskController, tmp_path: Path) -> None:
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")

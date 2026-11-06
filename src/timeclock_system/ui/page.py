@@ -537,8 +537,8 @@ class _KioskPage:
   def _pin_pad(self, title: str, shown: str, error: str | None) -> None:
     ui.label(title).classes("sft-title")
     ui.label(shown).classes("text-4xl h-12").mark("pin-shown")
-    if error:
-      ui.label(error).classes("sft-error")
+    # Always drawn, a line high: clearing the error at the next key mustn't shift the keys under a finger.
+    ui.label(error or "").classes("sft-error").style("min-height: 1.5em").mark("pin-error")
     with ui.grid(columns=3).classes("gap-2"):
       for key in _PAD:
         match key:
