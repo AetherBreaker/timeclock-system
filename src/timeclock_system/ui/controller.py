@@ -289,12 +289,14 @@ class SimilarReview:
 class ForceSave:
   """An admin's save of a registration's `chosen` best presses past every check; an approval's purpose, always asked.
 
-  `resembled`: as `SimilarReview.resembled`, for every press made.
+  `resembled`: as `SimilarReview.resembled`, for every press made. The presses merge while the admin approves, so the
+  approval saves at once; `template` arrives with `Merged`, left out of equality so its arrival doesn't redraw the page.
   """
 
   registering: Registering
   chosen: tuple[Press, ...]
   resembled: frozenset[UUID]
+  template: bytes | None = field(default=None, repr=False, compare=False)  # R15
 
 
 @dataclass(frozen=True)
@@ -658,7 +660,7 @@ class KioskController:
   async def _approved(self, change: FingerChange | SimilarReview | ForceSave, approval: Approval) -> Screen:
     """Run an approved change: a removal at once, a registration through its touches; an add first asks the finger.
 
-    A too-similar finger's review goes to the approving admin; a forced save merges, then saves with them as approver.
+    A too-similar finger's review goes to the approving admin; a forced save is saved with them as approver.
     """
     now = self._mono()
     if isinstance(change, SimilarReview):
@@ -666,8 +668,9 @@ class KioskController:
     if isinstance(change, ForceSave):
       r, chosen = change.registering, tuple(p.press_id for p in change.chosen)
       LOGGER.info("Registration saved past its checks by an admin: presses %s of %d", chosen, r.kept + r.replaced)
-      self._reader.merge([p.probe for p in change.chosen])
-      return replace(r, verdict=Done(chosen, ()), approval=approval, touched_at=now)
+      if change.template is not None:
+        return await self._saved(r, change.template, approval, ())
+      return replace(r, verdict=Done(chosen, ()), approval=approval, touched_at=now)  # an approval faster than the merge
     if change.finger is None:
       on_file = await self._clock.prints_by_finger(change.employee_id)
       return FingerPick(change.employee_id, "add", tuple(f for f in Finger if f not in on_file), now, approval=approval)
@@ -716,6 +719,8 @@ class KioskController:
             await self._on_scanned_match(s, ev, scan_id)
         case RegisterGallery() | Pressed() | PressRetry() | Merged() | EnrollFailed() if isinstance(s, Registering | TooSimilarReview):
           message = await self._on_register(s, ev)
+        case Merged(template=template):
+          self._on_forced_merge(s, template)
         case _:
           pass  # every (screen, event) pair the table doesn't list is ignored (R7f)
       if message is not None and isinstance(s, _FINGER_SCREENS):
@@ -729,6 +734,13 @@ class KioskController:
     if isinstance(ev, Matched):
       await self._settle_open(ScanOutcome.RESCANNED)
     return await self._clock.record_scan(ev.scan)
+
+  def _on_forced_merge(self, s: Screen, template: bytes) -> None:
+    # Split out of on_scanner_event for C901: a forced save's merge lands on its approval prompt or the admin's PIN pad.
+    if isinstance(s, ApprovalPrompt) and isinstance(s.change, ForceSave):
+      self._screen = replace(s, change=replace(s.change, template=template))
+    elif isinstance(s, PinEntry) and isinstance(s.purpose, ForceSave):
+      self._screen = replace(s, purpose=replace(s.purpose, template=template))
 
   async def _on_scanned_match(self, s: Screen, ev: Matched, scan_id: UUID) -> None:
     # Split out of on_scanner_event for C901. A match opens its scan before `_on_match`, so a punch made inside counts for it.
@@ -1104,7 +1116,9 @@ class KioskController:
     async with self._transition():
       s = self._screen
       if isinstance(s, Registering) and s.session is not None and s.verdict is None and s.kept + s.replaced >= PRESSES:
-        self._screen = ApprovalPrompt(ForceSave(s, s.session.best(), s.session.resembled), touched_at=self._mono())
+        force = ForceSave(s, s.session.best(), s.session.resembled)
+        self._reader.merge([p.probe for p in force.chosen])
+        self._screen = ApprovalPrompt(force, touched_at=self._mono())
 
   async def gear(self) -> None:
     """The gear, on the idle screen or a punch menu (which it leaves, as Cancel would): its menu."""
