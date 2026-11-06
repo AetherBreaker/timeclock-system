@@ -31,6 +31,7 @@ from timeclock_system.ui.controller import (
   EmployeeAdded,
   FingerPick,
   FingerprintActions,
+  ForceSave,
   GearMenu,
   Idle,
   Menu,
@@ -405,7 +406,10 @@ class _KioskPage:
         ui.label(text.REGISTERING.format(finger=finger, done=done, total=total)).classes("sft-title")
         if s.advice:
           ui.label(s.advice).classes("sft-error text-3xl").mark("register-advice")
-        self._button(text.CANCEL, self._controller.cancel)
+        with ui.row():
+          if done >= PRESSES and s.verdict is None:  # as `KioskController.force_save`
+            self._button(text.FORCE_SAVE, self._controller.force_save)
+          self._button(text.CANCEL, self._controller.cancel)
       case TooSimilarReview():
         finger = text.FINGER_LABELS[s.verdict.other.finger].lower()
         ui.label(text.TOO_SIMILAR_REVIEW.format(name=s.name, finger=finger)).classes("sft-title")
@@ -437,6 +441,8 @@ class _KioskPage:
         c = s.change
         if isinstance(c, SimilarReview):
           title = text.APPROVE_SIMILAR  # the employee is still there: no names until the admin is
+        elif isinstance(c, ForceSave):
+          title = text.APPROVE_FORCE
         elif c.finger is None:
           title = text.APPROVE_ADD.format(name=c.name)
         else:
