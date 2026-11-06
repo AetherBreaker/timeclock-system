@@ -190,7 +190,7 @@ async def test_a_punch_stamped_later_than_now_waits_for_its_time(env: Env) -> No
   assert PunchKind.CLOCK_OUT in info.valid_next
   outcome = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
   assert outcome.punch.at == T
-  assert outcome.hours_this_week == timedelta(hours=8)
+  assert outcome.hours.week == timedelta(hours=8)
 
 
 async def test_a_punch_stamped_later_counts_once_its_time_passes(env: Env) -> None:
@@ -312,8 +312,8 @@ async def test_hours_this_week_leaves_out_lunch(env: Env) -> None:
     env.store.insert_punch(punch_at(1, kind, start + timedelta(minutes=minutes)), origin="db")
   env.now = start + timedelta(hours=8)
   outcome = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
-  assert outcome.hours_this_week == timedelta(hours=7, minutes=30)
-  assert (await env.clock.menu_info(1)).hours_this_week == timedelta(hours=7, minutes=30)
+  assert outcome.hours.week == timedelta(hours=7, minutes=30)
+  assert (await env.clock.menu_info(1)).hours.week == timedelta(hours=7, minutes=30)
 
 
 async def test_gallery_orders_by_latest_punch_here(env: Env) -> None:
@@ -379,6 +379,8 @@ async def test_switched_off_lunches_and_breaks_hide_their_starts(env: Env) -> No
   assert PunchKind.LUNCH_START not in info.valid_next
   assert PunchKind.BREAK_START not in info.valid_next
   assert PunchKind.CLOCK_OUT in info.valid_next
+  assert info.hours.breaks is None  # switched off, none taken: the confirmation and menu drop the lines
+  assert info.hours.lunch is None
   with pytest.raises(PunchRefused):
     await env.clock.record_punch(1, PunchKind.LUNCH_START)
 
@@ -388,7 +390,9 @@ async def test_a_lunch_under_way_can_still_end_after_the_switch_goes_off(env: En
   env.store.insert_punch(punch_at(1, PunchKind.LUNCH_START, T - timedelta(hours=1)), origin="local")
   env.store.set_settings(Settings(lunches_enabled=False))
   env.clock.notify_changed(["settings"])
-  assert PunchKind.LUNCH_END in (await env.clock.menu_info(1)).valid_next
+  info = await env.clock.menu_info(1)
+  assert PunchKind.LUNCH_END in info.valid_next
+  assert info.hours.lunch == timedelta(hours=1)  # taken today, so still shown
 
 
 async def test_register_fingerprint_stores_local_unsynced(env: Env) -> None:
@@ -658,9 +662,37 @@ async def test_hours_this_week_count_paid_breaks(env: Env) -> None:
     env.store.insert_punch(punch_at(1, kind, start + timedelta(minutes=minutes)), origin="db")
   env.now = start + timedelta(hours=4)
   # 4 h on the clock with a 40-minute break: 3 h 20 worked, 30 minutes paid, 10 unpaid.
-  assert (await env.clock.menu_info(1)).hours_this_week == timedelta(hours=3, minutes=50)
+  assert (await env.clock.menu_info(1)).hours.week == timedelta(hours=3, minutes=50)
   outcome = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
-  assert outcome.hours_this_week == timedelta(hours=3, minutes=50)
+  assert outcome.hours.week == timedelta(hours=3, minutes=50)
+
+
+async def test_hours_summary_counts_the_calendar_day(env: Env) -> None:
+  monday_night = datetime(2026, 10, 26, 22, tzinfo=NY)
+  tuesday = datetime(2026, 10, 27, 8, tzinfo=NY)
+  for kind, at in (
+    (PunchKind.CLOCK_IN, monday_night),
+    (PunchKind.BREAK_START, monday_night + timedelta(hours=1)),  # yesterday's break, not today's
+    (PunchKind.BREAK_END, monday_night + timedelta(hours=1, minutes=20)),
+    (PunchKind.CLOCK_OUT, monday_night + timedelta(hours=4)),  # 2 h of it after midnight
+    (PunchKind.CLOCK_IN, tuesday),
+    (PunchKind.BREAK_START, tuesday + timedelta(hours=2)),
+    (PunchKind.BREAK_END, tuesday + timedelta(hours=2, minutes=15)),
+    (PunchKind.LUNCH_START, tuesday + timedelta(hours=4)),
+    (PunchKind.LUNCH_END, tuesday + timedelta(hours=4, minutes=30)),
+    (PunchKind.BREAK_START, tuesday + timedelta(hours=6)),
+  ):
+    env.store.insert_punch(punch_at(1, kind, at), origin="db")
+  env.now = tuesday + timedelta(hours=6, minutes=10)
+  hours = (await env.clock.menu_info(1)).hours
+  # Today: 2 h after midnight, then 6 h 10 on the clock less a 30-minute lunch; both breaks fit the paid allowance.
+  assert hours.today == timedelta(hours=7, minutes=40)
+  assert hours.week == timedelta(hours=9, minutes=40)
+  assert (hours.breaks, hours.last_break, hours.on_break) == (timedelta(minutes=25), timedelta(minutes=10), True)
+  assert hours.lunch == timedelta(minutes=30)
+  env.now += timedelta(minutes=2)
+  ended = (await env.clock.record_punch(1, PunchKind.BREAK_END)).hours
+  assert (ended.breaks, ended.last_break, ended.on_break) == (timedelta(minutes=27), timedelta(minutes=12), False)
 
 
 async def test_a_punch_reaching_the_weekly_threshold_fires_the_hook(env: Env) -> None:
@@ -673,7 +705,7 @@ async def test_a_punch_reaching_the_weekly_threshold_fires_the_hook(env: Env) ->
   assert under.firings == ()
   env.now += timedelta(hours=3)
   over = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
-  assert over.hours_this_week == timedelta(hours=41)
+  assert over.hours.week == timedelta(hours=41)
   assert [(f.hook.alert, f.limit) for f in over.firings] == [(WEEKLY_HOURS, timedelta(hours=40))]
 
 

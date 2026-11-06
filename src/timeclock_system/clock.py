@@ -12,7 +12,7 @@ import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING, Literal, cast
 from uuid import uuid4
 
@@ -56,6 +56,7 @@ if TYPE_CHECKING:
 
   # Third party imports
   from timeclock_schema.enums import ScanOutcome
+  from timeclock_schema.models import PunchCorrection
 
   # First party imports
   from timeclock_system.scanner import ScanReport
@@ -132,6 +133,27 @@ class NewEmployee:
 
 
 @dataclass(frozen=True)
+class HoursSummary:
+  """The hours the punch menu and the confirmation show (§6.4).
+
+  Today is the local calendar day. Its breaks and lunches are those that started today, at full length; one under way
+  runs to now.
+  """
+
+  week: timedelta
+  """Worked plus paid break time, this week."""
+  today: timedelta
+  """Worked plus paid break time, today."""
+  breaks: timedelta | None
+  """All of today's break time, paid or not; None while breaks are switched off and none was taken today."""
+  last_break: timedelta
+  """Today's latest break (the one under way when `on_break`); zero before the first."""
+  on_break: bool
+  lunch: timedelta | None
+  """All of today's lunch time; None as for `breaks`."""
+
+
+@dataclass(frozen=True)
 class MenuInfo:
   """What the punch menu shows for one employee."""
 
@@ -141,8 +163,7 @@ class MenuInfo:
   since: datetime | None
   """The open shift's clock-in while working; the last applied event on a break or lunch; None when off."""
   valid_next: tuple[PunchKind, ...]
-  hours_this_week: timedelta
-  """Worked plus paid break time (§6.4)."""
+  hours: HoursSummary
   is_admin: bool
 
 
@@ -152,7 +173,7 @@ class PunchOutcome:
 
   punch: Punch
   warnings: tuple[str, ...]
-  hours_this_week: timedelta
+  hours: HoursSummary
   firings: tuple[Firing, ...]
 
 
@@ -387,14 +408,36 @@ class Clock:
     else:
       since = timeline.last_event_at
     s = self._settings
-    start, end = week_bounds(now, self._tz)
-    totals = total_hours(punches, corrections, settings=s, tz=self._tz, start=start, end=end, now=now)
     # A switched-off lunch or break hides only its start: someone already on one can still end it.
     off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
     valid = tuple(k for k in timeline.valid_next if k not in off)
-    hours = totals.worked + totals.paid_break
+    hours = self._hours_summary(punches, corrections, now)
     is_admin = e.active and e.role is EmployeeRole.ADMIN
     return MenuInfo(employee_id, e.display_name, timeline.state, since, valid, hours, is_admin=is_admin)
+
+  def _hours_summary(self, punches: list[Punch], corrections: list[PunchCorrection], now: datetime) -> HoursSummary:
+    """Total an employee's punches for the punch menu and the confirmation; `total_hours` keeps every pay rule."""
+    s, tz = self._settings, self._tz
+    week_start, week_end = week_bounds(now, tz)
+    week = total_hours(punches, corrections, settings=s, tz=tz, start=week_start, end=week_end, now=now)
+    local = now.astimezone(tz).date()
+    day_start = datetime.combine(local, time(0), tzinfo=tz)
+    day_end = datetime.combine(local + timedelta(days=1), time(0), tzinfo=tz)
+    day = total_hours(punches, corrections, settings=s, tz=tz, start=day_start, end=day_end, now=now)
+    timeline = build_timeline(punches, corrections, as_of=now)
+    breaks: list[timedelta] = []
+    lunches: list[timedelta] = []
+    for shift in timeline.shifts:
+      for spans, lengths in ((shift.breaks, breaks), (shift.lunches, lunches)):
+        lengths.extend((now if i.end is None else i.end) - i.start for i in spans if i.start >= day_start)
+    return HoursSummary(
+      week=week.worked + week.paid_break,
+      today=day.worked + day.paid_break,
+      breaks=sum(breaks, timedelta()) if s.breaks_enabled or breaks else None,
+      last_break=breaks[-1] if breaks else timedelta(),
+      on_break=timeline.state is EmployeeState.ON_BREAK,
+      lunch=sum(lunches, timedelta()) if s.lunches_enabled or lunches else None,
+    )
 
   async def record_punch(
     self, employee_id: int, kind: PunchKind, *, override: OverrideGrant | None = None, pin_login: bool = False
@@ -459,12 +502,10 @@ class Clock:
       for p in written:
         cb(p)
     self.notify_changed({"punches"})
-    s, punches = self._settings, [*punches, *written]
-    start, end = week_bounds(now, self._tz)
-    totals = total_hours(punches, corrections, settings=s, tz=self._tz, start=start, end=end, now=now)
+    punches = [*punches, *written]
     # Alerts only inform; nothing here can refuse the punch (§2).
-    firings = fired_hooks(AlertContext(employee_id, punches, corrections, s, self._tz, now))
-    return PunchOutcome(punch, warnings, totals.worked + totals.paid_break, firings)
+    firings = fired_hooks(AlertContext(employee_id, punches, corrections, self._settings, self._tz, now))
+    return PunchOutcome(punch, warnings, self._hours_summary(punches, corrections, now), firings)
 
   async def record_scan(self, scan: ScanReport) -> UUID | None:
     """Store a scan in the log; a matched one stays open until `settle_scan`. Never raises: the log must not stop a punch.
