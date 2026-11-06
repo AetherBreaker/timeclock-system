@@ -1,7 +1,7 @@
 # Standard library imports
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, cast
@@ -17,7 +17,7 @@ from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, Fingerpri
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Punch, Settings
 
 # First party imports
-from timeclock_system.clock import Approval, Clock, NewEmployee, OverrideGrant
+from timeclock_system.clock import Approval, Clock, HoursSummary, NewEmployee, OverrideGrant
 from timeclock_system.registration import PRESSES, WINDOW, Done, Failure, OtherPrint, Press, TooSimilar
 from timeclock_system.scanner import (
   EnrollFailed,
@@ -254,15 +254,34 @@ def test_format_clock_time() -> None:
   assert text.format_clock_time(datetime(2026, 10, 27, 17, 30, tzinfo=UTC), NY) == "1:30 PM"
 
 
-def test_format_hours_and_db_status() -> None:
-  assert text.format_hours(timedelta(hours=7, minutes=30)) == "7.50 h"
-  # Truncated, never rounded, and exact: 7 h 36 min is 7.6 h, which a float division puts just below 7.60.
-  assert text.format_hours(timedelta(hours=7, minutes=36)) == "7.60 h"
-  assert text.format_hours(timedelta(hours=7, minutes=7, seconds=30)) == "7.12 h"
-  assert text.format_hours(timedelta(hours=7, minutes=59, seconds=59)) == "7.99 h"
-  assert text.format_hours(timedelta(seconds=35)) == "0.00 h"
+def test_format_duration_and_db_status() -> None:
+  assert text.format_duration(timedelta(hours=1, minutes=5)) == "1 hr 5 min"
+  assert text.format_duration(timedelta(hours=8)) == "8 hr"
+  assert text.format_duration(timedelta(minutes=45, seconds=59)) == "45 min"  # truncated, never rounded
+  assert text.format_duration(timedelta(hours=32, minutes=30)) == "32 hr 30 min"
+  assert text.format_duration(timedelta(seconds=35)) == "0 min"
   assert text.format_db_status(DbStatus(connected=True, last_contact=START), NY) == "Database connected · last contact 8:02 AM"
   assert text.format_db_status(DbStatus(connected=False, last_contact=None), NY) == "Database offline · last contact never"
+
+
+def test_hours_lines() -> None:
+  hours = HoursSummary(
+    week=timedelta(hours=32, minutes=30),
+    today=timedelta(hours=7, minutes=5),
+    breaks=timedelta(minutes=25),
+    last_break=timedelta(minutes=10),
+    on_break=False,
+    lunch=timedelta(),
+  )
+  assert text.hours_lines(hours) == (
+    ("This week", "32 hr 30 min"),
+    ("Today", "7 hr 5 min"),
+    ("Breaks", "25 min"),
+    ("Last break", "10 min"),
+    ("Lunch", "0 min"),
+  )
+  assert text.hours_lines(replace(hours, on_break=True))[3] == ("Current break", "10 min")
+  assert [label for label, _ in text.hours_lines(replace(hours, breaks=None, lunch=None))] == ["This week", "Today"]
 
 
 async def test_match_opens_the_menu(kiosk: Kiosk) -> None:
@@ -281,7 +300,7 @@ async def test_punch_within_30s_records_and_confirms(kiosk: Kiosk) -> None:
   screen = kiosk.ctl.screen
   assert isinstance(screen, Confirmation)
   assert screen.text == "Clocked in at 8:02 AM"
-  assert screen.hours == "0.00 h"
+  assert screen.hours == tuple((label, "0 min") for label in ("This week", "Today", "Breaks", "Last break", "Lunch"))
   assert [p.kind for p in kiosk.store.punches(ANN)] == [PunchKind.CLOCK_IN]
   kiosk.t.advance(5.1)
   await kiosk.ctl.tick()

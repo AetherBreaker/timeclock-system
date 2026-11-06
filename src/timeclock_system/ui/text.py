@@ -23,9 +23,17 @@ if TYPE_CHECKING:
   from timeclock_schema.alerts import Firing
 
   # First party imports
+  from timeclock_system.clock import HoursSummary
   from timeclock_system.sync import DbStatus
 
 IDLE_READY: Final = "Place your finger on the reader"
+# The hours table on the punch menu and the confirmation (`hours_lines`).
+HOURS_WEEK: Final = "This week"
+HOURS_TODAY: Final = "Today"
+HOURS_BREAKS: Final = "Breaks"
+HOURS_LAST_BREAK: Final = "Last break"
+HOURS_THIS_BREAK: Final = "Current break"
+HOURS_LUNCH: Final = "Lunch"
 IDLE_ASLEEP: Final = "Tap to scan"
 READER_ASLEEP: Final = "Tap to wake the reader"
 NOT_RECOGNIZED: Final = "Not recognized, try again"
@@ -197,9 +205,22 @@ def format_clock_time(at: datetime, tz: ZoneInfo) -> str:
   return f"{local.hour % 12 or 12}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"  # noqa: PLR2004
 
 
-def format_hours(td: timedelta) -> str:
-  """Hours worked as `"7.50 h"`, truncated to the hundredth (owner's rule) and exact: integer hundredths, no float."""
-  return f"{Decimal(td // timedelta(seconds=36)).scaleb(-2):.2f} h"
+def format_duration(td: timedelta) -> str:
+  """A duration as `"1 hr 5 min"`, `"8 hr"` or `"0 min"`: whole minutes, truncated (the owner's rule for hours)."""
+  hours, minutes = divmod(max(td, timedelta()) // timedelta(minutes=1), 60)
+  if not hours:
+    return f"{minutes} min"
+  return f"{hours} hr {minutes} min" if minutes else f"{hours} hr"
+
+
+def hours_lines(hours: HoursSummary) -> tuple[tuple[str, str], ...]:
+  """The punch menu's and the confirmation's hours, as (label, duration) rows; a switched-off break or lunch drops out."""
+  rows = [(HOURS_WEEK, hours.week), (HOURS_TODAY, hours.today)]
+  if hours.breaks is not None:
+    rows += [(HOURS_BREAKS, hours.breaks), (HOURS_THIS_BREAK if hours.on_break else HOURS_LAST_BREAK, hours.last_break)]
+  if hours.lunch is not None:
+    rows.append((HOURS_LUNCH, hours.lunch))
+  return tuple((label, format_duration(td)) for label, td in rows)
 
 
 def format_db_status(status: DbStatus, tz: ZoneInfo) -> str:

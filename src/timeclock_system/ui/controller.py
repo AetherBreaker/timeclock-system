@@ -151,7 +151,7 @@ class Confirmation:
   """A recorded punch, shown until `until`, with any rule warnings and alert notices (§6.11)."""
 
   text: str
-  hours: str
+  hours: tuple[tuple[str, str], ...]  # text.hours_lines
   warnings: tuple[str, ...]
   until: float
   notices: tuple[str, ...] = ()
@@ -641,7 +641,7 @@ class KioskController:
     notices = tuple(text.alert_notice(f) for f in outcome.firings if CONFIRMATION_NOTICE in f.hook.actions)
     return Confirmation(
       text.CONFIRMATIONS[kind].format(time=text.format_clock_time(outcome.punch.at, self._tz)),
-      text.format_hours(outcome.hours_this_week),
+      text.hours_lines(outcome.hours),
       outcome.warnings,
       until=self._mono() + CONFIRM_SECS,
       notices=notices,

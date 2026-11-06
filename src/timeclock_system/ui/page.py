@@ -334,7 +334,10 @@ class _KioskPage:
     ui.label(info.name).classes("sft-title")
     state = text.STATE_LABELS[info.state]
     ui.label(state.format(time=text.format_clock_time(info.since, self._tz)) if info.since else state)
-    ui.label(text.format_hours(info.hours_this_week))
+    with ui.grid(columns=2).classes("gap-x-8 gap-y-0").mark("hours"):
+      for label, value in text.hours_lines(info.hours):
+        ui.label(label)
+        ui.label(value).classes("text-right")
     with ui.row().classes("gap-4"):
       for kind in info.valid_next:
         self._button(text.PUNCH_LABELS[kind], lambda kind=kind: self._controller.punch(kind), "sft-punch")
@@ -528,7 +531,10 @@ class _KioskPage:
     layer = ui.column().classes("fixed inset-0 z-10 items-center gap-6 pt-8").mark("confirm-tap")
     with layer.on("click", lambda: self._guarded(self._controller.tap)):
       ui.label(s.text).classes("sft-title")
-      ui.label(s.hours)
+      with ui.grid(columns=2).classes("gap-x-8 gap-y-0").mark("hours"):
+        for label, value in s.hours:
+          ui.label(label)
+          ui.label(value).classes("text-right")
       for warning in s.warnings:
         ui.label(warning).classes("sft-error")
       for notice in s.notices:
