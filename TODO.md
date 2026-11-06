@@ -25,6 +25,13 @@
   Fingerprints screen takes only a PIN; a finger does nothing there. It should run on the same system as the other PIN
   pads, which always accept a print in place of the PIN. The controller already routes a finger on that pad
   (`_on_pad_match`, the `FingerprintLogin` case), so start by finding out why it doesn't take effect.
+- [ ] **Registration reads its presses in one reader session** (owner, 2026-11-06). Each press is its own
+  `identify_sync([])`: the uru4000 powers up, captures, waits for the lift and powers down, then the 1.0 s
+  `finger_off_pause` runs. `enroll_sync` keeps the reader on, re-arms on the lift it detects, and reports each press on
+  its own through its progress callback (the "last scanned print", built as identify's probe), but stops after 5 good
+  presses (`IMG_ENROLL_STAGES`; only a libfprint patch changes it). Options: enroll in rounds of 5, another round for
+  replaced presses, cancelled once the registration ends (recommended: no libfprint release); or patch libfprint for one
+  session until cancelled, which saves only a restart per 5 presses over rounds. Either needs a dev round.
 
 ## Deferred features
 
