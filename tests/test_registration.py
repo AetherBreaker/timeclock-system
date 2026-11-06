@@ -94,26 +94,54 @@ def test_disagreeing_press_replaced():
   assert session.add(press(5, vs_session={4: LOW})) == Done(chosen=(0, 1, 2, 3, 5), flagged=())
 
 
+def test_edge_touch_is_off_centre_before_short_of_detail():
+  edge = minutiae(S.registration_min_detail_points - 1, cx=5)
+  presses = [press(i, points=edge if i == ODD else None) for i in range(PRESSES)]
+  assert run(Session((), S), presses)[-1] == NextPress(Failure.OFF_CENTRE)
+
+
 def test_worst_replaced_first():
   session = Session((), S)
   presses = [
     press(0),
     press(1, points=minutiae(S.registration_min_detail_points - 1)),
-    press(2),
+    press(2, points=minutiae(cx=5)),
     press(3, vs_session=dict.fromkeys(range(3), LOW)),
     press(4, vs_session={3: LOW}),
   ]
-  assert run(session, presses)[-1] == NextPress(Failure.TOO_FEW)
-  assert session.add(press(5, vs_session={3: LOW})) == NextPress(Failure.DISAGREES)
-  assert session.add(press(6, vs_session={3: LOW})) == Done(chosen=(0, 2, 4, 5, 6), flagged=())
+  assert run(session, presses)[-1] == NextPress(Failure.OFF_CENTRE)
+  assert session.add(press(5, vs_session={3: LOW})) == NextPress(Failure.TOO_FEW)
+  assert session.add(press(6, vs_session={3: LOW})) == NextPress(Failure.DISAGREES)
+  assert session.add(press(7, vs_session={3: LOW})) == Done(chosen=(0, 4, 5, 6, 7), flagged=())
 
 
-def test_gives_up_after_the_extra_presses():
-  light = minutiae(S.registration_min_detail_points - 1)
-  total = PRESSES + S.registration_extra_presses
-  verdicts = run(Session((), S), [press(i, points=light if i >= PRESSES - 1 else None) for i in range(total)])
-  assert verdicts[PRESSES - 1 : -1] == [NextPress(Failure.TOO_FEW)] * S.registration_extra_presses
-  assert verdicts[-1] == GaveUp()
+def test_press_check_failures_never_give_up():
+  free = [
+    (minutiae(S.registration_min_detail_points - 1), Failure.TOO_FEW),
+    (minutiae(cx=5), Failure.OFF_CENTRE),
+    (minutiae(S.registration_max_detail_points + 1), Failure.TOO_MANY),
+  ]
+  n = len(free) * (S.registration_extra_presses + 1)
+  session = Session((), S)
+  run(session, [press(i) for i in range(PRESSES - 1)])
+  verdicts = run(session, [press(PRESSES - 1 + k, points=free[k % len(free)][0]) for k in range(n)])
+  assert verdicts == [NextPress(free[k % len(free)][1]) for k in range(n)]
+  assert session.add(press(PRESSES - 1 + n)) == Done(chosen=(0, 1, 2, 3, PRESSES - 1 + n), flagged=())
+  assert session.replaced == n
+
+
+def test_gives_up_after_the_disagreeing_presses():
+  limit, light = S.registration_extra_presses, minutiae(S.registration_min_detail_points - 1)
+  session = Session((), S)
+  run(session, [press(i) for i in range(PRESSES - 1)])
+  ids = iter(range(PRESSES - 1, PRESSES + 2 * limit))
+  verdicts: list[NextPress | TooSimilar | Done | GaveUp] = []
+  for k in range(limit + 1):
+    i = next(ids)
+    verdicts.append(session.add(press(i, vs_session=dict.fromkeys(range(i), LOW))))
+    if k < limit:
+      verdicts.append(session.add(press(next(ids), points=light)))  # free: it doesn't count toward giving up
+  assert verdicts == [NextPress(Failure.DISAGREES), NextPress(Failure.TOO_FEW)] * limit + [GaveUp()]
 
 
 def test_single_press_resemblance_is_a():
