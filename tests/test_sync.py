@@ -611,7 +611,7 @@ async def test_catch_up_mirrors_the_registration_bars(pg: Pg, rig: Callable[[], 
     pg,
     "UPDATE config.settings SET registration_min_detail_points = 11, registration_max_detail_points = 99,"
     " registration_centre_tolerance = 77, registration_agreement_bar = 55, registration_agreement_needed = 2,"
-    " registration_resemblance_bar = 33, registration_extra_presses = 3",
+    " registration_resemblance_bar = 33, registration_disagreement_retries = 3",
   )
   r = await rig()
   s = r.clock.settings()
@@ -622,5 +622,5 @@ async def test_catch_up_mirrors_the_registration_bars(pg: Pg, rig: Callable[[], 
     s.registration_agreement_bar,
     s.registration_agreement_needed,
     s.registration_resemblance_bar,
-    s.registration_extra_presses,
+    s.registration_disagreement_retries,
   ) == (11, 99, 77, 55, 2, 33, 3)

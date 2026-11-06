@@ -141,7 +141,7 @@ class Session:
     self._settings = settings
     self._kept: list[Press] = []
     self._replaced = 0
-    self._disagreed = 0  # the replaced presses that count toward `registration_extra_presses`
+    self._disagreed = 0  # the replaced presses that count toward `registration_disagreement_retries`
 
   @property
   def kept(self) -> tuple[Press, ...]:
@@ -217,7 +217,7 @@ class Session:
         # Lowest agreement: the best score, then the next best (two strays agreeing only with each other tie on the best).
         worst = min(failures, key=lambda i: (list(Failure).index(failures[i]), sorted(agreement[i].values(), reverse=True)))
         failure = failures[worst]  # DISAGREES only once no press fails its own checks, which are replaced first and free
-        if failure is Failure.DISAGREES and self._disagreed >= s.registration_extra_presses:
+        if failure is Failure.DISAGREES and self._disagreed >= s.registration_disagreement_retries:
           verdict, outcome = GaveUp(), f"gave up, press {worst} {failure}"
         else:
           self._replaced += 1

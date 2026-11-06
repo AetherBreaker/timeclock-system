@@ -47,7 +47,7 @@ _SELECT: Final[dict[str, LiteralString]] = {
     "SELECT auto_clock_out_enabled, auto_clock_out_run_time, auto_clock_out_stamp_time, lunches_enabled, breaks_enabled, "
     "paid_break_minutes, weekly_hours_alert, save_scan_images, fingerprint_match_margin, registration_min_detail_points, "
     "registration_max_detail_points, registration_centre_tolerance, registration_agreement_bar, "
-    "registration_agreement_needed, registration_resemblance_bar, registration_extra_presses FROM config.settings"
+    "registration_agreement_needed, registration_resemblance_bar, registration_disagreement_retries FROM config.settings"
   ),
   "punches": "SELECT id, employee_id, kind, at, instance_id, automatic, received_at, db_login FROM punches",
   "punch_corrections": "SELECT id, punch_id, action, new_at, new_kind, note, recorded_at FROM punch_corrections",
