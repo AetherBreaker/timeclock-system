@@ -1579,14 +1579,14 @@ wheels = [
 
 [[package]]
 name = "timeclock-schema"
-version = "0.9.8"
+version = "0.11.0"
 source = { registry = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/31f/a02b1f282c4a9/timeclock_schema-0.9.8.tar.gz", hash = "sha256:31fa02b1f282c4a978262a3183e6c6804872889ce04386838150e8fb2430d859" }
+sdist = { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/979/7cdb4a3cf70b6/timeclock_schema-0.11.0.tar.gz", hash = "sha256:9797cdb4a3cf70b62c9ddbc68eafa633e558d4b8f6b69cb903b97bfb0bb6b100" }
 wheels = [
-    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/462/93e1ebe7b7976/timeclock_schema-0.9.8-py3-none-any.whl", hash = "sha256:46293e1ebe7b79765b2cd2567ad0415df4225af19f911785bf9f9b9488d0a64e" },
+    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/cb1/7a240da1b4fc1/timeclock_schema-0.11.0-py3-none-any.whl", hash = "sha256:cb17a240da1b4fc1b46aaedd319db598057670f01722f658574a21a40aa02a2d" },
 ]
 
 [[package]]
@@ -1636,7 +1636,7 @@ requires-dist = [
     { name = "pycairo", marker = "sys_platform == 'linux'", specifier = ">=1.29.2", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "pygobject", marker = "sys_platform == 'linux'", specifier = ">=3.58.1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "timeclock-libfprint", marker = "sys_platform == 'linux'", specifier = ">=1.94.100.post3", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
-    { name = "timeclock-schema", specifier = ">=0.9.8", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "timeclock-schema", specifier = ">=0.11.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "uvicorn", specifier = ">=0.54,<0.55" },
     { name = "uvloop", marker = "sys_platform == 'linux'", specifier = ">=0.23" },
 ]

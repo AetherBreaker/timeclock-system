@@ -121,7 +121,7 @@ def test_press_check_failures_never_give_up():
     (minutiae(cx=5), Failure.OFF_CENTRE),
     (minutiae(S.registration_max_detail_points + 1), Failure.TOO_MANY),
   ]
-  n = len(free) * (S.registration_extra_presses + 1)
+  n = len(free) * (S.registration_disagreement_retries + 1)
   session = Session((), S)
   run(session, [press(i) for i in range(PRESSES - 1)])
   verdicts = run(session, [press(PRESSES - 1 + k, points=free[k % len(free)][0]) for k in range(n)])
@@ -131,7 +131,7 @@ def test_press_check_failures_never_give_up():
 
 
 def test_gives_up_after_the_disagreeing_presses():
-  limit, light = S.registration_extra_presses, minutiae(S.registration_min_detail_points - 1)
+  limit, light = S.registration_disagreement_retries, minutiae(S.registration_min_detail_points - 1)
   session = Session((), S)
   run(session, [press(i) for i in range(PRESSES - 1)])
   ids = iter(range(PRESSES - 1, PRESSES + 2 * limit))
