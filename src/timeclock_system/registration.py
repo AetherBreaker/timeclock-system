@@ -137,6 +137,11 @@ class Session:
     """The presses kept so far, in order; after `Done` or `TooSimilar`, the ones to merge."""
     return tuple(self._kept)
 
+  @property
+  def replaced(self) -> int:
+    """How many presses were dropped and asked for again; at `registration_extra_presses` the next failure gives up."""
+    return self._replaced
+
   def add(self, press: Press) -> Verdict:  # noqa: C901, PLR0912  # one decision, read top to bottom
     """Keep `press`; once `PRESSES` are kept, replace the worst failing one, else judge the finger as a whole.
 
