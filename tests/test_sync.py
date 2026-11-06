@@ -333,6 +333,8 @@ async def test_last_contact_survives_a_restart(pg: Pg, rig: Callable[[], Awaitab
   r = await rig()
   saved = r.sync.status.last_contact
   assert saved is not None
+  # The status changes before its store write lands on a worker thread, and a restart reads only the store.
+  await eventually(lambda: r.store.get_meta("last_contact") == saved.isoformat(), "the contact time's store write")
   assert DatabaseSync(r.clock, r.store, pg.clock_dsn, alert=lambda _r, _d: None).status == DbStatus(
     connected=False, last_contact=saved
   )
