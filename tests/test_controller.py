@@ -732,14 +732,17 @@ async def test_force_save_after_five_presses_asks_an_admin(kiosk: Kiosk) -> None
   prompt = kiosk.ctl.screen
   assert isinstance(prompt, ApprovalPrompt) and isinstance(prompt.change, ForceSave)
   assert [p.press_id for p in prompt.change.chosen] == list(range(PRESSES))  # the replaced press too: only 5 were made
+  assert kiosk.reader.merges == [tuple(f"probe-{i}".encode() for i in range(PRESSES))]  # merging while an admin comes
+  await kiosk.ctl.on_scanner_event(Merged(b"bob"))
+  assert kiosk.ctl.screen == prompt  # the template's arrival redraws nothing
   await kiosk.ctl.on_scanner_event(matched(ANN))
   assert kiosk.ctl.screen == ApprovalPrompt(prompt.change, touched_at=prompt.touched_at, message=text.NOT_AN_ADMIN)
-  assert kiosk.reader.merges == []
   await kiosk.ctl.on_scanner_event(matched(ADA))
-  assert kiosk.reader.merges == [tuple(f"probe-{i}".encode() for i in range(PRESSES))]
-  await kiosk.ctl.on_scanner_event(Merged(b"bob"))
   screen = kiosk.ctl.screen
-  assert isinstance(screen, Menu) and screen.info.employee_id == BOB
+  assert isinstance(screen, Menu) and screen.info.employee_id == BOB  # saved at once, no registration screen between
+  assert len(kiosk.reader.merges) == 1
+  [f] = [f for f in kiosk.store.fingerprints() if f.employee_id == BOB]
+  assert f.template.get_secret_value() == b"bob"
   [c] = kiosk.store.unsynced_fingerprint_changes()
   assert (c.employee_id, c.action, c.approved_by, c.pin_only) == (BOB, FingerprintChangeAction.ADD, ADA, False)
 
@@ -753,14 +756,27 @@ async def test_force_save_asks_again_though_an_admin_approved_the_change(kiosk: 
   prompt = kiosk.ctl.screen
   assert isinstance(prompt, ApprovalPrompt) and isinstance(prompt.change, ForceSave)
   await kiosk.ctl.use_pin()
+  await kiosk.ctl.on_scanner_event(Merged(b"ann"))  # lands on the PIN pad
   await kiosk.type_and_enter(PINS[ADA])
   await kiosk.type_and_enter("1234")
   screen = kiosk.ctl.screen
-  assert isinstance(screen, Registering) and screen.approval == Approval(ADA, pin_only=True)
-  await kiosk.ctl.on_scanner_event(Merged(b"ann"))
-  screen = kiosk.ctl.screen
   assert isinstance(screen, Idle) and screen.message == text.FINGERPRINT_SAVED
   assert {(c.approved_by, c.pin_only) for c in kiosk.store.unsynced_fingerprint_changes()} == {(ADA, True)}
+
+
+async def test_an_approval_faster_than_the_merge_saves_when_it_lands(kiosk: Kiosk) -> None:
+  await bob_registers(kiosk)
+  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  for i in range(PRESSES):
+    await kiosk.ctl.on_scanner_event(Pressed(press(i, agrees=i < PRESSES - 1)))
+  await kiosk.ctl.force_save()
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Registering) and screen.approval == Approval(ADA, pin_only=False)
+  await kiosk.ctl.on_scanner_event(Merged(b"bob"))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu) and screen.info.employee_id == BOB
+  assert len(kiosk.reader.merges) == 1
 
 
 async def test_the_resembled_print_approves_no_forced_save(kiosk: Kiosk) -> None:
