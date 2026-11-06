@@ -76,6 +76,8 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
   color: var(--sft-black) !important; }
 .sft-error { color: var(--sft-red); }
 .sft-title { font-size: 2.5rem; font-weight: 600; }
+/* The hours table (punch menu, confirmation): docked on the left edge, centred vertically (owner, 2026-11-06). */
+.sft-hours { position: fixed; left: 2rem; top: 50%; transform: translateY(-50%); }
 .reader-ready { color: var(--sft-yellow); }
 .reader-scanning { color: var(--sft-blue); }
 .reader-read { color: var(--sft-read-green); }
@@ -334,7 +336,7 @@ class _KioskPage:
     ui.label(info.name).classes("sft-title")
     state = text.STATE_LABELS[info.state]
     ui.label(state.format(time=text.format_clock_time(info.since, self._tz)) if info.since else state)
-    with ui.grid(columns=2).classes("gap-x-8 gap-y-0").mark("hours"):
+    with ui.grid(columns=2).classes("sft-hours gap-x-8 gap-y-0").mark("hours"):
       for label, value in text.hours_lines(info.hours):
         ui.label(label)
         ui.label(value).classes("text-right")
@@ -531,7 +533,7 @@ class _KioskPage:
     layer = ui.column().classes("fixed inset-0 z-10 items-center gap-6 pt-8").mark("confirm-tap")
     with layer.on("click", lambda: self._guarded(self._controller.tap)):
       ui.label(s.text).classes("sft-title")
-      with ui.grid(columns=2).classes("gap-x-8 gap-y-0").mark("hours"):
+      with ui.grid(columns=2).classes("sft-hours gap-x-8 gap-y-0").mark("hours"):
         for label, value in s.hours:
           ui.label(label)
           ui.label(value).classes("text-right")
