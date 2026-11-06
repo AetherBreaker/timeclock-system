@@ -541,12 +541,15 @@ async def test_registering_counts_replaced_presses_and_shows_advice(controller: 
     for i in range(PRESSES - 1):
       await controller.on_scanner_event(Pressed(scored_press(i)))
     await user.should_see("Press your left index on the reader (4 of 5)")
+    await user.should_not_see(kind=ui.button, content=text.FORCE_SAVE)
     await controller.on_scanner_event(Pressed(scored_press(PRESSES - 1, n=10)))
     await user.should_see("Press your left index on the reader (5 of 6)")
     assert shown_text(user, "register-advice") == "Press your finger flat on the reader"
     await controller.on_scanner_event(Pressed(scored_press(PRESSES, n=10)))
     await user.should_see("Press your left index on the reader (6 of 7)")
     await user.should_see(kind=ui.button, content=text.CANCEL)
+    user.find(kind=ui.button, content=text.FORCE_SAVE).click()
+    await user.should_see(text.APPROVE_FORCE)
 
 
 async def test_too_similar_review_names_the_print(controller: KioskController, tmp_path: Path) -> None:

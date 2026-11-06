@@ -140,6 +140,7 @@ class Session:
     self._failing = {p.print_id: failing_presses(p, settings) for p in others}
     self._settings = settings
     self._kept: list[Press] = []
+    self._presses: list[Press] = []  # every press added, kept or replaced, for `best`
     self._replaced = 0
     self._disagreed = 0  # the replaced presses that count toward `registration_disagreement_retries`
 
@@ -153,6 +154,27 @@ class Session:
     """How many presses were dropped and asked for again, for any `Failure`."""
     return self._replaced
 
+  @property
+  def resembled(self) -> frozenset[UUID]:
+    """Every other print some press scored the resemblance bar against: the registrant's finger may be identified as it."""
+    bar = self._settings.registration_resemblance_bar
+    return frozenset(pid for p in self._presses for pid, scores in p.vs_gallery.items() if any(x >= bar for x in scores))
+
+  def best(self) -> tuple[Press, ...]:
+    """The `PRESSES` best of every press so far, in order, for an admin's forced save; none of the checks apply to it.
+
+    Ranked by agreement alone: how many of the other presses each agrees with, then its scores, best first.
+    """
+    bar = self._settings.registration_agreement_bar
+
+    def rank(p: Press) -> tuple[int, list[int]]:
+      scores = sorted(
+        (q.vs_session.get(p.press_id, p.vs_session.get(q.press_id, 0)) for q in self._presses if q is not p), reverse=True
+      )
+      return sum(x >= bar for x in scores), scores
+
+    return tuple(sorted(sorted(self._presses, key=rank, reverse=True)[:PRESSES], key=lambda p: p.press_id))
+
   def add(self, press: Press) -> Verdict:  # noqa: C901, PLR0912, PLR0915  # one decision, read top to bottom
     """Keep `press`; once `PRESSES` are kept, replace the worst failing one, else judge the finger as a whole.
 
@@ -165,6 +187,7 @@ class Session:
     """
     s = self._settings
     self._kept.append(press)
+    self._presses.append(press)
     kept = self._kept
     # agreement[i][j]: press i's with press j, by press_id.
     agreement = {

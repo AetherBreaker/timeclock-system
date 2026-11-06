@@ -6,6 +6,7 @@ The page only renders `screen`; every input and scanner event comes through one 
 # Standard library imports
 import asyncio
 import contextlib
+import logging
 import re
 import time
 from dataclasses import dataclass, field, replace
@@ -33,7 +34,7 @@ from timeclock_system.clock import (
   normalize_phone,
 )
 from timeclock_system.hours import is_open
-from timeclock_system.registration import Done, GaveUp, NextPress, Session, TooSimilar
+from timeclock_system.registration import PRESSES, Done, GaveUp, NextPress, Session, TooSimilar
 from timeclock_system.scanner import (
   EnrollFailed,
   FingerStatus,
@@ -62,7 +63,7 @@ if TYPE_CHECKING:
 
   # First party imports
   from timeclock_system.clock import Clock
-  from timeclock_system.registration import OtherPrint, Verdict
+  from timeclock_system.registration import OtherPrint, Press, Verdict
   from timeclock_system.scanner import ScannerEvent
 
 RESCAN_AFTER_SECS = 30  # R45.2
@@ -76,6 +77,7 @@ WAKE_SECS = 30  # R40.2
 DOUBLE_TAP_SECS = 0.5  # two taps this close end a confirmation early
 _MAX_DIGITS = 12
 _ADDABLE_ROLES = (EmployeeRole.EMPLOYEE, EmployeeRole.MANAGER)  # never admin (§2)
+LOGGER = logging.getLogger(__name__)
 
 
 class ReaderIndicator(StrEnum):
@@ -198,7 +200,7 @@ class PinEntry:
   field: Literal["username", "password"]
   username: str  # typed first; not secret
   pin: SecretStr  # typed second; a SecretStr until bcrypt checks it, so no repr, log or alert shows it
-  purpose: OverrideRequest | PinRecheck | FingerprintLogin | FingerChange | SimilarReview | None
+  purpose: OverrideRequest | PinRecheck | FingerprintLogin | FingerChange | SimilarReview | ForceSave | None
   touched_at: float
   error: str | None = None
 
@@ -275,6 +277,24 @@ class SimilarReview:
 
   registering: Registering
   verdict: TooSimilar
+
+  @property
+  def resembled(self) -> frozenset[UUID]:
+    """Every print the finger resembles, which the registrant's own finger may be identified as; none approves it."""
+    v = self.verdict
+    return frozenset(p.print_id for p in (v.other, *v.also_similar, *v.flagged))
+
+
+@dataclass(frozen=True)
+class ForceSave:
+  """An admin's save of a registration's `chosen` best presses past every check; an approval's purpose, always asked.
+
+  `resembled`: as `SimilarReview.resembled`, for every press made.
+  """
+
+  registering: Registering
+  chosen: tuple[Press, ...]
+  resembled: frozenset[UUID]
 
 
 @dataclass(frozen=True)
@@ -398,9 +418,9 @@ class FingerPick:
 
 @dataclass(frozen=True)
 class ApprovalPrompt:
-  """Waiting for an admin's finger or PIN to approve `change` (or a too-similar finger's review), immediately before it runs."""
+  """Waiting for an admin's finger or PIN to approve `change` (or a review, or a forced save), immediately before it runs."""
 
-  change: FingerChange | SimilarReview
+  change: FingerChange | SimilarReview | ForceSave
   touched_at: float
   message: str | None = None
 
@@ -635,14 +655,19 @@ class KioskController:
     on_file = await self._clock.prints_by_finger(employee_id)
     return FingerprintActions(employee_id, name, tuple(f for f in Finger if f in on_file), self._mono(), message)
 
-  async def _approved(self, change: FingerChange | SimilarReview, approval: Approval) -> Screen:
+  async def _approved(self, change: FingerChange | SimilarReview | ForceSave, approval: Approval) -> Screen:
     """Run an approved change: a removal at once, a registration through its touches; an add first asks the finger.
 
-    A too-similar finger's review goes to the approving admin.
+    A too-similar finger's review goes to the approving admin; a forced save merges, then saves with them as approver.
     """
     now = self._mono()
     if isinstance(change, SimilarReview):
       return self._review(change.registering, change.verdict, approval)
+    if isinstance(change, ForceSave):
+      r, chosen = change.registering, tuple(p.press_id for p in change.chosen)
+      LOGGER.info("Registration saved past its checks by an admin: presses %s of %d", chosen, r.kept + r.replaced)
+      self._reader.merge([p.probe for p in change.chosen])
+      return replace(r, verdict=Done(chosen, ()), approval=approval, touched_at=now)
     if change.finger is None:
       on_file = await self._clock.prints_by_finger(change.employee_id)
       return FingerPick(change.employee_id, "add", tuple(f for f in Finger if f not in on_file), now, approval=approval)
@@ -733,8 +758,9 @@ class KioskController:
     # the indicator doesn't tell a new print from a known one, which is the screen's job.
     now = self._mono()
     match s, ev:
-      case Registering(), RegisterGallery(others=others):
-        # The bars current now hold for the whole registration, so a settings change applies from the next one.
+      case Registering(verdict=None), RegisterGallery(others=others):
+        # The bars current now hold for the whole registration, so a settings change applies from the next one. A forced
+        # save's merge runs while the reader, back from the admin's approval, starts a session nobody presses for.
         self._screen = replace(s, session=Session(others, self._clock.settings()), kept=0, replaced=0, advice=None)
       case Registering(session=Session() as session, verdict=None), Pressed(press=press):
         self._outcome = ReaderIndicator.READ
@@ -827,7 +853,7 @@ class KioskController:
         before = AdminReconfirm(owner, now) if kind is None else Rescan(owner, kind, None, now, pin_ok=True)
       case OverrideRequest():
         before = OverridePrompt(p, now)
-      case FingerChange() | SimilarReview():
+      case FingerChange() | SimilarReview() | ForceSave():
         before = ApprovalPrompt(p, now)
       case FingerprintLogin():
         if (employee := self._clock.employee(ev.employee_id)) is not None:
@@ -864,8 +890,8 @@ class KioskController:
       admin = self._clock.employee(employee_id)
       # The registrant's own finger may be identified as any print it resembles: none approves a review of it, so its
       # owner uses another finger or their PIN.
-      v = s.change.verdict if isinstance(s.change, SimilarReview) else None
-      resembled = v is not None and ev.print_id in {p.print_id for p in (v.other, *v.also_similar, *v.flagged)}
+      c = s.change
+      resembled = isinstance(c, SimilarReview | ForceSave) and ev.print_id in c.resembled
       if admin is not None and self._clock.fingerprint_approver(admin) and not resembled:
         self._screen = await self._approved(s.change, Approval(admin.id, pin_only=False))
       else:
@@ -958,7 +984,7 @@ class KioskController:
         self._screen = RegisterPrompt(employee.id, touched_at=now)
 
   async def _purpose_pin(
-    self, purpose: OverrideRequest | FingerprintLogin | FingerChange | SimilarReview, employee: Employee
+    self, purpose: OverrideRequest | FingerprintLogin | FingerChange | SimilarReview | ForceSave, employee: Employee
   ) -> Screen:
     """A manager's override PIN, the Fingerprints flow's login, or an admin's approval by PIN; split out of `enter` for C901."""
     if isinstance(purpose, OverrideRequest):
@@ -1072,6 +1098,13 @@ class KioskController:
       s = self._screen
       if isinstance(s, TooSimilarBlocked):
         self._screen = ApprovalPrompt(SimilarReview(s.registering, s.verdict), touched_at=self._mono())
+
+  async def force_save(self) -> None:
+    """Once `PRESSES` presses are made, an admin may save the registration's best ones past its checks; asked every time."""
+    async with self._transition():
+      s = self._screen
+      if isinstance(s, Registering) and s.session is not None and s.verdict is None and s.kept + s.replaced >= PRESSES:
+        self._screen = ApprovalPrompt(ForceSave(s, s.session.best(), s.session.resembled), touched_at=self._mono())
 
   async def gear(self) -> None:
     """The gear, on the idle screen or a punch menu (which it leaves, as Cancel would): its menu."""

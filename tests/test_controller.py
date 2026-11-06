@@ -51,6 +51,7 @@ from timeclock_system.ui.controller import (
   FingerPick,
   FingerprintActions,
   FingerprintLogin,
+  ForceSave,
   GearMenu,
   Idle,
   KioskController,
@@ -715,6 +716,69 @@ async def test_an_admins_pin_steps_in_too(kiosk: Kiosk) -> None:
   await kiosk.type_and_enter("1234")
   screen = kiosk.ctl.screen
   assert isinstance(screen, TooSimilarReview) and screen.approval == Approval(ADA, pin_only=True)
+
+
+async def test_force_save_after_five_presses_asks_an_admin(kiosk: Kiosk) -> None:
+  await bob_registers(kiosk)
+  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  for i in range(PRESSES - 1):
+    await kiosk.ctl.on_scanner_event(Pressed(press(i)))
+  before = kiosk.ctl.screen
+  await kiosk.ctl.force_save()
+  assert kiosk.ctl.screen == before  # not before 5 presses
+  await kiosk.ctl.on_scanner_event(Pressed(press(PRESSES - 1, agrees=False)))
+  assert isinstance(kiosk.ctl.screen, Registering) and kiosk.ctl.screen.advice == text.PRESS_ADVICE[Failure.DISAGREES]
+  await kiosk.ctl.force_save()
+  prompt = kiosk.ctl.screen
+  assert isinstance(prompt, ApprovalPrompt) and isinstance(prompt.change, ForceSave)
+  assert [p.press_id for p in prompt.change.chosen] == list(range(PRESSES))  # the replaced press too: only 5 were made
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  assert kiosk.ctl.screen == ApprovalPrompt(prompt.change, touched_at=prompt.touched_at, message=text.NOT_AN_ADMIN)
+  assert kiosk.reader.merges == []
+  await kiosk.ctl.on_scanner_event(matched(ADA))
+  assert kiosk.reader.merges == [tuple(f"probe-{i}".encode() for i in range(PRESSES))]
+  await kiosk.ctl.on_scanner_event(Merged(b"bob"))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Menu) and screen.info.employee_id == BOB
+  [c] = kiosk.store.unsynced_fingerprint_changes()
+  assert (c.employee_id, c.action, c.approved_by, c.pin_only) == (BOB, FingerprintChangeAction.ADD, ADA, False)
+
+
+async def test_force_save_asks_again_though_an_admin_approved_the_change(kiosk: Kiosk) -> None:
+  await approved_reregistration(kiosk)
+  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  for i in range(PRESSES):
+    await kiosk.ctl.on_scanner_event(Pressed(press(i, agrees=i < PRESSES - 1)))
+  await kiosk.ctl.force_save()
+  prompt = kiosk.ctl.screen
+  assert isinstance(prompt, ApprovalPrompt) and isinstance(prompt.change, ForceSave)
+  await kiosk.ctl.use_pin()
+  await kiosk.type_and_enter(PINS[ADA])
+  await kiosk.type_and_enter("1234")
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Registering) and screen.approval == Approval(ADA, pin_only=True)
+  await kiosk.ctl.on_scanner_event(Merged(b"ann"))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Idle) and screen.message == text.FINGERPRINT_SAVED
+  assert {(c.approved_by, c.pin_only) for c in kiosk.store.unsynced_fingerprint_changes()} == {(ADA, True)}
+
+
+async def test_the_resembled_print_approves_no_forced_save(kiosk: Kiosk) -> None:
+  # As for a review: the registrant's own finger may be identified as a print its presses resemble.
+  ada_print = uuid4()
+  await bob_registers(kiosk)
+  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  for i in range(PRESSES):
+    p = press(i, agrees=i < PRESSES - 1)
+    await kiosk.ctl.on_scanner_event(Pressed(Press(i, p.minutiae, p.probe, p.vs_session, {ada_print: (SIMILAR,)} if i == 0 else {})))
+  await kiosk.ctl.force_save()
+  prompt = kiosk.ctl.screen
+  assert isinstance(prompt, ApprovalPrompt)
+  await kiosk.ctl.on_scanner_event(Matched(ada_print, ADA))
+  assert kiosk.ctl.screen == ApprovalPrompt(prompt.change, touched_at=prompt.touched_at, message=text.NOT_AN_ADMIN)
+  await kiosk.ctl.on_scanner_event(Matched(uuid4(), ADA))  # another of Ada's fingers
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Registering) and screen.approval == Approval(ADA, pin_only=False)
 
 
 async def approved_reregistration(kiosk: Kiosk) -> None:

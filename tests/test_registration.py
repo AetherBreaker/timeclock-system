@@ -144,6 +144,31 @@ def test_gives_up_after_the_disagreeing_presses():
   assert verdicts == [NextPress(Failure.DISAGREES), NextPress(Failure.TOO_FEW)] * limit + [GaveUp()]
 
 
+def test_best_presses_ranked_by_agreement_alone():
+  # 0-2 agree with each other; 3 is off centre but agrees with them; 4 and 6 agree with nothing, 6 the lower.
+  session = Session((), S)
+  run(
+    session,
+    [
+      press(0),
+      press(1),
+      press(2),
+      press(3, points=minutiae(cx=5)),
+      press(4, vs_session=dict.fromkeys(range(4), LOW)),
+      press(5, vs_session={4: LOW}),
+      press(6, vs_session=dict.fromkeys(range(6), LOW) | {0: LOW - 10}),
+    ],
+  )
+  assert tuple(p.press_id for p in session.best()) == (0, 1, 2, 3, 5)
+
+
+def test_resembled_lists_every_print_some_press_resembles():
+  x, y, z = uuid4(), uuid4(), uuid4()
+  session = Session((), S)
+  run(session, [press(0, vs_gallery={x: (0, SIMILAR), y: (SIMILAR - 1,) * PRESSES}), press(1, vs_gallery={z: (SIMILAR,)})])
+  assert session.resembled == {x, z}
+
+
 def test_single_press_resemblance_is_a():
   x = other()
   session = Session((x,), S)
