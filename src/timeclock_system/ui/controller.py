@@ -222,7 +222,7 @@ class RegisterPrompt:
 
 @dataclass(frozen=True)
 class Registering:
-  """A registration in progress: `kept` of `PRESSES` presses kept so far, and `advice` for the press last dropped.
+  """A registration in progress: `kept` presses kept and `replaced` dropped so far, and `advice` for the press last dropped.
 
   `added` in the add-employee flow's optional step, `change` for an approved gear-menu change; `admin_id` is the admin
   present in either (None: the employee registers alone). `session` judges the presses from `RegisterGallery` on;
@@ -238,6 +238,7 @@ class Registering:
   admin_id: int | None = None
   session: Session | None = None
   kept: int = 0
+  replaced: int = 0
   advice: str | None = None
   verdict: Done | None = None
 
@@ -734,7 +735,7 @@ class KioskController:
     match s, ev:
       case Registering(), RegisterGallery(others=others):
         # The bars current now hold for the whole registration, so a settings change applies from the next one.
-        self._screen = replace(s, session=Session(others, self._clock.settings()), kept=0, advice=None)
+        self._screen = replace(s, session=Session(others, self._clock.settings()), kept=0, replaced=0, advice=None)
       case Registering(session=Session() as session, verdict=None), Pressed(press=press):
         self._outcome = ReaderIndicator.READ
         self._screen = await self._judged(replace(s, touched_at=now), session, session.add(press))
@@ -758,7 +759,7 @@ class KioskController:
 
   async def _judged(self, s: Registering, session: Session, verdict: Verdict) -> Screen:
     # Split out of _on_register for C901: what a press's verdict makes of the registration.
-    s = replace(s, kept=len(session.kept), advice=None)
+    s = replace(s, kept=len(session.kept), replaced=session.replaced, advice=None)
     match verdict:
       case NextPress(failure=failure):
         return s if failure is None else replace(s, advice=text.PRESS_ADVICE[failure])

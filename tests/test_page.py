@@ -532,7 +532,7 @@ async def ann_reregisters(controller: KioskController) -> None:
   await controller.on_scanner_event(Matched(print_id=ADA_PRINT, employee_id=2))
 
 
-async def test_registering_shows_the_kept_presses_and_advice(controller: KioskController, tmp_path: Path) -> None:
+async def test_registering_counts_replaced_presses_and_shows_advice(controller: KioskController, tmp_path: Path) -> None:
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")
     await bob_registers(controller)
@@ -540,9 +540,12 @@ async def test_registering_shows_the_kept_presses_and_advice(controller: KioskCo
     await controller.on_scanner_event(RegisterGallery(()))
     for i in range(PRESSES - 1):
       await controller.on_scanner_event(Pressed(scored_press(i)))
-    await controller.on_scanner_event(Pressed(scored_press(PRESSES - 1, n=10)))
     await user.should_see("Press your left index on the reader (4 of 5)")
+    await controller.on_scanner_event(Pressed(scored_press(PRESSES - 1, n=10)))
+    await user.should_see("Press your left index on the reader (5 of 6)")
     assert shown_text(user, "register-advice") == "Press your finger flat on the reader"
+    await controller.on_scanner_event(Pressed(scored_press(PRESSES, n=10)))
+    await user.should_see("Press your left index on the reader (6 of 7)")
     await user.should_see(kind=ui.button, content=text.CANCEL)
 
 

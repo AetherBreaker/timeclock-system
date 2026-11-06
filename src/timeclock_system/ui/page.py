@@ -400,7 +400,9 @@ class _KioskPage:
     match s:
       case Registering():
         finger = text.FINGER_LABELS[s.finger].lower()
-        ui.label(text.REGISTERING.format(finger=finger, done=s.kept, total=PRESSES)).classes("sft-title")
+        # Each replaced press counts as made and adds one to the total, so the count never goes back.
+        done, total = s.kept + s.replaced, PRESSES + s.replaced
+        ui.label(text.REGISTERING.format(finger=finger, done=done, total=total)).classes("sft-title")
         if s.advice:
           ui.label(s.advice).classes("sft-error text-3xl").mark("register-advice")
         self._button(text.CANCEL, self._controller.cancel)
