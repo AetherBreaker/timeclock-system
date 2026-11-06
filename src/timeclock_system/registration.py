@@ -31,11 +31,16 @@ type Minutiae = tuple[tuple[int, int, int], ...]
 
 
 class Failure(StrEnum):
-  """Why a press is replaced, worst first: a bad press drags down the others' agreement, so it goes before them."""
+  """Why a press is replaced, worst first.
 
+  Off centre first, as centring usually restores missing detail too; then a press failing its own checks before the
+  disagreeing ones, since it drags down the others' agreement. Only `DISAGREES` counts toward giving up: the others are
+  placement, pressure or a wet finger, which the advice corrects.
+  """
+
+  OFF_CENTRE = "off centre"
   TOO_FEW = "too few detail points"
   TOO_MANY = "too many detail points"
-  OFF_CENTRE = "off centre"
   DISAGREES = "disagrees"
 
 
@@ -92,21 +97,26 @@ class Done:
 
 @dataclass(frozen=True)
 class GaveUp:
-  """Every allowed extra press went by without a passing set."""
+  """Every allowed disagreeing press went by without a passing set."""
 
 
 type Verdict = NextPress | TooSimilar | Done | GaveUp
 
 
 def press_failure(minutiae: Minutiae, settings: Settings) -> Failure | None:
-  """The checks a press needs no other press for: its detail-point count, then their centroid's distance from centre."""
-  if not minutiae or len(minutiae) < settings.registration_min_detail_points:
+  """The checks a press needs no other press for: its centroid's distance from centre, then its detail-point count.
+
+  Centre first, as `Failure` orders them: a touch at the edge is both off centre and short of detail, and centring fixes both.
+  """
+  if not minutiae:
     return Failure.TOO_FEW
-  if len(minutiae) > settings.registration_max_detail_points:
-    return Failure.TOO_MANY
   x, y = statistics.fmean(m[0] for m in minutiae), statistics.fmean(m[1] for m in minutiae)
   if math.hypot(x - WINDOW[0] / 2, y - WINDOW[1] / 2) > settings.registration_centre_tolerance:
     return Failure.OFF_CENTRE
+  if len(minutiae) < settings.registration_min_detail_points:
+    return Failure.TOO_FEW
+  if len(minutiae) > settings.registration_max_detail_points:
+    return Failure.TOO_MANY
   return None
 
 
@@ -131,6 +141,7 @@ class Session:
     self._settings = settings
     self._kept: list[Press] = []
     self._replaced = 0
+    self._disagreed = 0  # the replaced presses that count toward `registration_extra_presses`
 
   @property
   def kept(self) -> tuple[Press, ...]:
@@ -139,10 +150,10 @@ class Session:
 
   @property
   def replaced(self) -> int:
-    """How many presses were dropped and asked for again; at `registration_extra_presses` the next failure gives up."""
+    """How many presses were dropped and asked for again, for any `Failure`."""
     return self._replaced
 
-  def add(self, press: Press) -> Verdict:  # noqa: C901, PLR0912  # one decision, read top to bottom
+  def add(self, press: Press) -> Verdict:  # noqa: C901, PLR0912, PLR0915  # one decision, read top to bottom
     """Keep `press`; once `PRESSES` are kept, replace the worst failing one, else judge the finger as a whole.
 
     Resemblance pairs a kept press with another person's press scoring at least the resemblance bar. Per other print:
@@ -205,12 +216,15 @@ class Session:
       if failures:
         # Lowest agreement: the best score, then the next best (two strays agreeing only with each other tie on the best).
         worst = min(failures, key=lambda i: (list(Failure).index(failures[i]), sorted(agreement[i].values(), reverse=True)))
-        if self._replaced >= s.registration_extra_presses:
-          verdict, outcome = GaveUp(), f"gave up, press {worst} {failures[worst]}"
+        failure = failures[worst]  # DISAGREES only once no press fails its own checks, which are replaced first and free
+        if failure is Failure.DISAGREES and self._disagreed >= s.registration_extra_presses:
+          verdict, outcome = GaveUp(), f"gave up, press {worst} {failure}"
         else:
           self._replaced += 1
+          if failure is Failure.DISAGREES:
+            self._disagreed += 1
           self._kept = [p for p in kept if p.press_id != worst]
-          verdict, outcome = NextPress(failures[worst]), f"replacing press {worst}: {failures[worst]}"
+          verdict, outcome = NextPress(failure), f"replacing press {worst}: {failure}"
       elif similar:
         similar.sort(key=lambda pair: pair[0], reverse=True)  # stable: equal scores keep the gallery's order
         other, *rest = (o for _, o in similar)

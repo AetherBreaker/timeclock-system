@@ -507,9 +507,8 @@ async def test_a_session_takes_the_bars_current_at_its_start(kiosk: Kiosk) -> No
 async def test_gave_up_message(kiosk: Kiosk) -> None:
   await bob_registers(kiosk)
   await kiosk.ctl.on_scanner_event(RegisterGallery(()))
-  light = BARS.registration_min_detail_points - 2
   for i in range(PRESSES + BARS.registration_extra_presses):
-    await kiosk.ctl.on_scanner_event(Pressed(press(i, n=light if i >= PRESSES - 1 else 40)))
+    await kiosk.ctl.on_scanner_event(Pressed(press(i, agrees=i < PRESSES - 1)))
   assert kiosk.ctl.screen == Idle(
     "Couldn't get a clean registration. Try again or use another finger.", until=kiosk.t.mono + controller_module.IDLE_ERROR_SECS
   )
