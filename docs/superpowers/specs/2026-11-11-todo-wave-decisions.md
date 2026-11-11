@@ -6,8 +6,8 @@ left to Claude; everything else is the owner's decision.
 
 ## Scope and order
 
-1. The pass covers TODO items 2, 3, 5, 14, 16, 17, 18, 20 and the display step of 19.
-2. The display step goes first: 17, 18 and 20 build on the display and the host updater it moves.
+1. The pass covers TODO items 2, 3, 5, 14, 16, 17, 20 and the display step of 19 (18 was dropped).
+2. The display step goes first: 17 and 20 build on the display and the host updater it moves.
 3. 19's recorder moves to 15's pass (it isn't quick). 15 gets its own pass after this one.
 4. The spec is written only when the whole bundle is ready to start, covering every item at once.
 
@@ -96,9 +96,9 @@ Mockup (approved, version 4): https://claude.ai/artifact/92neD6jb6Ae9X7Ts42e9Qa
 
 ## 18, simultaneous host and app updates
 
-Open. Options: a, a habit (no app releases 03:00 to 04:00; check every clock took a release); b, the updater's
-after-update check ignores an app that changed after the restart; c, the clock asks Coolify to redeploy it after a host
-restart (needs a Coolify token on every clock). Recommended: a plus b.
+1. Skipped: a much smaller issue than first thought, not worth the effort for the edge case. Remove the item from
+   `TODO.md`. (Found: the host already waits for app deploys; a deploy during a host restart fails without a retry; a
+   broken app release in the 10 minutes after a host update can roll back a good host release.)
 
 ## 20, screen off after hours
 
