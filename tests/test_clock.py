@@ -661,10 +661,10 @@ async def test_hours_this_week_count_paid_breaks(env: Env) -> None:
   for kind, minutes in ((PunchKind.CLOCK_IN, 0), (PunchKind.BREAK_START, 60), (PunchKind.BREAK_END, 100)):
     env.store.insert_punch(punch_at(1, kind, start + timedelta(minutes=minutes)), origin="db")
   env.now = start + timedelta(hours=4)
-  # 4 h on the clock with a 40-minute break: 3 h 20 worked, 30 minutes paid, 10 unpaid.
-  assert (await env.clock.menu_info(1)).hours.week == timedelta(hours=3, minutes=50)
+  # 4 h on the clock with a 40-minute break: 3 h 20 worked, 15 minutes paid (the per-break limit), 25 unpaid.
+  assert (await env.clock.menu_info(1)).hours.week == timedelta(hours=3, minutes=35)
   outcome = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
-  assert outcome.hours.week == timedelta(hours=3, minutes=50)
+  assert outcome.hours.week == timedelta(hours=3, minutes=35)
 
 
 async def test_hours_summary_counts_the_calendar_day(env: Env) -> None:
@@ -685,9 +685,10 @@ async def test_hours_summary_counts_the_calendar_day(env: Env) -> None:
     env.store.insert_punch(punch_at(1, kind, at), origin="db")
   env.now = tuesday + timedelta(hours=6, minutes=10)
   hours = (await env.clock.menu_info(1)).hours
-  # Today: 2 h after midnight, then 6 h 10 on the clock less a 30-minute lunch; both breaks fit the paid allowance.
+  # Today: 2 h after midnight, then 6 h 10 on the clock less a 30-minute lunch; both breaks fit the limit and the paid
+  # allowance. The week adds Monday's 2 h before midnight, less the 5 minutes its 20-minute break ran past the limit.
   assert hours.today == timedelta(hours=7, minutes=40)
-  assert hours.week == timedelta(hours=9, minutes=40)
+  assert hours.week == timedelta(hours=9, minutes=35)
   assert (hours.breaks, hours.last_break, hours.on_break) == (timedelta(minutes=25), timedelta(minutes=10), True)
   assert hours.lunch == timedelta(minutes=30)
   env.now += timedelta(minutes=2)
