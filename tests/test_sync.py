@@ -165,7 +165,8 @@ async def test_catch_up_mirrors_employees_and_settings(pg: Pg, rig: Callable[[],
   ann = await seed_employee(pg, role=EmployeeRole.ADMIN)
   await admin_execute(
     pg,
-    "UPDATE config.settings SET breaks_enabled = false, lunches_enabled = false, paid_break_minutes = 20, weekly_hours_alert = 37.5",
+    "UPDATE config.settings SET breaks_enabled = false, lunches_enabled = false, paid_break_minutes = 20, break_limit_minutes = 10,"
+    " weekly_hours_alert = 37.5",
   )
   r = await rig()
   employee = r.clock.employee(ann)
@@ -174,7 +175,8 @@ async def test_catch_up_mirrors_employees_and_settings(pg: Pg, rig: Callable[[],
   assert employee.role is EmployeeRole.ADMIN
   assert r.clock.settings().breaks_enabled is False
   assert r.clock.settings().lunches_enabled is False
-  assert (r.clock.settings().paid_break_minutes, r.clock.settings().weekly_hours_alert) == (20, Decimal("37.5"))
+  assert (r.clock.settings().paid_break_minutes, r.clock.settings().break_limit_minutes) == (20, 10)
+  assert r.clock.settings().weekly_hours_alert == Decimal("37.5")
   assert r.sync.status.last_contact is not None
 
 
