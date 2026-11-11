@@ -102,7 +102,15 @@ Mockup (approved, version 4): https://claude.ai/artifact/92neD6jb6Ae9X7Ts42e9Qa
 
 ## 20, screen off after hours
 
-Not yet discussed.
+1. The screen turns off when the clock is asleep (after hours, 30 s after the last tap: the moment the reader sleeps
+   today) and no input of any kind (touch, keyboard, mouse) has arrived for 30 s.
+2. Any touch turns it back on. While the clock is asleep, an invisible layer over the whole page makes the first tap
+   only wake the clock, never press a button underneath.
+3. The app marks that it's asleep with a file in the shared status folder (as the standby banner works today). A small
+   host service in timeclock-host powers the screen through sway. If the app goes down, the screen comes back on so the
+   standby screen can show the problem.
+4. A RustDesk session's mouse counts as input, so remoting in wakes the screen.
+5. No touch-while-asleep test up front (owner); the dev-clock round and the rollout show it on each monitor.
 
 ## 19, recorder (for 15's pass)
 
