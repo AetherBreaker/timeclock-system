@@ -1,6 +1,6 @@
 [project]
   name            = "timeclock-system"
-  version         = "0.8.7"
+  version         = "0.9.0"
   description     = "Fingerprint time clock: the clock app and its kiosk"
   readme          = "README.md"
   requires-python = ">=3.14"
