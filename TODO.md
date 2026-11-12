@@ -21,56 +21,50 @@ A deferred item needs its own design before it's built.
    register with five identify touches against the stored prints and build the template from them, or compile NBIS
    bozorth3 into a small C extension. Still open: which prints count (inactive employees, the person's own other
    fingers), what the refusal says, and whether it sends an alert.
-5. [ ] **The Fingerprints login accepts a fingerprint** (owner, 2026-11-04). The PIN login that opens the gear menu's
-   Fingerprints screen takes only a PIN; a finger does nothing there. It should run on the same system as the other PIN
-   pads, which always accept a print in place of the PIN. The controller already routes a finger on that pad
-   (`_on_pad_match`, the `FingerprintLogin` case), so start by finding out why it doesn't take effect.
-6. [ ] **Registration reads its presses in one reader session** (owner, 2026-11-06). Each press is its own
+5. [ ] **Registration reads its presses in one reader session** (owner, 2026-11-06). Each press is its own
    `identify_sync([])`: the uru4000 powers up, captures, waits for the lift and powers down, then the 1.0 s
    `finger_off_pause` runs. `enroll_sync` keeps the reader on, re-arms on the lift it detects, and reports each press on
    its own through its progress callback (the "last scanned print", built as identify's probe), but stops after 5 good
    presses (`IMG_ENROLL_STAGES`; only a libfprint patch changes it). Options: enroll in rounds of 5, another round for
    replaced presses, cancelled once the registration ends (recommended: no libfprint release); or patch libfprint for
    one session until cancelled, which saves only a restart per 5 presses over rounds. Either needs a dev round.
-7. [ ] *Deferred.* **On-screen keyboard** for the clock's text fields (very low priority; a physical keyboard is plugged
+6. [ ] *Deferred.* **On-screen keyboard** for the clock's text fields (very low priority; a physical keyboard is plugged
    in when needed).
-8. [ ] *Deferred.* **Per-clock settings** in the admin menu, starting with UI scaling.
-9. [ ] *Deferred.* **UI Mirror Mode** Relies upon the item above coming first. Mirrors the position of everything in the
+7. [ ] *Deferred.* **Per-clock settings** in the admin menu, starting with UI scaling.
+8. [ ] *Deferred.* **UI Mirror Mode** Relies upon the item above coming first. Mirrors the position of everything in the
    UI, so objects on the left and right sides swap places.
-10. [ ] *Deferred.* **Toggle PIN-only login** for an employee from the clock (for now it's set only in the database).
-11. [ ] *Deferred.* **Resolution tool** for a clock-created employee the database refused: renumber the employee and
+9. [ ] *Deferred.* **Toggle PIN-only login** for an employee from the clock (for now it's set only in the database).
+10. [ ] *Deferred.* **Resolution tool** for a clock-created employee the database refused: renumber the employee and
     their records on the unsynced clock so they go through.
-12. [ ] *Deferred.* **Hub introduction for LAN sharing:** clocks on different networks (separate gateways) can't find
+11. [ ] *Deferred.* **Hub introduction for LAN sharing:** clocks on different networks (separate gateways) can't find
     each other by broadcast. The hub sees each clock's public address and could tell clocks with the same `lan` value
     where the others are, so they connect directly through their gateways (WireGuard NAT traversal) and keep sharing
     through a hub outage. Needs both routers to cooperate and both internet connections up; a clock restarted during a
     hub outage loses the link. Shelved 2026-10-28 for a future upgrade.
-13. [ ] *Deferred.* **Per-group lunch and break switches**, possibly before the first release, depending on the owner's
+12. [ ] *Deferred.* **Per-group lunch and break switches**, possibly before the first release, depending on the owner's
     boss.
-14. [ ] *Deferred.* **PIN length rule**, if one is wanted later.
-15. [ ] *Deferred.* **Testing and debug menus.** For example, tapping the reader icon a few times opens a verbose log of
+13. [ ] *Deferred.* **PIN length rule**, if one is wanted later.
+14. [ ] *Deferred.* **Testing and debug menus.** For example, tapping the reader icon a few times opens a verbose log of
     the reader's scans, for troubleshooting someone's fingerprint. It can include a capture mode showing each press's
     picture with the matcher's detail points circled (failed presses included), in memory only, never saved or logged.
     Samples on 2026-10-29 showed ridge cut-offs at the window's left edge counted as detail points, and a faint line
     across the middle of every press.
-16. [ ] *Deferred.* **Larger touch areas for buttons** (owner, 2026-11-02): each button takes taps slightly past its
+15. [ ] *Deferred.* **Larger touch areas for buttons** (owner, 2026-11-02): each button takes taps slightly past its
     drawn edge, so presses feel less finicky, but no two buttons' touch areas overlap. Specifics to be discussed.
-17. [ ] *Deferred.* **Host update download toast** (owner, 2026-11-02): while the clock downloads a host update in the
+16. [ ] *Deferred.* **Host update download toast** (owner, 2026-11-02): while the clock downloads a host update in the
     background, a small toast slides in from the right, bottom right above the database status, with a live progress
     bar. Specifics to be discussed. Additionally make the regular app update banner instead appear as a toast.
-18. [ ] *Deferred.* **Review simultaneous update handling** Verify what happens if an update for both the host image and
-    the app get pushed at around the same time, and ensure the system automatically coordinates the updates safely.
-19. [ ] *Deferred.* **Screen recordings of interactions** (owner, 2026-11-04): any interaction (a touch, a key, a scan)
+17. [ ] *Deferred.* **Screen recordings of interactions** (owner, 2026-11-04): any interaction (a touch, a key, a scan)
     starts a recording of the screen, which runs until 15 seconds pass with none. When someone reports the screen saying
     or showing something odd, the owner can check what it actually showed. Specifics to be discussed, such as where
     recordings are kept, for how long, and who can view them.
-20. [ ] *Deferred.* **Turn the screen off after hours, waking on touch** (owner, 2026-10-29). sway can power the display
-    off (`output * power off`); first check on each clock's monitor that its touch panel keeps working while the screen
-    sleeps, and catch the waking touch with an overlay so it doesn't press a key on the page.
-21. [ ] *Deferred.* **Payroll previews in the punch-editing page's test mode** (owner, 2026-11-05): while the page is
+18. [ ] *On hold.* **Turn the screen off after hours, waking on touch** (owner, 2026-10-29). Designed 2026-11-11 (the
+    TODO wave's spec, §9, and its decisions log). On hold 2026-11-12 until the owner investigates a report of a clock
+    not quite waking early in the morning.
+19. [ ] *Deferred.* **Payroll previews in the punch-editing page's test mode** (owner, 2026-11-05): while the page is
     switched to the test database, buttons beside the shift editor's save button preview the result in each format
     payroll will receive by email. Waits on the automatic payroll emails, which don't exist yet.
-22. [ ] *Deferred.* **The clock prompts for a new PIN** (owner, 2026-11-05): the shift-corrections page's Employees menu
+20. [ ] *Deferred.* **The clock prompts for a new PIN** (owner, 2026-11-05): the shift-corrections page's Employees menu
     gets a "prompt for a new PIN" flag. The next time a clock knows it's really that employee (a fingerprint scan, or a
     login with their current PIN), it asks them to set a new one. For someone without a fingerprint, an editor first
     sets a PIN on the page, gives it to them, and sets the flag; they log in with it and reach the prompt. Clocks never

@@ -10,6 +10,8 @@ left to Claude; everything else is the owner's decision.
 2. The display step goes first: 17 and 20 build on the display and the host updater it moves.
 3. 19's recorder moves to 15's pass (it isn't quick). 15 gets its own pass after this one.
 4. The spec is written only when the whole bundle is ready to start, covering every item at once.
+5. The spec was approved on 2026-11-12, except 20, which is on hold (see 20 below); work starts on the rest.
+6. Item numbers here are `TODO.md`'s as of 2026-11-11, before 5 and 18 were removed.
 
 ## 19, display step (goes first)
 
@@ -100,7 +102,10 @@ Mockup (approved, version 4): https://claude.ai/artifact/92neD6jb6Ae9X7Ts42e9Qa
    `TODO.md`. (Found: the host already waits for app deploys; a deploy during a host restart fails without a retry; a
    broken app release in the 10 minutes after a host update can roll back a good host release.)
 
-## 20, screen off after hours
+## 20, screen off after hours (on hold)
+
+On hold (owner, 2026-11-12): a clock was reported not quite waking early in the morning, and the owner investigates
+that before this is built. The decisions below stand until that investigation changes them.
 
 1. The screen turns off when the clock is asleep (after hours, 30 s after the last tap: the moment the reader sleeps
    today) and no input of any kind (touch, keyboard, mouse) has arrived for 30 s.

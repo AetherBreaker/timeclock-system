@@ -4,6 +4,9 @@ One pass over a batch of smaller TODO items, shipped in as few releases and dev-
 decisions are in `2026-11-11-todo-wave-decisions.md` beside this file; this spec carries them out. "My call" marks a
 choice the owner left to Claude.
 
+Approved by the owner on 2026-11-12, except item 20 (§9), which is on hold: a clock was reported not quite waking early
+in the morning, and the owner investigates that before the screen-off change is built.
+
 ## 1. Scope
 
 | Item | What | Where |
@@ -14,10 +17,9 @@ choice the owner left to Claude.
 | 14 | New PINs are 4 to 12 digits | clock app, backend |
 | 16 | Buttons take taps a little past their edges; a bigger gear | clock app |
 | 17 | Update toasts: a system-update toast with live progress; the app-update banner becomes a toast | host, clock app |
-| 20 | The screen turns off after hours and wakes on touch | host, clock app |
 
 Off the TODO list with no code: 5 (the Fingerprints login already takes a finger) and 18 (simultaneous updates; not
-worth it). Not in this pass: 19's recorder and 15, which get the next pass together.
+worth it). Not in this pass: 19's recorder and 15, which get the next pass together, and 20 (on hold, §9).
 
 ### Non-goals
 
@@ -29,12 +31,11 @@ worth it). Not in this pass: 19's recorder and 15, which get the next pass toget
 
 1. **Display step.** A timeclock-standby release (the display and updater removed), then host release H1 that pins it and
    carries the moved files, the new updater and smartmontools. Dev-clock round, then promotion to `:stable`.
-2. **Host release H2:** the updater's download progress (17) and the screen-power service (20). Kept out of H1 (my call):
-   the update that installs the new updater gets no after-update check (§3.4), so H1 carries only the move, and H2 is
-   the first host release the new updater judges and can roll back.
-3. **Clock app release** (2, 3, 14, 16, 17, 20 app sides), through `poe release-and-pin` after a dev-clock round. It
-   doesn't wait for H2: with no progress file there's no system toast, and an older host ignores the asleep mark. Until
-   H2, the wake layer (§9.2) still makes the first tap on an asleep clock only wake it, with the screen on.
+2. **Host release H2:** the updater's download progress (17). Kept out of H1 (my call): the update that installs the new
+   updater gets no after-update check (§3.4), so H1 carries only the move, and H2 is the first host release the new
+   updater judges and can roll back.
+3. **Clock app release** (2, 3, 14, 16, 17 app sides), through `poe release-and-pin` after a dev-clock round. It doesn't
+   wait for H2: with no progress file there's no system toast.
 4. **Backend release** for 14's page side, `poe release-and-pin`, and the submodule bump in timeclock-system.
 
 Every device-facing change goes on the dev clock (`timeclock-system-dev`, test database) before release.
@@ -201,7 +202,10 @@ progress. The banner file still turns it on and off; the toast uses the app's ow
 status app keeps writing the text unchanged, so the app release before this one (v0.9.0) still shows its banner between
 H1 and this app release (my call).
 
-## 9. Item 20: screen off after hours
+## 9. Item 20: screen off after hours (on hold)
+
+Not built in this pass (owner, 2026-11-12): a clock was reported not quite waking early in the morning, and the owner
+investigates that first. The design below is kept for when it resumes and may change with what that finds.
 
 ### 9.1 When
 
@@ -233,8 +237,9 @@ Any input turns it back on. A RustDesk session's mouse is input, so remoting in 
 
 ## 10. TODO.md
 
-Remove 5 and 18 in this branch, and each of 2, 3, 14, 16, 17 and 20 once it lands. 19 stays for its recorder: its
-display step is done, and its settled recorder decisions live in the decisions log.
+Remove 5 and 18 in this branch, and each of 2, 3, 14, 16 and 17 once it lands. 19 stays for its recorder: its
+display step is done, and its settled recorder decisions live in the decisions log. 20 stays, marked on hold, pointing
+at §9 and the decisions log.
 
 ## 11. Constraints
 
@@ -249,6 +254,6 @@ display step is done, and its settled recorder decisions live in the decisions l
 - How fatal exceptions reach aeth_ext in §4.1, and how the writer captures CRITICAL records in §4.2.
 - Where the startup row check lives in the store, and the warning's wording (§5).
 - How the touch areas are built (§7.3).
-- The progress and asleep files' exact names and fields (§8.2, §9.2).
+- The progress file's exact name and fields (§8.2).
 - Toast and error wording beyond what's quoted here.
 - Test coverage, under each repo's rules.
