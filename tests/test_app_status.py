@@ -8,6 +8,9 @@ from datetime import UTC, datetime, time as dtime, timedelta
 from importlib.metadata import version
 from typing import TYPE_CHECKING
 
+# Third party imports
+import pytest
+
 # First party imports
 from timeclock_system.app_status import HostUpdate, read_banner, read_host_update, write_status
 
@@ -111,3 +114,13 @@ def test_host_update_missing_or_malformed_is_none(tmp_path: Path) -> None:
   assert read_host_update(tmp_path, now) is None
   (tmp_path / "host-update.json").write_text(json.dumps({"state": "downloading"}))
   assert read_host_update(tmp_path, now) is None
+
+
+@pytest.mark.parametrize(
+  "change",
+  [{"state": "installing"}, {"mode": "later"}, {"done": 1e400}, {"total": float("inf")}, {"window_start": "nope"}],
+)
+def test_host_update_with_an_unrecognised_or_unrepresentable_field_is_none(tmp_path: Path, change: dict[str, object]) -> None:
+  data = {"state": "downloading", "done": 1, "total": 2, "mode": "window", "window_start": "03:00", "at": 1.0} | change
+  (tmp_path / "host-update.json").write_text(json.dumps(data))  # json.dumps writes inf as Infinity, which json.loads reads back
+  assert read_host_update(tmp_path, time.time()) is None

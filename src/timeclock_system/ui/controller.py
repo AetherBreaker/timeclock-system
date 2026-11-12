@@ -569,11 +569,11 @@ class KioskController:
     return self._host_update
 
   def add_listener(self, cb: Callable[[], object]) -> None:
-    """Call `cb` after any entry point that changed what the page shows: the screen, the reader line, the update toasts."""
+    """Call `cb` after any entry point that changed what the page shows: the screen or the reader line (the update toasts poll on their own timer)."""
     self._listeners.append(cb)
 
   def _snapshot(self) -> tuple[object, ...]:
-    return (self._screen, self.reader_awake, self.reader_indicator, self.reader_message, self._app_updating, self._host_update)
+    return (self._screen, self.reader_awake, self.reader_indicator, self.reader_message)
 
   def _sync_reader(self) -> None:
     # `_mode` is what was last sent. After a press times out or the reader fails, the scanner returns to READY by itself,
@@ -962,8 +962,9 @@ class KioskController:
       if isinstance(s, PinEntry) and s.field == "username":
         if len(s.username) < _MAX_DIGITS:
           self._screen = replace(s, username=s.username + d, touched_at=now, error=None)
-      elif len(pin := s.pin.get_secret_value()) < _MAX_DIGITS:
-        self._screen = replace(s, pin=SecretStr(pin + d), touched_at=now, error=None)
+      elif len(s.pin.get_secret_value()) < _MAX_DIGITS:
+        # Inline, never a named local: a crash record renders its frame's locals (the typed PIN).
+        self._screen = replace(s, pin=SecretStr(s.pin.get_secret_value() + d), touched_at=now, error=None)
 
   async def backspace(self) -> None:
     """Delete the last digit."""
@@ -1035,6 +1036,8 @@ class KioskController:
     """The new employee's PIN, then its confirmation; saved once both match. Split out of `enter` for C901."""
     now = self._mono()
     if s.field == "first":
+      if not check_new_pin(s.pin):
+        return replace(s, pin=SecretStr(""), touched_at=now, error=text.PIN_LENGTH)
       return replace(s, field="second", first=s.pin, pin=SecretStr(""), touched_at=now, error=None)
     if s.pin.get_secret_value() != s.first.get_secret_value():
       return replace(s, field="first", first=SecretStr(""), pin=SecretStr(""), touched_at=now, error=text.PIN_MISMATCH)

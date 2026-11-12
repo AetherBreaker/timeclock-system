@@ -72,16 +72,18 @@ def read_host_update(status_dir: Path, now: float) -> HostUpdate | None:
   """The host updater's download state, or None when there's none to show.
 
   A `downloading` file older than 5 minutes is stale (the updater dies without removing it). A `downloaded` one stays
-  until the updater removes it at the restart. An unreadable or malformed file reads as none.
+  until the updater removes it at the restart. An unreadable, malformed or unrecognised file reads as none: a toast must never stop the clock.
   """
   path = status_dir / HOST_UPDATE_FILE
   try:
     stale = now - path.stat().st_mtime >= HOST_UPDATE_STALE_SECS
     data = json.loads(path.read_text())
+    if data["state"] not in {"downloading", "downloaded"} or data["mode"] not in {"window", "immediate"}:
+      return None
     downloaded = data["state"] == "downloaded"
     if stale and not downloaded:
       return None
     window_start = time.fromisoformat(data["window_start"]) if data["mode"] == "window" else None
     return HostUpdate(downloaded, int(data["done"]), int(data["total"]), window_start, float(data["at"]))
-  except OSError, ValueError, KeyError, TypeError:
+  except OSError, ValueError, KeyError, TypeError, ArithmeticError:
     return None

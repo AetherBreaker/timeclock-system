@@ -299,7 +299,7 @@ class _KioskPage:
       show(app_toast, want=self._controller.app_updating)
       if (u := self._controller.host_update) is not None:
         # MB are 10^6 bytes, rounded; the percent is floored. The text stays while the toast slides away.
-        done_mb, total_mb = (u.done + 500_000) // 1_000_000, (u.total + 500_000) // 1_000_000
+        done_mb, total_mb = (min(u.done, u.total) + 500_000) // 1_000_000, (u.total + 500_000) // 1_000_000
         percent = 100 if u.downloaded else min(100, u.done * 100 // u.total) if u.total else 0
         host_title.text = text.HOST_UPDATE_DOWNLOADED if u.downloaded else text.HOST_UPDATE_DOWNLOADING
         host_sub.text = (

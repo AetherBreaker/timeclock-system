@@ -1515,6 +1515,14 @@ async def test_add_an_employee_end_to_end(kiosk: Kiosk) -> None:
   assert isinstance(kiosk.ctl.screen, RegisterPrompt)
 
 
+async def test_a_short_new_pin_is_refused_at_the_first_entry(kiosk: Kiosk) -> None:
+  await fill_details(kiosk)
+  await kiosk.type_and_enter("123")
+  pin = kiosk.ctl.screen
+  assert isinstance(pin, NewPin) and pin.field == "first" and pin.error == text.PIN_LENGTH
+  assert pin.pin.get_secret_value() == ""
+
+
 async def test_a_new_pin_under_four_digits_is_refused(kiosk: Kiosk) -> None:
   await fill_details(kiosk)
   await kiosk.type_and_enter("123")
@@ -2013,14 +2021,14 @@ def put_banner(status_dir: Path, wall: datetime, age: float = 0) -> None:
   os.utime(path, (stamp, stamp))
 
 
-async def test_app_updating_appears_on_tick_and_notifies(kiosk: Kiosk, tmp_path: Path) -> None:
+async def test_app_updating_appears_on_tick_without_notifying(kiosk: Kiosk, tmp_path: Path) -> None:
   heard: list[bool] = []
   kiosk.ctl.add_listener(lambda: heard.append(kiosk.ctl.app_updating))
   put_banner(tmp_path / "status", kiosk.t.wall)
   assert not kiosk.ctl.app_updating
   await kiosk.ctl.tick()
   assert kiosk.ctl.app_updating
-  assert heard[-1] is True
+  assert heard == []  # the toast polls on its own timer
 
 
 async def test_app_updating_expires_after_10_minutes(kiosk: Kiosk, tmp_path: Path) -> None:
@@ -2050,7 +2058,8 @@ def put_host_update(status_dir: Path, wall: datetime, **fields: object) -> float
   return at
 
 
-async def test_host_update_appears_on_tick_and_notifies(kiosk: Kiosk, tmp_path: Path) -> None:
+async def test_host_update_appears_on_tick_without_notifying(kiosk: Kiosk, tmp_path: Path) -> None:
+  # The toasts poll on their own timer, so progress doesn't rebuild the page: no notification.
   heard: list[object] = []
   kiosk.ctl.add_listener(lambda: heard.append(kiosk.ctl.host_update))
   put_host_update(tmp_path / "status", kiosk.t.wall, state="downloading", done=20)
@@ -2058,13 +2067,11 @@ async def test_host_update_appears_on_tick_and_notifies(kiosk: Kiosk, tmp_path: 
   await kiosk.ctl.tick()
   assert kiosk.ctl.host_update is not None
   assert kiosk.ctl.host_update.done == 20  # noqa: PLR2004
-  assert heard[-1] == kiosk.ctl.host_update
-  # A new write (progress) tells the listeners again.
   put_host_update(tmp_path / "status", kiosk.t.wall, state="downloading", done=30)
   await kiosk.ctl.tick()
   assert kiosk.ctl.host_update is not None
   assert kiosk.ctl.host_update.done == 30  # noqa: PLR2004
-  assert len(heard) == 2  # noqa: PLR2004
+  assert heard == []
 
 
 async def test_a_downloaded_window_update_clears_after_five_seconds(kiosk: Kiosk, tmp_path: Path) -> None:
