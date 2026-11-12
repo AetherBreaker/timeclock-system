@@ -226,7 +226,8 @@ Any input turns it back on. A RustDesk session's mouse is input, so remoting in 
 3. Requiring the clock window covers a crashed app: the watcher shows the standby, the screen comes on, and the standby
    shows the problem even if the asleep file was left behind.
 4. Whether each monitor's touch panel keeps sending touches while the screen is off isn't tested up front (owner); the
-   dev-clock round and the rollout show it on each monitor.
+   dev-clock round and the rollout show it on each monitor. H2's promotion to `:stable` doesn't wait for a tap test on
+   the production monitors; the rollout is the test (owner).
 5. If a monitor can't be woken by touch while off, the fallback is no code: `systemctl mask timeclock-screen` on that
    clock over SSH (owner). The mask lives in `/etc`, so host updates keep it.
 
