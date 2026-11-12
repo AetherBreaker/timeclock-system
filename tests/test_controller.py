@@ -861,8 +861,8 @@ async def test_too_similar_admin_reject_saves_nothing(kiosk: Kiosk) -> None:
 async def new_employee_registers(kiosk: Kiosk) -> None:
   """Ada adds Zed (10001), then registers his left index in the add-employee flow."""
   await fill_details(kiosk)
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   await kiosk.ctl.register()
   await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   screen = kiosk.ctl.screen
@@ -1515,10 +1515,19 @@ async def test_add_an_employee_end_to_end(kiosk: Kiosk) -> None:
   assert isinstance(kiosk.ctl.screen, RegisterPrompt)
 
 
+async def test_a_new_pin_under_four_digits_is_refused(kiosk: Kiosk) -> None:
+  await fill_details(kiosk)
+  await kiosk.type_and_enter("123")
+  await kiosk.type_and_enter("123")
+  pin = kiosk.ctl.screen
+  assert isinstance(pin, NewPin) and pin.field == "first" and pin.error == text.PIN_LENGTH
+  assert kiosk.store.pending_employees() == []
+
+
 async def test_the_new_employees_fingerprint_is_optional(kiosk: Kiosk) -> None:
   await fill_details(kiosk, role="employee")
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   await kiosk.ctl.register()
   await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   registering = kiosk.ctl.screen
@@ -1536,8 +1545,8 @@ async def test_the_new_employees_fingerprint_is_optional(kiosk: Kiosk) -> None:
 
 async def test_cancel_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) -> None:
   await fill_details(kiosk)
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   await kiosk.ctl.cancel()
   assert isinstance(kiosk.ctl.screen, EmployeeAdded)
   assert [e.id for e in kiosk.store.pending_employees()] == [10001]
@@ -1545,8 +1554,8 @@ async def test_cancel_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) -> 
 
 async def test_a_timeout_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) -> None:
   await fill_details(kiosk)
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   kiosk.t.advance(IDLE_CLOSE_SECS)
   await kiosk.ctl.tick()
   assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)
@@ -1557,8 +1566,8 @@ async def test_a_timeout_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) 
 
 async def test_a_timeout_while_registering_the_new_employee_counts_as_a_skip(kiosk: Kiosk) -> None:
   await fill_details(kiosk)
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   await kiosk.ctl.register()
   await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   kiosk.t.advance(IDLE_CLOSE_SECS)
@@ -1801,8 +1810,8 @@ async def test_first_registration_asks_the_finger(kiosk: Kiosk) -> None:
 
 async def test_add_employee_step_asks_the_finger(kiosk: Kiosk) -> None:
   await fill_details(kiosk)
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   await kiosk.ctl.register()
   pick = kiosk.ctl.screen
   assert isinstance(pick, FingerPick) and pick.action is None and pick.added is not None

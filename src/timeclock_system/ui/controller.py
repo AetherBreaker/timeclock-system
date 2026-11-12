@@ -1028,7 +1028,7 @@ class KioskController:
     if s.pin.get_secret_value() != s.first.get_secret_value():
       return replace(s, field="first", first=SecretStr(""), pin=SecretStr(""), touched_at=now, error=text.PIN_MISMATCH)
     if not check_new_pin(s.pin):
-      return replace(s, field="first", first=SecretStr(""), pin=SecretStr(""), touched_at=now, error=text.PIN_DIGITS_ONLY)
+      return replace(s, field="first", first=SecretStr(""), pin=SecretStr(""), touched_at=now, error=text.PIN_LENGTH)
     try:
       employee = await self._clock.add_employee(s.details, s.pin)
     except EmployeeBlockFull:
