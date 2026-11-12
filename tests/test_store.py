@@ -486,6 +486,17 @@ def test_an_unreadable_copied_table_is_emptied(db_path: Path) -> None:
   assert query(db_path, "SELECT count(*) FROM employees") == [(1,)]
 
 
+def test_emptying_a_part_says_what_and_why(db_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+  LocalStore(db_path).close()
+  raw(db_path, "INSERT INTO groups (id, json) VALUES (2, ?)", (BAD,))
+  with caplog.at_level("WARNING"):
+    LocalStore(db_path).close()
+  (message,) = [r.getMessage() for r in caplog.records if "emptied" in r.getMessage()]
+  assert message.startswith("emptied groups (all rows): dropped 1 rows, at least one unreadable (first error: ")
+  assert "('id',)" in message
+  assert "missing" in message
+
+
 @pytest.mark.parametrize(
   ("table", "columns", "values"),
   [

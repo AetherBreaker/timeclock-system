@@ -152,10 +152,18 @@ class LocalStore:
         try:
           for (text,) in rows:
             model.model_validate_json(text)
-        except ValidationError:
+        except ValidationError as e:
           with self._conn:
             self._conn.execute(f"DELETE FROM {table} WHERE {where}")
-          logger.warning("emptied %d unreadable %s rows (%s); the next catch-up refills them", len(rows), table, where)
+          first = e.errors(include_input=False)[0]  # never the input: a row can hold hashes
+          logger.warning(
+            "emptied %s (%s): dropped %d rows, at least one unreadable (first error: %s, %s); the next catch-up refills them",
+            table,
+            "all rows" if where == "1" else "synced rows",
+            len(rows),
+            first["loc"],
+            first["type"],
+          )
       for table, model, where in _UNSENT:
         for row_id, text in self._conn.execute(f"SELECT id, json FROM {table} WHERE {where}").fetchall():
           try:
@@ -196,13 +204,14 @@ class LocalStore:
 
     That's an insert whose acknowledgement was lost (§6.6): the database has the row, the clock never heard back.
     """
-    fetched = {e.id: e.pin_hash.get_secret_value() for e in rows}
+    # The hash comparison is in SQL, never in named locals: a failed write's crash record renders its frame's locals.
     with self._lock, self._conn:
       self._conn.execute("DELETE FROM employees")
       self._conn.executemany("INSERT INTO employees (id, json) VALUES (?, ?)", [(e.id, _dump(e)) for e in rows])
-      for pid, json in self._conn.execute("SELECT id, json FROM pending_employees").fetchall():
-        if fetched.get(pid) == Employee.model_validate_json(json).pin_hash.get_secret_value():
-          self._conn.execute("DELETE FROM pending_employees WHERE id = ?", (pid,))
+      self._conn.execute(
+        "DELETE FROM pending_employees WHERE EXISTS (SELECT 1 FROM employees e WHERE e.id = pending_employees.id"
+        " AND json_extract(e.json, '$.pin_hash') = json_extract(pending_employees.json, '$.pin_hash'))"
+      )
 
   def insert_pending_employee(self, e: Employee) -> None:
     """Store an employee added at this clock, unsynced until the database accepts it."""

@@ -578,14 +578,16 @@ class Clock:
       raise EmployeeBlockFull
     # $2a$, like pgcrypto's gen_salt('bf'): pgcrypto's crypt() can't check bcrypt's default $2b$, and the owner may check a
     # PIN in SQL.
-    pin_hash = await asyncio.to_thread(lambda: bcrypt.hashpw(pin.get_secret_value().encode(), bcrypt.gensalt(prefix=b"2a")).decode())
+    # The hash stays inline, never in a named local: a failed save's crash record renders its frame's locals.
     e = Employee(
       id=number,
       first_name=new.first_name,
       middle_name=new.middle_name,
       last_name=new.last_name,
       pin_username=str(number),
-      pin_hash=SecretStr(pin_hash),
+      pin_hash=SecretStr(
+        await asyncio.to_thread(lambda: bcrypt.hashpw(pin.get_secret_value().encode(), bcrypt.gensalt(prefix=b"2a")).decode())
+      ),
       role=new.role,
       group_id=new.group_id,
       phone=new.phone,
