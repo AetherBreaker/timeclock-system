@@ -87,6 +87,20 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 .reader-message-error { color: var(--sft-red); }
 .reader-message-success { color: var(--sft-read-green); }
 .reader-message-unrecognized { color: var(--sft-orange); }
+/* Taps land up to 12 px past a button's drawn edge (owner, 2026-11-11), on ::after since Quasar draws a button's shadow
+   with ::before. Where two buttons sit under 24 px apart the gap splits down the middle, so no two areas overlap. */
+.sft-button::after, .sft-key::after { content: ""; position: absolute; inset: -12px; }
+.nicegui-row > .sft-button + .sft-button::after { left: -8px; }
+.nicegui-row > .sft-button:has(+ .sft-button)::after { right: -8px; }
+.nicegui-column > .sft-button + .sft-button::after { top: -8px; }
+.nicegui-column > .sft-button:has(+ .sft-button)::after { bottom: -8px; }
+.sft-pad > .sft-key::after { inset: -4px; }
+.sft-pad > .sft-key:nth-child(3n+1)::after { left: -12px; }
+.sft-pad > .sft-key:nth-child(3n)::after { right: -12px; }
+.sft-pad > .sft-key:nth-child(-n+3)::after { top: -12px; }
+.sft-pad > .sft-key:nth-last-child(-n+3)::after { bottom: -12px; }
+/* The gear: half again as big, and any tap in its corner of the screen (0-136 px across, 0-120 px down) opens it. */
+.sft-gear::after { content: ""; position: absolute; top: -8px; left: -16px; width: 136px; height: 120px; }
 """
 # R13.2: no text selection, no long-press menu.
 _NO_SELECT_CSS = "body { user-select: none; -webkit-user-select: none; touch-action: manipulation; }"
@@ -313,8 +327,8 @@ class _KioskPage:
 
   def _gear(self) -> None:
     # On the idle screen and the punch menu only; above the idle screen's tap layer (z-10), so tapping it isn't an idle tap.
-    ui.button(icon="settings", on_click=lambda: self._guarded(self._controller.gear)).props("flat round size=lg").classes(
-      "fixed top-2 left-4 z-20"
+    ui.button(icon="settings", on_click=lambda: self._guarded(self._controller.gear)).props("flat round size=30px").classes(
+      "fixed top-2 left-4 z-20 sft-gear"
     ).mark("gear")
 
   def _idle(self, s: Idle) -> None:
@@ -547,7 +561,7 @@ class _KioskPage:
     ui.label(shown).classes("text-4xl h-12").mark("pin-shown")
     # Always drawn, a line high: clearing the error at the next key mustn't shift the keys under a finger.
     ui.label(error or "").classes("sft-error").style("min-height: 1.5em").mark("pin-error")
-    with ui.grid(columns=3).classes("gap-2"):
+    with ui.grid(columns=3).classes("gap-2 sft-pad"):
       for key in _PAD:
         match key:
           case "⌫":

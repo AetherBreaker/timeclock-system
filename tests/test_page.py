@@ -426,6 +426,19 @@ async def test_gear_shows_on_idle_and_menu_only(controller: KioskController, tmp
     await user.should_not_see(marker="gear")
 
 
+async def test_the_keypad_and_gear_carry_their_touch_classes(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await user.should_see(marker="gear")
+    assert all("sft-gear" in e.classes for e in user.find(marker="gear").elements)
+    await controller.cancel()
+    await controller.use_pin()
+    await user.should_see(text.ENTER_USERNAME)
+    grids = user.find(ui.grid).elements
+    assert grids
+    assert all("sft-pad" in e.classes for e in grids)
+
+
 async def test_the_version_sits_below_the_reader_line(controller: KioskController, tmp_path: Path) -> None:
   # In the very bottom-left corner, the reader line about 12 px above it; both 16 px from the left edge.
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
