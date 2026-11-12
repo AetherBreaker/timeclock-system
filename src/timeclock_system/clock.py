@@ -92,9 +92,9 @@ def normalize_phone(raw: str) -> str:
 
 
 def check_new_pin(pin: SecretStr) -> bool:
-  """Whether `pin` is acceptable for a new employee: digits only, any length. The one place a length rule would go."""
+  """Whether `pin` is acceptable for a new employee: 4 to 12 ASCII digits (12 is the keypad's limit). `save_pin` in the backend's employee page enforces the same rule."""
   value = pin.get_secret_value()
-  return value.isascii() and value.isdecimal()
+  return 4 <= len(value) <= 12 and value.isascii() and value.isdecimal()  # noqa: PLR2004
 
 
 @dataclass(frozen=True)
@@ -569,7 +569,7 @@ class Clock:
     if new.role not in {EmployeeRole.EMPLOYEE, EmployeeRole.MANAGER}:
       raise ValueError("a clock adds employees and managers only")
     if not check_new_pin(pin):
-      raise ValueError("the PIN must be digits only")
+      raise ValueError("the PIN must be 4 to 12 digits")
     base = self._clock_number * _BLOCK
     number = max((n for n in self._known_numbers if base < n < base + _BLOCK), default=base) + 1
     while number in self._known_numbers:
@@ -578,14 +578,16 @@ class Clock:
       raise EmployeeBlockFull
     # $2a$, like pgcrypto's gen_salt('bf'): pgcrypto's crypt() can't check bcrypt's default $2b$, and the owner may check a
     # PIN in SQL.
-    pin_hash = await asyncio.to_thread(lambda: bcrypt.hashpw(pin.get_secret_value().encode(), bcrypt.gensalt(prefix=b"2a")).decode())
+    # The hash stays inline, never in a named local: a failed save's crash record renders its frame's locals.
     e = Employee(
       id=number,
       first_name=new.first_name,
       middle_name=new.middle_name,
       last_name=new.last_name,
       pin_username=str(number),
-      pin_hash=SecretStr(pin_hash),
+      pin_hash=SecretStr(
+        await asyncio.to_thread(lambda: bcrypt.hashpw(pin.get_secret_value().encode(), bcrypt.gensalt(prefix=b"2a")).decode())
+      ),
       role=new.role,
       group_id=new.group_id,
       phone=new.phone,

@@ -564,10 +564,11 @@ def test_normalize_phone_refuses_anything_else(raw: str) -> None:
 
 def test_check_new_pin() -> None:
   assert check_new_pin(SecretStr("0042"))
-  assert check_new_pin(SecretStr("1"))
-  assert not check_new_pin(SecretStr(""))
+  assert check_new_pin(SecretStr("123456789012"))
+  for bad in ("", "1", "123", "1234567890123"):
+    assert not check_new_pin(SecretStr(bad))
   assert not check_new_pin(SecretStr("12a4"))
-  assert not check_new_pin(SecretStr("\uff11\uff12"))  # full-width digits are decimal, but not ASCII
+  assert not check_new_pin(SecretStr("\uff11\uff12\uff13\uff14"))  # full-width digits are decimal, but not ASCII
 
 
 async def test_add_employee_numbers_from_the_clocks_block(env: Env) -> None:
@@ -589,25 +590,25 @@ async def test_add_employee_skips_numbers_the_clock_knows(env: Env) -> None:
     "employees", [make_employee(10005, username="10005"), make_employee(4, username="10006"), make_employee(20009, username="20009")]
   )
   await env.clock.load()
-  assert (await env.clock.add_employee(NEW, SecretStr("1"))).id == 10007  # noqa: PLR2004
+  assert (await env.clock.add_employee(NEW, SecretStr("1234"))).id == 10007  # noqa: PLR2004
 
 
 async def test_add_employee_refuses_a_full_block_admins_and_bad_pins(env: Env) -> None:
   env.store.replace_table("employees", [make_employee(19999)])
   await env.clock.load()
   with pytest.raises(EmployeeBlockFull):
-    await env.clock.add_employee(NEW, SecretStr("1"))
+    await env.clock.add_employee(NEW, SecretStr("1234"))
   with pytest.raises(ValueError, match="employees and managers"):
-    await env.clock.add_employee(dataclasses.replace(NEW, role=EmployeeRole.ADMIN), SecretStr("1"))
+    await env.clock.add_employee(dataclasses.replace(NEW, role=EmployeeRole.ADMIN), SecretStr("1234"))
   with pytest.raises(ValueError, match="PIN"):
-    await env.clock.add_employee(NEW, SecretStr("12x"))
+    await env.clock.add_employee(NEW, SecretStr("123"))
   assert env.store.pending_employees() == []
 
 
 async def test_add_employee_tells_the_record_listeners(env: Env) -> None:
   heard: list[object] = []
   env.clock.add_record_listener(heard.append)
-  e = await env.clock.add_employee(NEW, SecretStr("1"))
+  e = await env.clock.add_employee(NEW, SecretStr("1234"))
   assert heard == [e]
 
 
@@ -622,7 +623,7 @@ async def test_a_pending_employee_hides_the_mirror_row_sharing_its_number(env: E
 
 
 async def test_a_pending_manager_cant_approve_overrides(env: Env) -> None:
-  manager = await env.clock.add_employee(dataclasses.replace(NEW, role=EmployeeRole.MANAGER), SecretStr("1"))
+  manager = await env.clock.add_employee(dataclasses.replace(NEW, role=EmployeeRole.MANAGER), SecretStr("1234"))
   assert not env.clock.override_manager(manager, 1)
   env.store.accept_employee(manager)
   env.clock.notify_changed({"employees"})

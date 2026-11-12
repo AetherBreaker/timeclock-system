@@ -1,5 +1,6 @@
 # Standard library imports
 import json
+import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -14,6 +15,7 @@ from timeclock_system.crash_alerts import CrashAlertWriter, register_crash_alert
 
 if TYPE_CHECKING:
   # Standard library imports
+  from collections.abc import Callable
   from pathlib import Path
 
   # Third party imports
@@ -37,7 +39,7 @@ def test_crash_alert_line_shape(tmp_path: Path) -> None:
   writer(tmp_path).write((a_trail(),))
   [line] = (tmp_path / "crash-alerts.0.jsonl").read_text(encoding="utf-8").splitlines()
   record = json.loads(line)
-  assert set(record) == {"at", "program", "host", "trails"}
+  assert set(record) == {"at", "program", "host", "trails", "errors"}
   assert (record["at"], record["program"], record["host"]) == (NOW.isoformat(), "timeclock-system-1", "timeclock-system-1")
   [trail] = record["trails"]
   assert set(trail) == {"origin", "entries"}
@@ -81,3 +83,31 @@ def test_writer_callback_only_on_fatal(tmp_path: Path, monkeypatch: pytest.Monke
   monkeypatch.setattr(crash_alerts, "SHUTDOWN", SimpleNamespace(kind=ShutdownKind.FATAL))
   callback((a_trail(),))
   assert len((tmp_path / "crash-alerts.0.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_crash_alert_line_has_errors(tmp_path: Path) -> None:
+  writer(tmp_path).write((), [("Fatal exception in thread scanner", "Traceback ...")])
+  [line] = (tmp_path / "crash-alerts.0.jsonl").read_text(encoding="utf-8").splitlines()
+  assert json.loads(line)["errors"] == [{"message": "Fatal exception in thread scanner", "traceback": "Traceback ..."}]
+
+
+def test_critical_records_with_a_traceback_reach_the_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  registered: list[Callable[[tuple[ExceptionTrail, ...]], None]] = []
+  monkeypatch.setattr(crash_alerts, "register_for_shutdown", lambda cb, **_k: registered.append(cb))
+  monkeypatch.setattr(crash_alerts, "SHUTDOWN", SimpleNamespace(kind=ShutdownKind.FATAL))
+  root = logging.getLogger()
+  before = list(root.handlers)
+  register_crash_alert_writer(writer(tmp_path))
+  try:
+    logging.getLogger("x").critical("boom", exc_info=ValueError("v"))
+    logging.getLogger("x").critical("no traceback")
+    [callback] = registered
+    callback(())
+  finally:
+    for h in root.handlers[:]:
+      if h not in before:
+        root.removeHandler(h)
+  [line] = (tmp_path / "crash-alerts.0.jsonl").read_text(encoding="utf-8").splitlines()
+  [error] = json.loads(line)["errors"]
+  assert error["message"] == "boom"
+  assert "ValueError" in error["traceback"]

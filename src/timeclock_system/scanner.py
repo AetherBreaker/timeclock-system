@@ -1,7 +1,7 @@
 """The fingerprint scanner thread (spec §6.2): one daemon thread owns the reader; the event loop drives its mode.
 
 Concurrency: `_lock` guards the fields `set_mode`/`register`/`merge`/`set_gallery`/`stop`/`busy_seconds` share with the
-thread. It is never held across a blocking reader call or a `post`/`on_fatal` call. Every pause waits on `_wake`, which a
+thread. It is never held across a blocking reader call or a `post` call. Every pause waits on `_wake`, which a
 mode change, a merge or `stop` sets, so pauses end early; the one exception, the pause after an early result, waits on
 `_stopped` (see `_ready_once`). Every reader call runs on the thread: bozorth3, behind `score`, keeps global state.
 """
@@ -288,13 +288,12 @@ def _decide(capture: Capture, gallery: Sequence[GalleryPrint], margin: int) -> M
 
 
 class Scanner:
-  """Owns the reader on a daemon thread; `post` and `on_fatal` are called on that thread."""
+  """Owns the reader on a daemon thread; `post` is called on that thread."""
 
   def __init__(
     self,
     reader: Reader,
     post: Callable[[ScannerEvent], None],
-    on_fatal: Callable[[str], None],
     *,
     timings: ScannerTimings = ScannerTimings(),  # noqa: B008  # frozen, so sharing the default is safe
     monotonic: Callable[[], float] = time.monotonic,
@@ -302,7 +301,6 @@ class Scanner:
     """Create a scanner in CLOSED mode; `start` launches the thread."""
     self._reader = reader
     self._post = post
-    self._on_fatal = on_fatal
     self._timings = timings
     self._monotonic = monotonic
     self._thread = threading.Thread(target=self._run, name="scanner", daemon=True)
@@ -430,9 +428,9 @@ class Scanner:
   def _run(self) -> None:
     try:
       self._loop()
-    except ReaderGone as e:
-      self._opened = False
-      self._on_fatal(str(e))
+    except ReaderGone:
+      self._opened = False  # re-raised to threading.excepthook (aeth_ext's), which alerts with the traceback
+      raise
     else:
       if self._opened:
         try:

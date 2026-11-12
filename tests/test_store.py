@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 # Third party imports
 import pytest
 from pydantic import SecretBytes
+from timeclock_schema.base import REVEAL
 from timeclock_schema.enums import (
   BypassReason,
   CorrectionAction,
@@ -31,7 +32,7 @@ from timeclock_schema.models import (
 )
 
 # First party imports
-from timeclock_system.store import LocalStore
+from timeclock_system.store import LocalStore, UnreadableRowError
 
 if TYPE_CHECKING:
   # Standard library imports
@@ -464,21 +465,101 @@ def test_fingerprint_changes_queue_and_clear(store: LocalStore) -> None:
   assert store.unsynced_fingerprint_changes() == []
 
 
-def test_unlabelled_local_prints_are_dropped_on_open(db_path: Path) -> None:
-  LocalStore(db_path).close()
+BAD = '{"unknown": 1}'
+
+
+def raw(db_path: Path, sql: str, params: tuple = ()) -> None:
   conn = sqlite3.connect(db_path)
   with conn:
-    conn.execute(
-      "INSERT INTO fingerprints (id, employee_id, origin, synced, json) VALUES (?, 1, 'local', 0, ?)",
-      (str(uuid4()), '{"employee_id": 1}'),
-    )
+    conn.execute(sql, params)
   conn.close()
+
+
+def test_an_unreadable_copied_table_is_emptied(db_path: Path) -> None:
+  LocalStore(db_path).close()
+  good = Group(id=1, name="g")
+  raw(db_path, "INSERT INTO groups (id, json) VALUES (1, ?)", (good.model_dump_json(),))
+  raw(db_path, "INSERT INTO groups (id, json) VALUES (2, ?)", (BAD,))
+  raw(db_path, "INSERT INTO employees (id, json) VALUES (1, ?)", (employee(1).model_dump_json(context=REVEAL),))
+  LocalStore(db_path).close()
+  assert query(db_path, "SELECT count(*) FROM groups") == [(0,)]
+  assert query(db_path, "SELECT count(*) FROM employees") == [(1,)]
+
+
+def test_emptying_a_part_says_what_and_why(db_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+  LocalStore(db_path).close()
+  raw(db_path, "INSERT INTO groups (id, json) VALUES (2, ?)", (BAD,))
+  with caplog.at_level("WARNING"):
+    LocalStore(db_path).close()
+  (message,) = [r.getMessage() for r in caplog.records if "emptied" in r.getMessage()]
+  assert message.startswith("emptied groups (all rows): dropped 1 rows, at least one unreadable (first error: ")
+  assert "('id',)" in message
+  assert "missing" in message
+
+
+@pytest.mark.parametrize(
+  ("table", "columns", "values"),
+  [
+    ("punches", "id, employee_id, at, origin, synced", "?, 1, 'x', 'db', {s}"),
+    ("fingerprints", "id, employee_id, origin, synced", "?, 1, 'db', {s}"),
+    ("fingerprint_bypasses", "id, punch_id, at, synced", "?, NULL, 'x', {s}"),
+  ],
+)
+def test_only_the_copied_part_empties(db_path: Path, table: str, columns: str, values: str) -> None:
+  LocalStore(db_path).close()
+  good = {"punches": punch(), "fingerprints": fp(), "fingerprint_bypasses": override(punch())}[table]
+  for synced, body in ((1, BAD), (0, good.model_dump_json(context=REVEAL))):
+    raw(db_path, f"INSERT INTO {table} ({columns}, json) VALUES ({values.format(s=synced)}, ?)", (str(uuid4()), body))
+  LocalStore(db_path).close()
+  assert query(db_path, f"SELECT synced FROM {table}") == [(0,)]
+
+
+def test_a_bad_settings_row_reads_as_defaults(db_path: Path) -> None:
+  LocalStore(db_path).close()
+  raw(db_path, "INSERT INTO settings (id, json) VALUES (1, ?)", ('{"paid_break_minutes": "lots"}',))
   s = LocalStore(db_path)
   try:
-    assert s.fingerprints() == []
+    assert s.get_settings() == Settings()
   finally:
     s.close()
+
+
+@pytest.mark.parametrize(
+  ("table", "columns", "values"),
+  [
+    ("pending_employees", "id", "?"),
+    ("punches", "id, employee_id, at, origin, synced", "?, 1, 'x', 'local', 0"),
+    ("fingerprint_bypasses", "id, punch_id, at, synced", "?, NULL, 'x', 0"),
+    ("fingerprints", "id, employee_id, origin, synced", "?, 1, 'local', 0"),
+    ("fingerprint_changes", "id, employee_id", "?, 1"),
+    ("fingerprint_scans", "id, at, settled", "?, 'x', 1"),
+  ],
+)
+def test_an_unreadable_unsent_row_stops_the_clock(db_path: Path, table: str, columns: str, values: str) -> None:
+  LocalStore(db_path).close()
+  row_id = 5 if table == "pending_employees" else str(uuid4())
+  raw(db_path, f"INSERT INTO {table} ({columns}, json) VALUES ({values}, ?)", (row_id, BAD))
+  with pytest.raises(UnreadableRowError, match=f"{table} row {row_id} can't be read"):
+    LocalStore(db_path)
+
+
+def test_prints_without_a_finger_follow_the_row_rules(db_path: Path) -> None:
+  LocalStore(db_path).close()
+  raw(
+    db_path,
+    "INSERT INTO fingerprints (id, employee_id, origin, synced, json) VALUES (?, 1, 'db', 1, ?)",
+    (str(uuid4()), '{"employee_id": 1}'),
+  )
+  LocalStore(db_path).close()
   assert query(db_path, "SELECT count(*) FROM fingerprints") == [(0,)]
+  unsent_id = uuid4()
+  raw(
+    db_path,
+    "INSERT INTO fingerprints (id, employee_id, origin, synced, json) VALUES (?, 1, 'local', 0, ?)",
+    (str(unsent_id), '{"employee_id": 1}'),
+  )
+  with pytest.raises(UnreadableRowError, match=str(unsent_id)):
+    LocalStore(db_path)
 
 
 def scan(at: datetime = T, scores: dict[UUID, int] | None = None) -> FingerprintScan:

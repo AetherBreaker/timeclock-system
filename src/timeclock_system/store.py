@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 # Third party imports
-from pydantic import SecretBytes
+from pydantic import SecretBytes, ValidationError
 from timeclock_schema.base import REVEAL, TimeclockModel
 from timeclock_schema.models import (
   BusinessHours,
@@ -52,6 +52,28 @@ _MODELS: dict[str, type[TimeclockModel]] = {
   "rules": RuleRow,
   "business_hours": BusinessHours,
 }
+
+# (table, model, WHERE) for every stored JSON row. Copied parts refill from the database on the next catch-up, so an
+# unreadable one is emptied; unsent parts exist only here, so an unreadable one stops the clock.
+_COPIED: tuple[tuple[str, type[TimeclockModel], str], ...] = (
+  ("employees", Employee, "1"),
+  ("groups", Group, "1"),
+  ("rules", RuleRow, "1"),
+  ("business_hours", BusinessHours, "1"),
+  ("settings", Settings, "1"),
+  ("punch_corrections", PunchCorrection, "1"),
+  ("punches", Punch, "synced = 1"),
+  ("fingerprints", Fingerprint, "synced = 1"),
+  ("fingerprint_bypasses", FingerprintBypass, "synced = 1"),
+)
+_UNSENT: tuple[tuple[str, type[TimeclockModel], str], ...] = (
+  ("pending_employees", Employee, "1"),
+  ("punches", Punch, "synced = 0"),
+  ("fingerprint_bypasses", FingerprintBypass, "synced = 0"),
+  ("fingerprints", Fingerprint, "synced = 0"),
+  ("fingerprint_changes", FingerprintChange, "1"),
+  ("fingerprint_scans", FingerprintScan, "1"),  # bytes live in other columns, never read here
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS employees (id INTEGER PRIMARY KEY, json TEXT NOT NULL);
@@ -104,6 +126,10 @@ def _iso(at: datetime) -> str:
   return at.astimezone(UTC).isoformat(timespec="microseconds")
 
 
+class UnreadableRowError(Exception):
+  """A row only this clock holds no longer fits its model, so the clock stops instead of losing it."""
+
+
 class LocalStore:
   """SQLite store: mirrored server tables, local/peer/db-origin punches and fingerprints, and the unsynced queue."""
 
@@ -120,11 +146,32 @@ class LocalStore:
       self._conn.execute("PRAGMA journal_mode=WAL")
       self._conn.execute("PRAGMA foreign_keys=OFF")
       self._conn.executescript(_SCHEMA)
-      with self._conn:
-        # Stored before prints named their finger; they no longer load. The database refused to migrate with any.
-        dropped = self._conn.execute("DELETE FROM fingerprints WHERE json_extract(json, '$.finger') IS NULL").rowcount
-    if dropped:
-      logger.warning("dropped %d local fingerprints stored without a finger", dropped)
+      # A renamed field once left old rows unreadable and every clock crashed at startup (2026-10-28).
+      for table, model, where in _COPIED:
+        rows = self._conn.execute(f"SELECT json FROM {table} WHERE {where}").fetchall()
+        try:
+          for (text,) in rows:
+            model.model_validate_json(text)
+        except ValidationError as e:
+          with self._conn:
+            self._conn.execute(f"DELETE FROM {table} WHERE {where}")
+          first = e.errors(include_input=False)[0]  # never the input: a row can hold hashes
+          logger.warning(
+            "emptied %s (%s): dropped %d rows, at least one unreadable (first error: %s, %s); the next catch-up refills them",
+            table,
+            "all rows" if where == "1" else "synced rows",
+            len(rows),
+            first["loc"],
+            first["type"],
+          )
+      for table, model, where in _UNSENT:
+        for row_id, text in self._conn.execute(f"SELECT id, json FROM {table} WHERE {where}").fetchall():
+          try:
+            model.model_validate_json(text)
+          except ValidationError as e:
+            self._conn.close()
+            msg = f"{table} row {row_id} can't be read; it hasn't reached the database"
+            raise UnreadableRowError(msg) from e
 
   def close(self) -> None:
     """Close the connection."""
@@ -157,13 +204,14 @@ class LocalStore:
 
     That's an insert whose acknowledgement was lost (§6.6): the database has the row, the clock never heard back.
     """
-    fetched = {e.id: e.pin_hash.get_secret_value() for e in rows}
+    # The hash comparison is in SQL, never in named locals: a failed write's crash record renders its frame's locals.
     with self._lock, self._conn:
       self._conn.execute("DELETE FROM employees")
       self._conn.executemany("INSERT INTO employees (id, json) VALUES (?, ?)", [(e.id, _dump(e)) for e in rows])
-      for pid, json in self._conn.execute("SELECT id, json FROM pending_employees").fetchall():
-        if fetched.get(pid) == Employee.model_validate_json(json).pin_hash.get_secret_value():
-          self._conn.execute("DELETE FROM pending_employees WHERE id = ?", (pid,))
+      self._conn.execute(
+        "DELETE FROM pending_employees WHERE EXISTS (SELECT 1 FROM employees e WHERE e.id = pending_employees.id"
+        " AND json_extract(e.json, '$.pin_hash') = json_extract(pending_employees.json, '$.pin_hash'))"
+      )
 
   def insert_pending_employee(self, e: Employee) -> None:
     """Store an employee added at this clock, unsynced until the database accepts it."""

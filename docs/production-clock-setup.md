@@ -134,10 +134,13 @@ docker buildx imagetools create --tag ghcr.io/aetherbreaker/timeclock-host:stabl
 - **The standby page from the workstation:** `ssh -L 8091:127.0.0.1:8091 timeclock-system-<name>`, then
   `http://localhost:8091/`.
 - **Settings:** `/etc/timeclock/watcher.conf` (the screen watcher; `flip = deploy-start` shows the standby as soon as
-  a deploy starts, not when the old app stops) and `/etc/timeclock/standby.conf` (the status app); every key and its
-  default is in each file. Restart `timeclock-watcher` or `timeclock-status` after a change.
+  a deploy starts, not when the old app stops), `/etc/timeclock/standby.conf` (the status app) and
+  `/etc/timeclock/updater.conf` (the host updater; the channel and update window come from the app's
+  `HOST_UPDATE_*` variables, not this file); every key and its default is in each file. Restart `timeclock-watcher`,
+  `timeclock-status` or `timeclock-updater` after a change.
 - **The display's parts** are systemd units: `timeclock-display` (sway), `timeclock-standby` and `timeclock-clock`
-  (the two browsers), `timeclock-status`, `timeclock-watcher`, and `sweetfiresupportdesk` (RustDesk). `journalctl -u
-  <unit>` for each; restarting `timeclock-clock` reloads the clock with nobody seeing it (it's hidden until live).
+  (the two browsers), `timeclock-status`, `timeclock-watcher`, and `sweetfiresupportdesk` (RustDesk); the host updater
+  is `timeclock-updater`. `journalctl -u <unit>` for each; restarting `timeclock-clock` reloads the clock with nobody
+  seeing it (it's hidden until live).
 - **The display's files** are in the host image, so a change ships in a host release. To try one on a test clock,
   `sudo bootc usr-overlay` makes `/usr` writable until the next restart.

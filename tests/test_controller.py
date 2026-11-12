@@ -861,8 +861,8 @@ async def test_too_similar_admin_reject_saves_nothing(kiosk: Kiosk) -> None:
 async def new_employee_registers(kiosk: Kiosk) -> None:
   """Ada adds Zed (10001), then registers his left index in the add-employee flow."""
   await fill_details(kiosk)
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   await kiosk.ctl.register()
   await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   screen = kiosk.ctl.screen
@@ -1515,10 +1515,27 @@ async def test_add_an_employee_end_to_end(kiosk: Kiosk) -> None:
   assert isinstance(kiosk.ctl.screen, RegisterPrompt)
 
 
+async def test_a_short_new_pin_is_refused_at_the_first_entry(kiosk: Kiosk) -> None:
+  await fill_details(kiosk)
+  await kiosk.type_and_enter("123")
+  pin = kiosk.ctl.screen
+  assert isinstance(pin, NewPin) and pin.field == "first" and pin.error == text.PIN_LENGTH
+  assert pin.pin.get_secret_value() == ""
+
+
+async def test_a_new_pin_under_four_digits_is_refused(kiosk: Kiosk) -> None:
+  await fill_details(kiosk)
+  await kiosk.type_and_enter("123")
+  await kiosk.type_and_enter("123")
+  pin = kiosk.ctl.screen
+  assert isinstance(pin, NewPin) and pin.field == "first" and pin.error == text.PIN_LENGTH
+  assert kiosk.store.pending_employees() == []
+
+
 async def test_the_new_employees_fingerprint_is_optional(kiosk: Kiosk) -> None:
   await fill_details(kiosk, role="employee")
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   await kiosk.ctl.register()
   await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   registering = kiosk.ctl.screen
@@ -1536,8 +1553,8 @@ async def test_the_new_employees_fingerprint_is_optional(kiosk: Kiosk) -> None:
 
 async def test_cancel_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) -> None:
   await fill_details(kiosk)
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   await kiosk.ctl.cancel()
   assert isinstance(kiosk.ctl.screen, EmployeeAdded)
   assert [e.id for e in kiosk.store.pending_employees()] == [10001]
@@ -1545,8 +1562,8 @@ async def test_cancel_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) -> 
 
 async def test_a_timeout_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) -> None:
   await fill_details(kiosk)
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   kiosk.t.advance(IDLE_CLOSE_SECS)
   await kiosk.ctl.tick()
   assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)
@@ -1557,8 +1574,8 @@ async def test_a_timeout_on_the_fingerprint_step_counts_as_a_skip(kiosk: Kiosk) 
 
 async def test_a_timeout_while_registering_the_new_employee_counts_as_a_skip(kiosk: Kiosk) -> None:
   await fill_details(kiosk)
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   await kiosk.ctl.register()
   await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   kiosk.t.advance(IDLE_CLOSE_SECS)
@@ -1801,8 +1818,8 @@ async def test_first_registration_asks_the_finger(kiosk: Kiosk) -> None:
 
 async def test_add_employee_step_asks_the_finger(kiosk: Kiosk) -> None:
   await fill_details(kiosk)
-  await kiosk.type_and_enter("11")
-  await kiosk.type_and_enter("11")
+  await kiosk.type_and_enter("1111")
+  await kiosk.type_and_enter("1111")
   await kiosk.ctl.register()
   pick = kiosk.ctl.screen
   assert isinstance(pick, FingerPick) and pick.action is None and pick.added is not None
@@ -1993,7 +2010,7 @@ async def test_a_new_registration_after_the_scanner_timed_out_registers_again(ki
 
 # -- the update banner, from the host's standby screen (standby-screen spec §6.2) ------------------------------------
 
-BANNER = "An update is being installed. The clock will restart in about a minute."
+BANNER = "An update is being installed. The clock will restart in about a minute."  # the file's text; the app words its own toast
 
 
 def put_banner(status_dir: Path, wall: datetime, age: float = 0) -> None:
@@ -2004,31 +2021,74 @@ def put_banner(status_dir: Path, wall: datetime, age: float = 0) -> None:
   os.utime(path, (stamp, stamp))
 
 
-async def test_banner_appears_on_tick_and_notifies(kiosk: Kiosk, tmp_path: Path) -> None:
-  heard: list[str | None] = []
-  kiosk.ctl.add_listener(lambda: heard.append(kiosk.ctl.banner))
+async def test_app_updating_appears_on_tick_without_notifying(kiosk: Kiosk, tmp_path: Path) -> None:
+  heard: list[bool] = []
+  kiosk.ctl.add_listener(lambda: heard.append(kiosk.ctl.app_updating))
   put_banner(tmp_path / "status", kiosk.t.wall)
-  assert kiosk.ctl.banner is None
+  assert not kiosk.ctl.app_updating
   await kiosk.ctl.tick()
-  assert kiosk.ctl.banner == BANNER
-  assert heard[-1] == BANNER
+  assert kiosk.ctl.app_updating
+  assert heard == []  # the toast polls on its own timer
 
 
-async def test_banner_expires_after_10_minutes(kiosk: Kiosk, tmp_path: Path) -> None:
+async def test_app_updating_expires_after_10_minutes(kiosk: Kiosk, tmp_path: Path) -> None:
   put_banner(tmp_path / "status", kiosk.t.wall, age=599)
   await kiosk.ctl.tick()
-  assert kiosk.ctl.banner == BANNER
+  assert kiosk.ctl.app_updating
   kiosk.t.advance(1)
   await kiosk.ctl.tick()
-  assert kiosk.ctl.banner is None
+  assert not kiosk.ctl.app_updating
 
 
-async def test_banner_removed_with_its_file(kiosk: Kiosk, tmp_path: Path) -> None:
+async def test_app_updating_ends_with_the_banner_file(kiosk: Kiosk, tmp_path: Path) -> None:
   put_banner(tmp_path / "status", kiosk.t.wall)
   await kiosk.ctl.tick()
   (tmp_path / "status" / "banner.json").unlink()
   await kiosk.ctl.tick()
-  assert kiosk.ctl.banner is None
+  assert not kiosk.ctl.app_updating
+
+
+def put_host_update(status_dir: Path, wall: datetime, **fields: object) -> float:
+  """Write `host-update.json` stamped `at` the wall clock now, which is returned."""
+  status_dir.mkdir(exist_ok=True)
+  at = wall.timestamp()
+  data = {"state": "downloaded", "done": 5, "total": 5, "mode": "window", "window_start": "03:00", "at": at} | fields
+  (status_dir / "host-update.json").write_text(json.dumps(data))
+  os.utime(status_dir / "host-update.json", (at, at))
+  return at
+
+
+async def test_host_update_appears_on_tick_without_notifying(kiosk: Kiosk, tmp_path: Path) -> None:
+  # The toasts poll on their own timer, so progress doesn't rebuild the page: no notification.
+  heard: list[object] = []
+  kiosk.ctl.add_listener(lambda: heard.append(kiosk.ctl.host_update))
+  put_host_update(tmp_path / "status", kiosk.t.wall, state="downloading", done=20)
+  assert kiosk.ctl.host_update is None
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.host_update is not None
+  assert kiosk.ctl.host_update.done == 20  # noqa: PLR2004
+  put_host_update(tmp_path / "status", kiosk.t.wall, state="downloading", done=30)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.host_update is not None
+  assert kiosk.ctl.host_update.done == 30  # noqa: PLR2004
+  assert heard == []
+
+
+async def test_a_downloaded_window_update_clears_after_five_seconds(kiosk: Kiosk, tmp_path: Path) -> None:
+  put_host_update(tmp_path / "status", kiosk.t.wall)
+  kiosk.t.advance(1)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.host_update is not None
+  kiosk.t.advance(5)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.host_update is None
+
+
+async def test_a_downloaded_immediate_update_stays(kiosk: Kiosk, tmp_path: Path) -> None:
+  put_host_update(tmp_path / "status", kiosk.t.wall, mode="immediate", window_start=None)
+  kiosk.t.advance(60)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.host_update is not None
 
 
 def scanned(employee_id: int) -> Matched:

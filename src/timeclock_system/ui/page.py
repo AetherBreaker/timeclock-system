@@ -7,6 +7,7 @@
 import contextlib
 import inspect
 import logging
+import time
 from datetime import UTC, date, datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -87,7 +88,44 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 .reader-message-error { color: var(--sft-red); }
 .reader-message-success { color: var(--sft-read-green); }
 .reader-message-unrecognized { color: var(--sft-orange); }
+/* Taps land up to 12 px past a button's drawn edge (owner, 2026-11-11), on ::after since Quasar draws a button's shadow
+   with ::before. Where two buttons sit under 24 px apart the gap splits down the middle, so no two areas overlap. */
+.sft-button::after, .sft-key::after { content: ""; position: absolute; inset: -12px; }
+.nicegui-row > .sft-button + .sft-button::after { left: -8px; }
+.nicegui-row > .sft-button:has(+ .sft-button)::after { right: -8px; }
+.nicegui-column > .sft-button + .sft-button::after { top: -8px; }
+.nicegui-column > .sft-button:has(+ .sft-button)::after { bottom: -8px; }
+.sft-pad > .sft-key::after { inset: -4px; }
+.sft-pad > .sft-key:nth-child(3n+1)::after { left: -12px; }
+.sft-pad > .sft-key:nth-child(3n)::after { right: -12px; }
+.sft-pad > .sft-key:nth-child(-n+3)::after { top: -12px; }
+.sft-pad > .sft-key:nth-last-child(-n+3)::after { bottom: -12px; }
+/* The gear: half again as big, and any tap in its corner of the screen (0-136 px across, 0-120 px down) opens it. */
+.sft-gear::after { content: ""; position: absolute; top: -8px; left: -16px; width: 136px; height: 120px; }
+/* The update toasts, bottom right above the database line (owner's mockup, 2026-11-12). The stack passes taps through to
+   the screen. A toast slides in from the right on leaving display:none; `sft-out` slides it away before the page hides it. */
+:root { --sft-surface: #24221F; --sft-edge: #3A3733; --sft-muted: #A9A49B; }
+.sft-toasts { position: fixed; right: 16px; bottom: 44px; z-index: 30; display: flex; flex-direction: column;
+  align-items: flex-end; gap: 12px; pointer-events: none; }
+.sft-toast { width: 400px; background: var(--sft-surface); border: 1px solid var(--sft-edge); border-radius: 10px;
+  padding: 14px 16px 16px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); animation: sft-toast-in 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.sft-toast.sft-out { animation: sft-toast-out 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+.sft-toast-head { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 500; }
+.sft-toast-head .q-icon { font-size: 26px; color: var(--sft-yellow); }
+.sft-toast-sub { margin-top: 8px; font-size: 16px; color: var(--sft-muted); font-variant-numeric: tabular-nums; }
+.sft-toast-plan { margin-top: 10px; font-size: 17px; line-height: 1.35; }
+.sft-bar { margin-top: 12px; height: 8px; border-radius: 4px; background: var(--sft-edge); overflow: hidden; }
+.sft-bar > i { display: block; height: 100%; width: 0; background: var(--sft-yellow); border-radius: 4px; transition: width 0.25s linear; }
+.sft-bar.sft-moving > i { width: 30%; animation: sft-bar-moving 1.6s ease-in-out infinite; }
+@keyframes sft-toast-in { from { transform: translateX(calc(100% + 40px)); } to { transform: none; } }
+@keyframes sft-toast-out { from { transform: none; } to { transform: translateX(calc(100% + 40px)); } }
+@keyframes sft-bar-moving { from { transform: translateX(-110%); } to { transform: translateX(350%); } }
+@media (prefers-reduced-motion: reduce) {
+  .sft-toast, .sft-toast.sft-out { animation: none; }
+  .sft-bar.sft-moving > i { animation: none; width: 100%; opacity: 0.5; }
+}
 """
+TOAST_SLIDE_SECS = 0.4  # `sft-toast-out`'s length: a toast is hidden once its slide-away has had this long
 # R13.2: no text selection, no long-press menu.
 _NO_SELECT_CSS = "body { user-select: none; -webkit-user-select: none; touch-action: manipulation; }"
 # cage draws a pointer mid-screen unless the page hides it. Only the kiosk hides it (its KIOSK_URL carries `?kiosk`);
@@ -175,15 +213,12 @@ class _KioskPage:
         self._version_text += f" ({built:%b} {built.day}, {built.year})"
     self._logo_checked = False
     self._shown: Screen | None = None  # what `screen` last drew; one page instance serves every client
-    self._banner_shown: str | None = None
     controller.add_listener(self._on_change)
 
   def _on_change(self) -> None:
     # The indicator always; the screen only when it compares unequal to what's drawn, so the add-employee form's typing
-    # (left out of its equality) never redraws it and drops the input's focus.
+    # (left out of its equality) never redraws it and drops the input's focus. The update toasts follow their own timer.
     self.indicator.refresh()
-    if self._controller.banner != self._banner_shown:
-      self.banner.refresh()
     if self._controller.screen != self._shown:
       self.screen.refresh()
 
@@ -207,7 +242,6 @@ class _KioskPage:
     # The very bottom-left corner, below the reader line.
     ui.label(self._version_text).classes("fixed bottom-2 left-4 text-sm opacity-50").mark("version")
     self.indicator()
-    self.banner()
     self.screen()
     with ui.row().classes("fixed bottom-2 right-4 items-center gap-2 text-base"):
       dot = ui.icon("circle").classes("text-sm")
@@ -222,6 +256,65 @@ class _KioskPage:
 
     update_status()
     ui.timer(1.0, update_status)
+    self._toasts()
+
+  def _toasts(self) -> None:
+    # The update toasts, built once per client and driven by their own timer, so a toast never redraws the screen.
+    with ui.element("div").classes("sft-toasts"):
+      app_toast = ui.element("div").classes("sft-toast").mark("app-update-toast")
+      with app_toast:
+        with ui.element("div").classes("sft-toast-head"):
+          ui.icon("system_update")
+          ui.label(text.APP_UPDATE_TITLE)
+        ui.label(text.APP_UPDATE_DETAIL).classes("sft-toast-sub")
+        with ui.element("div").classes("sft-bar sft-moving"):
+          ui.element("i")
+      host_toast = ui.element("div").classes("sft-toast").mark("host-update-toast")
+      with host_toast:
+        with ui.element("div").classes("sft-toast-head"):
+          ui.icon("download")
+          host_title = ui.label()
+        host_sub = ui.label().classes("sft-toast-sub")
+        with ui.element("div").classes("sft-bar"):
+          host_bar = ui.element("i")
+        host_plan = ui.label().classes("sft-toast-plan")
+    leaving: dict[ui.element, float] = {}  # toasts mid slide-away, by when it began (per client)
+    app_toast.set_visibility(False)
+    host_toast.set_visibility(False)
+
+    def show(toast: ui.element, *, want: bool) -> None:
+      # Slides in on leaving display:none; slides out first, then hides once the slide has had time.
+      if want:
+        if leaving.pop(toast, None) is not None or not toast.visible:
+          toast.classes(remove="sft-out")
+          toast.set_visibility(True)
+      elif toast.visible:
+        began = leaving.setdefault(toast, time.monotonic())
+        toast.classes("sft-out")
+        if time.monotonic() - began >= TOAST_SLIDE_SECS:
+          toast.set_visibility(False)
+          del leaving[toast]
+
+    def update_toasts() -> None:
+      show(app_toast, want=self._controller.app_updating)
+      if (u := self._controller.host_update) is not None:
+        # MB are 10^6 bytes, rounded; the percent is floored. The text stays while the toast slides away.
+        done_mb, total_mb = (min(u.done, u.total) + 500_000) // 1_000_000, (u.total + 500_000) // 1_000_000
+        percent = 100 if u.downloaded else min(100, u.done * 100 // u.total) if u.total else 0
+        host_title.text = text.HOST_UPDATE_DOWNLOADED if u.downloaded else text.HOST_UPDATE_DOWNLOADING
+        host_sub.text = (
+          f"{total_mb} MB" if u.downloaded else text.HOST_UPDATE_PROGRESS.format(percent=percent, done=done_mb, total=total_mb)
+        )
+        host_bar.style(f"width: {percent}%")
+        if u.window_start is not None:
+          start = text.format_clock_time(datetime.combine(datetime.now(self._tz).date(), u.window_start, tzinfo=self._tz), self._tz)
+          host_plan.text = text.HOST_UPDATE_AT.format(time=start)
+        else:
+          host_plan.text = text.HOST_UPDATE_NOW if u.downloaded else text.HOST_UPDATE_SOON
+      show(host_toast, want=u is not None)
+
+    update_toasts()
+    ui.timer(0.5, update_toasts)
 
   async def _on_key(self, e: KeyEventArguments) -> None:
     # R25: the keyboard reaches the same calls as the on-page pad.
@@ -277,15 +370,6 @@ class _KioskPage:
   # The per-screen renderers below are split out of `screen` for C901/PLR0912.
 
   @ui.refreshable_method
-  def banner(self) -> None:
-    # While a deploy builds (the host's standby screen writes it): centered under the date line, over every screen.
-    self._banner_shown = self._controller.banner
-    if self._banner_shown:
-      ui.label(self._banner_shown).classes(
-        "fixed top-12 left-1/2 -translate-x-1/2 z-30 px-6 py-2 rounded-lg text-lg font-medium bg-amber-600 text-black shadow-lg"
-      ).mark("update-banner")
-
-  @ui.refreshable_method
   def indicator(self) -> None:
     # The reader line, on every screen: icon, live status, lingering message. Redrawn on its own so a change doesn't
     # redraw the screen under it. Color and dimness go on the icon and status, so a BUSY icon doesn't dim the message.
@@ -313,8 +397,8 @@ class _KioskPage:
 
   def _gear(self) -> None:
     # On the idle screen and the punch menu only; above the idle screen's tap layer (z-10), so tapping it isn't an idle tap.
-    ui.button(icon="settings", on_click=lambda: self._guarded(self._controller.gear)).props("flat round size=lg").classes(
-      "fixed top-2 left-4 z-20"
+    ui.button(icon="settings", on_click=lambda: self._guarded(self._controller.gear)).props("flat round size=30px").classes(
+      "fixed top-2 left-4 z-20 sft-gear"
     ).mark("gear")
 
   def _idle(self, s: Idle) -> None:
@@ -547,7 +631,7 @@ class _KioskPage:
     ui.label(shown).classes("text-4xl h-12").mark("pin-shown")
     # Always drawn, a line high: clearing the error at the next key mustn't shift the keys under a finger.
     ui.label(error or "").classes("sft-error").style("min-height: 1.5em").mark("pin-error")
-    with ui.grid(columns=3).classes("gap-2"):
+    with ui.grid(columns=3).classes("gap-2 sft-pad"):
       for key in _PAD:
         match key:
           case "⌫":

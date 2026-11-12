@@ -217,11 +217,11 @@ class FakeReader:
 
 
 class Harness:
-  def __init__(self, reader: FakeReader, timings: ScannerTimings) -> None:
+  def __init__(self, reader: FakeReader, timings: ScannerTimings, hooked: queue.Queue[BaseException | None]) -> None:
     self.reader = reader
     self.events: queue.Queue[ScannerEvent] = queue.Queue()
-    self.fatal: queue.Queue[str] = queue.Queue()
-    self.scanner = Scanner(reader, self.events.put, self.fatal.put, timings=timings)
+    self.hooked = hooked  # what reached threading.excepthook
+    self.scanner = Scanner(reader, self.events.put, timings=timings)
 
   def event(self) -> ScannerEvent:
     return self.events.get(timeout=WAIT)
@@ -265,9 +265,11 @@ def no_match(event: ScannerEvent) -> NoMatch:
 
 
 @pytest.fixture
-def make() -> Iterator[Callable[..., Harness]]:
+def make(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Harness]]:
   """Build and start a scanner in `mode` (REGISTER for `registrant` if given) with GALLERY; on teardown stop it and check no threads leak."""
   harnesses: list[Harness] = []
+  hooked: queue.Queue[BaseException | None] = queue.Queue()
+  monkeypatch.setattr(threading, "excepthook", lambda args: hooked.put(args.exc_value))
 
   def build(
     reader: FakeReader,
@@ -276,7 +278,7 @@ def make() -> Iterator[Callable[..., Harness]]:
     margin: int = MARGIN,
     registrant: int | None = None,
   ) -> Harness:
-    harness = Harness(reader, timings)
+    harness = Harness(reader, timings, hooked)
     harness.scanner.set_gallery(GALLERY, margin)
     if registrant is None:
       harness.scanner.set_mode(mode)
@@ -351,7 +353,7 @@ def test_a_failure_streak_is_logged_once(make: Callable[..., Harness], caplog: p
 def test_a_reader_failing_past_the_limit_is_fatal(make: Callable[..., Harness]) -> None:
   # §2's anti-goal: a reader that silently stops working while the screen still looks ready.
   h = make(FakeReader(default=ReaderFailure("usb error")), ScannerTimings(backoff_start=0.01, backoff_max=0.04, failure_limit=0.2))
-  assert "usb error" in h.fatal.get(timeout=WAIT)
+  assert "usb error" in str(h.hooked.get(timeout=WAIT))
 
 
 def test_a_capture_ends_the_failure_streak(make: Callable[..., Harness]) -> None:
@@ -361,7 +363,7 @@ def test_a_capture_ends_the_failure_streak(make: Callable[..., Harness]) -> None
   no_match(h.event())
   # Each streak spans about 0.15 s, under the limit; counted as one streak, the failures would span about 0.4 s.
   with pytest.raises(queue.Empty):
-    h.fatal.get(timeout=0.5)
+    h.hooked.get(timeout=0.5)
 
 
 def test_too_hot_posts_paused_alerts_and_pauses_long(make: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -376,9 +378,11 @@ def test_too_hot_posts_paused_alerts_and_pauses_long(make: Callable[..., Harness
   assert second - first >= timings.too_hot_pause - TICK
 
 
-def test_reader_gone_calls_on_fatal_and_stops(make: Callable[..., Harness]) -> None:
+def test_reader_gone_reaches_threading_excepthook_and_stops(make: Callable[..., Harness]) -> None:
   h = make(FakeReader([ReaderGone("reader unplugged")]))
-  assert h.fatal.get(timeout=WAIT) == "reader unplugged"
+  gone = h.hooked.get(timeout=WAIT)
+  assert isinstance(gone, ReaderGone)
+  assert str(gone) == "reader unplugged"
   scanner_threads = [t for t in threading.enumerate() if t.name == "scanner"]
   for thread in scanner_threads:
     thread.join(WAIT)
@@ -386,13 +390,10 @@ def test_reader_gone_calls_on_fatal_and_stops(make: Callable[..., Harness]) -> N
   assert h.reader.drain().count("identify") == 1
 
 
-def test_a_code_bug_reaches_threading_excepthook_not_on_fatal(make: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch) -> None:
-  # aeth_ext's threading.excepthook alerts with the traceback; on_fatal would report a lost reader without one.
-  hooked: queue.Queue[BaseException | None] = queue.Queue()
-  monkeypatch.setattr(threading, "excepthook", lambda args: hooked.put(args.exc_value))
+def test_a_code_bug_reaches_threading_excepthook(make: Callable[..., Harness]) -> None:
+  # aeth_ext's threading.excepthook alerts with the traceback.
   h = make(FakeReader([RuntimeError("a bug")]))
-  assert isinstance(hooked.get(timeout=WAIT), RuntimeError)
-  assert h.fatal.empty()
+  assert isinstance(h.hooked.get(timeout=WAIT), RuntimeError)
 
 
 def test_closed_mode_closes_the_reader(make: Callable[..., Harness]) -> None:

@@ -99,19 +99,19 @@ def serve_with(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patches: dict[st
     status_dir=tmp_path / "status",
     branding_dir=tmp_path,
   )
-  captured: dict[str, Any] = {"shutdowns": [], "startup": [], "run": {}}
+  captured: dict[str, Any] = {"contexts": [], "calls": [], "startup": [], "run": {}}
   monkeypatch.setattr(app_module.ClockSettings, "get_settings", lambda: settings)
   for name, fake in patches.items():
     monkeypatch.setattr(app_module, name, fake)
-  monkeypatch.setattr(app_module, "register_crash_alert_writer", lambda _w: None)
+  monkeypatch.setattr(app_module, "register_crash_alert_writer", lambda _w: captured["calls"].append("writer"))
   monkeypatch.setattr(app_module, "register_for_shutdown", lambda *_a, **_k: None)
   monkeypatch.setattr(app_module, "install_loop_exception_handler", lambda: None)
-  monkeypatch.setattr(app_module, "trigger_shutdown", lambda reason, details: captured["shutdowns"].append((reason, details)))
   monkeypatch.setattr(app_module.app, "on_startup", captured["startup"].append)
   monkeypatch.setattr(app_module.ui, "run", lambda **kwargs: captured["run"].update(kwargs))
   stores: list[LocalStore] = []
 
   def tracked_store(path: Path) -> LocalStore:
+    captured["calls"].append("store")
     stores.append(LocalStore(path))
     return stores[-1]
 
@@ -134,10 +134,12 @@ async def invoke_like_nicegui(handler: Callable[[], object]) -> None:
 
 async def test_a_failing_startup_shuts_the_clock_down(wired: dict[str, Any]) -> None:
   [startup] = wired["startup"]
+  # The running loop's handler stands in for aeth_ext's, which logs, alerts and records a trail.
+  asyncio.get_running_loop().set_exception_handler(lambda _loop, context: wired["contexts"].append(context))
   await invoke_like_nicegui(startup)
-  [(reason, details)] = wired["shutdowns"]
-  assert reason == "Startup stopped"
-  assert "stored data failed validation" in details
+  [context] = wired["contexts"]
+  assert context["message"] == "Startup stopped"
+  assert str(context["exception"]) == "stored data failed validation"
 
 
 @pytest.fixture
@@ -188,8 +190,14 @@ async def test_a_settled_scan_wakes_the_sync(wired_scanner: dict[str, Any]) -> N
 
 async def test_a_screen_error_shuts_the_clock_down(wired: dict[str, Any]) -> None:
   # build_root's on_error; the page test checks that buttons reach it.
+  asyncio.get_running_loop().set_exception_handler(lambda _loop, context: wired["contexts"].append(context))
   on_error = wired["run"]["root"].__self__._on_error  # the page object build_root returned the root of
-  on_error(RuntimeError("store failed"))
-  [(reason, details)] = wired["shutdowns"]
-  assert reason == "Screen action failed"
-  assert "store failed" in details
+  error = RuntimeError("store failed")
+  on_error(error)
+  [context] = wired["contexts"]
+  assert context["message"] == "Screen action failed"
+  assert context["exception"] is error
+
+
+def test_the_crash_writer_is_registered_before_the_store_opens(wired: dict[str, Any]) -> None:
+  assert wired["calls"] == ["writer", "store"]
