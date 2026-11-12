@@ -72,7 +72,7 @@ def read_host_update(status_dir: Path, now: float) -> HostUpdate | None:
   """The host updater's download state, or None when there's none to show.
 
   A `downloading` file older than 5 minutes is stale (the updater dies without removing it). A `downloaded` one stays
-  until the updater removes it at the restart. An unreadable, malformed or unrecognised file reads as none: a toast must never stop the clock.
+  through the restart; the next boot's updater removes it before Docker starts the app. An unreadable, malformed or unrecognised file reads as none: a toast must never stop the clock.
   """
   path = status_dir / HOST_UPDATE_FILE
   try:
