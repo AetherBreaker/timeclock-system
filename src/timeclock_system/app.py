@@ -7,12 +7,11 @@
 import asyncio
 import contextlib
 import socket
-import traceback
 from typing import TYPE_CHECKING, Any
 
 # Third party imports
 import uvicorn
-from aeth_ext.errors import alert, install_loop_exception_handler, trigger_shutdown
+from aeth_ext.errors import alert, install_loop_exception_handler
 from aeth_ext.errors.shutdown import ShutdownPhase, register_for_shutdown
 from nicegui import app, ui
 
@@ -59,6 +58,10 @@ def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of ev
     project_name: `__main__.PROJECT_NAME`, passed in so this module doesn't import `__main__`.
   """
   settings = ClockSettings.get_settings()
+  # Before the store opens, so a failed store check or a missing reader leaves a crash record.
+  register_crash_alert_writer(
+    CrashAlertWriter(settings.crash_alerts_dir, program=f"{project_name}-{settings.instance_id}", host=socket.gethostname())
+  )
   store = LocalStore(settings.store_path)
   clock = Clock(  # the validator sets the id
     store, instance_id=settings.instance_id or "", clock_number=settings.clock_number, tz=settings.tz, alert=_send_alert
@@ -67,7 +70,8 @@ def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of ev
   reader = FprintReader()  # a missing reader raises ReaderGone here, uncaught: fatal at startup (R14.7)
 
   # asyncio holds tasks weakly, so every task and scanner-event future is kept here until it finishes, and one
-  # that fails shuts the clock down: the global hooks don't see exceptions held in tasks (§6.9).
+  # that fails shuts the clock down: the global hooks don't see exceptions held in tasks (§6.9). The loop's handler
+  # (aeth_ext's, set at startup) logs the traceback, alerts with its picture and records a trail.
   running: set[asyncio.Future[Any]] = set()
   loop: asyncio.AbstractEventLoop | None = None
 
@@ -78,7 +82,7 @@ def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of ev
     def done(f: asyncio.Future[Any]) -> None:
       running.discard(f)
       if not f.cancelled() and (exc := f.exception()) is not None:
-        trigger_shutdown(f"{name} stopped", "".join(traceback.format_exception(exc)))
+        f.get_loop().call_exception_handler({"message": f"{name} stopped", "exception": exc, "future": f})
 
     fut.add_done_callback(done)
 
@@ -87,13 +91,10 @@ def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of ev
     if loop is not None:
       loop.call_soon_threadsafe(lambda: keep("Scanner event", controller.on_scanner_event(ev)))
 
-  scanner = Scanner(reader, post, lambda m: trigger_shutdown("Fingerprint reader lost", m))
+  scanner = Scanner(reader, post)
   sync = DatabaseSync(clock, store, settings.conninfo(), alert=_send_alert)
   controller = KioskController(clock, scanner, tz=settings.tz, status_dir=settings.status_dir)
 
-  register_crash_alert_writer(
-    CrashAlertWriter(settings.crash_alerts_dir, program=f"{project_name}-{settings.instance_id}", host=socket.gethostname())
-  )
   # Plain lambdas: aeth_ext holds bound methods weakly. app.shutdown() sets uvicorn's should_exit.
   register_for_shutdown(lambda _trails: app.shutdown(), phase=ShutdownPhase.THREADED)
   register_for_shutdown(lambda _trails: scanner.stop(), phase=ShutdownPhase.THREADED)
@@ -135,7 +136,7 @@ def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of ev
       lambda: sync.status,
       tz=settings.tz,
       branding_dir=settings.branding_dir,
-      on_error=lambda e: trigger_shutdown("Screen action failed", "".join(traceback.format_exception(e))),
+      on_error=lambda e: asyncio.get_running_loop().call_exception_handler({"message": "Screen action failed", "exception": e}),
     ),
     host="0.0.0.0",  # the kiosk container reaches it over the compose network
     port=8080,

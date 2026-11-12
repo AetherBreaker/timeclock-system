@@ -1,16 +1,21 @@
-"""A local copy of every crash alert (R20, spec §6.8): five rotating JSON-lines files, written at fatal shutdown, never resent."""
+"""A local copy of every crash alert (R20, spec §6.8): five rotating JSON-lines files, written at fatal shutdown, never resent.
+
+Each line holds the exception `trails` and the `errors` (message and traceback) of the CRITICAL records logged with one.
+"""
 
 # Standard library imports
 import json
+import logging
+import traceback
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 # Third party imports
 from aeth_ext.errors.shutdown import SHUTDOWN, ShutdownKind, ShutdownPhase, register_for_shutdown
 
 if TYPE_CHECKING:
   # Standard library imports
-  from collections.abc import Callable
+  from collections.abc import Callable, Sequence
   from pathlib import Path
 
   # Third party imports
@@ -47,8 +52,8 @@ class CrashAlertWriter:
   def _path(self, n: int) -> Path:
     return self._dir / f"crash-alerts.{n}.jsonl"
 
-  def write(self, trails: tuple[ExceptionTrail, ...]) -> None:
-    """Append one crash's line: when, which program and host, and each fatal exception's trail."""
+  def write(self, trails: tuple[ExceptionTrail, ...], errors: Sequence[tuple[str, str]] = ()) -> None:
+    """Append one crash's line: when, which program and host, each fatal exception's trail, and each `(message, traceback)`."""
     mode = "a"
     if self._lines >= LINES_PER_FILE:
       self._index, self._lines, mode = (self._index + 1) % CRASH_FILES, 0, "w"  # "w": the file being reused starts empty
@@ -63,6 +68,7 @@ class CrashAlertWriter:
         }
         for t in trails
       ],
+      "errors": [{"message": m, "traceback": tb} for m, tb in errors],
     }
     self._dir.mkdir(parents=True, exist_ok=True)
     with self._path(self._index).open(mode, encoding="utf-8") as f:
@@ -71,11 +77,21 @@ class CrashAlertWriter:
 
 
 def register_crash_alert_writer(writer: CrashAlertWriter) -> None:
-  """Save every fatal shutdown's trails through `writer` (R20: every crash alert saved, none resent)."""
+  """Save every fatal shutdown's trails and logged errors through `writer` (R20: every crash alert saved, none resent)."""
+  errors: list[tuple[str, str]] = []
+
+  class Collect(logging.Handler):
+    @override
+    def emit(self, record: logging.LogRecord) -> None:
+      if record.exc_info and record.exc_info[1] is not None:  # formatted now, so the shutdown only writes
+        errors.append((record.getMessage(), "".join(traceback.format_exception(*record.exc_info))))
+
+  collector = Collect(level=logging.CRITICAL)
+  logging.getLogger().addHandler(collector)
 
   def save(trails: tuple[ExceptionTrail, ...]) -> None:
     if SHUTDOWN.kind >= ShutdownKind.FATAL:
-      writer.write(trails)
+      writer.write(trails, errors)
 
   # A closure, not a bound method: aeth_ext holds bound methods weakly.
   register_for_shutdown(save, phase=ShutdownPhase.THREADED, priority=-10)
