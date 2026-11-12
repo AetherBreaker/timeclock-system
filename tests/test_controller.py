@@ -2002,7 +2002,7 @@ async def test_a_new_registration_after_the_scanner_timed_out_registers_again(ki
 
 # -- the update banner, from the host's standby screen (standby-screen spec §6.2) ------------------------------------
 
-BANNER = "An update is being installed. The clock will restart in about a minute."
+BANNER = "An update is being installed. The clock will restart in about a minute."  # the file's text; the app words its own toast
 
 
 def put_banner(status_dir: Path, wall: datetime, age: float = 0) -> None:
@@ -2013,31 +2013,75 @@ def put_banner(status_dir: Path, wall: datetime, age: float = 0) -> None:
   os.utime(path, (stamp, stamp))
 
 
-async def test_banner_appears_on_tick_and_notifies(kiosk: Kiosk, tmp_path: Path) -> None:
-  heard: list[str | None] = []
-  kiosk.ctl.add_listener(lambda: heard.append(kiosk.ctl.banner))
+async def test_app_updating_appears_on_tick_and_notifies(kiosk: Kiosk, tmp_path: Path) -> None:
+  heard: list[bool] = []
+  kiosk.ctl.add_listener(lambda: heard.append(kiosk.ctl.app_updating))
   put_banner(tmp_path / "status", kiosk.t.wall)
-  assert kiosk.ctl.banner is None
+  assert not kiosk.ctl.app_updating
   await kiosk.ctl.tick()
-  assert kiosk.ctl.banner == BANNER
-  assert heard[-1] == BANNER
+  assert kiosk.ctl.app_updating
+  assert heard[-1] is True
 
 
-async def test_banner_expires_after_10_minutes(kiosk: Kiosk, tmp_path: Path) -> None:
+async def test_app_updating_expires_after_10_minutes(kiosk: Kiosk, tmp_path: Path) -> None:
   put_banner(tmp_path / "status", kiosk.t.wall, age=599)
   await kiosk.ctl.tick()
-  assert kiosk.ctl.banner == BANNER
+  assert kiosk.ctl.app_updating
   kiosk.t.advance(1)
   await kiosk.ctl.tick()
-  assert kiosk.ctl.banner is None
+  assert not kiosk.ctl.app_updating
 
 
-async def test_banner_removed_with_its_file(kiosk: Kiosk, tmp_path: Path) -> None:
+async def test_app_updating_ends_with_the_banner_file(kiosk: Kiosk, tmp_path: Path) -> None:
   put_banner(tmp_path / "status", kiosk.t.wall)
   await kiosk.ctl.tick()
   (tmp_path / "status" / "banner.json").unlink()
   await kiosk.ctl.tick()
-  assert kiosk.ctl.banner is None
+  assert not kiosk.ctl.app_updating
+
+
+def put_host_update(status_dir: Path, wall: datetime, **fields: object) -> float:
+  """Write `host-update.json` stamped `at` the wall clock now, which is returned."""
+  status_dir.mkdir(exist_ok=True)
+  at = wall.timestamp()
+  data = {"state": "downloaded", "done": 5, "total": 5, "mode": "window", "window_start": "03:00", "at": at} | fields
+  (status_dir / "host-update.json").write_text(json.dumps(data))
+  os.utime(status_dir / "host-update.json", (at, at))
+  return at
+
+
+async def test_host_update_appears_on_tick_and_notifies(kiosk: Kiosk, tmp_path: Path) -> None:
+  heard: list[object] = []
+  kiosk.ctl.add_listener(lambda: heard.append(kiosk.ctl.host_update))
+  put_host_update(tmp_path / "status", kiosk.t.wall, state="downloading", done=20)
+  assert kiosk.ctl.host_update is None
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.host_update is not None
+  assert kiosk.ctl.host_update.done == 20  # noqa: PLR2004
+  assert heard[-1] == kiosk.ctl.host_update
+  # A new write (progress) tells the listeners again.
+  put_host_update(tmp_path / "status", kiosk.t.wall, state="downloading", done=30)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.host_update is not None
+  assert kiosk.ctl.host_update.done == 30  # noqa: PLR2004
+  assert len(heard) == 2  # noqa: PLR2004
+
+
+async def test_a_downloaded_window_update_clears_after_five_seconds(kiosk: Kiosk, tmp_path: Path) -> None:
+  put_host_update(tmp_path / "status", kiosk.t.wall)
+  kiosk.t.advance(1)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.host_update is not None
+  kiosk.t.advance(5)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.host_update is None
+
+
+async def test_a_downloaded_immediate_update_stays(kiosk: Kiosk, tmp_path: Path) -> None:
+  put_host_update(tmp_path / "status", kiosk.t.wall, mode="immediate", window_start=None)
+  kiosk.t.advance(60)
+  await kiosk.ctl.tick()
+  assert kiosk.ctl.host_update is not None
 
 
 def scanned(employee_id: int) -> Matched:

@@ -22,7 +22,7 @@ from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, ScanOutco
 from timeclock_schema.models import EMAIL_PATTERN
 
 # First party imports
-from timeclock_system.app_status import read_banner
+from timeclock_system.app_status import read_banner, read_host_update
 from timeclock_system.clock import (
   Approval,
   EmployeeBlockFull,
@@ -62,6 +62,7 @@ if TYPE_CHECKING:
   from timeclock_schema.models import Employee
 
   # First party imports
+  from timeclock_system.app_status import HostUpdate
   from timeclock_system.clock import Clock
   from timeclock_system.registration import OtherPrint, Press, Verdict
   from timeclock_system.scanner import ScannerEvent
@@ -69,6 +70,7 @@ if TYPE_CHECKING:
 RESCAN_AFTER_SECS = 30  # R45.2
 IDLE_CLOSE_SECS = 120  # R45.4, for every non-idle screen
 CONFIRM_SECS = 5
+HOST_DOWNLOADED_SHOW_SECS = 5  # how long a scheduled host update's "downloaded" toast stays
 MESSAGE_SECS = 3  # also how long a success or unrecognized reader message lingers
 ADVICE_SECS = 15  # "Fingerprint saved" with a re-register advice under it: long enough to read the advice
 FAILED_MIN_SECS = 1.0  # the failed read's red never shows shorter
@@ -490,8 +492,8 @@ class KioskController:
       reader: The scanner, driven through `set_mode`.
       tz: The business's zone, for business hours and displayed times.
       monotonic: Seconds for timeouts, injectable for tests.
-      wall_now: The wall clock for business hours and the banner's age, injectable for tests.
-      status_dir: Where the host's standby screen leaves the update banner; None shows none.
+      wall_now: The wall clock for business hours and the update files' age, injectable for tests.
+      status_dir: Where the host leaves the update banner and the host update's download state; None shows none.
     """
     self._clock = clock
     self._reader = reader
@@ -514,10 +516,11 @@ class KioskController:
     self._paused_until = float("-inf")
     self._mode: ReaderMode | None = None
     self._status_dir = status_dir
-    self._banner: str | None = None
+    self._app_updating = False
+    self._host_update: HostUpdate | None = None
     self._sync_reader()
     # What the listeners last heard: a change only time makes (an expired message) is found against this.
-    self._notified = (self._screen, self.reader_awake, self.reader_indicator, self.reader_message, self._banner)
+    self._notified = self._snapshot()
 
   @property
   def screen(self) -> Screen:
@@ -556,13 +559,21 @@ class KioskController:
     return None if isinstance(s, Idle) and now - m.at >= IDLE_ERROR_SECS else m
 
   @property
-  def banner(self) -> str | None:
-    """The update banner's text while the host's standby screen has one up (a deploy is building), as of the last tick."""
-    return self._banner
+  def app_updating(self) -> bool:
+    """Whether the host's standby screen has its update banner up (a deploy is building), as of the last tick."""
+    return self._app_updating
+
+  @property
+  def host_update(self) -> HostUpdate | None:
+    """The host update's download for the toast, as of the last tick; None once a window-mode download's toast is done."""
+    return self._host_update
 
   def add_listener(self, cb: Callable[[], object]) -> None:
-    """Call `cb` after any entry point that changed what the page shows: the screen, the reader line, the banner."""
+    """Call `cb` after any entry point that changed what the page shows: the screen, the reader line, the update toasts."""
     self._listeners.append(cb)
+
+  def _snapshot(self) -> tuple[object, ...]:
+    return (self._screen, self.reader_awake, self.reader_indicator, self.reader_message, self._app_updating, self._host_update)
 
   def _sync_reader(self) -> None:
     # `_mode` is what was last sent. After a press times out or the reader fails, the scanner returns to READY by itself,
@@ -607,7 +618,7 @@ class KioskController:
         self._message = None
       if self._failed_at is not None and self._waiting and self._mono() - self._failed_at >= FAILED_MIN_SECS:
         self._failed_at = None  # the red has ended; a later gap before the next scan mustn't bring it back
-      after = (self._screen, self.reader_awake, self.reader_indicator, self.reader_message, self._banner)
+      after = self._snapshot()
       if after != self._notified:
         self._notified = after
         for cb in self._listeners:
@@ -1239,10 +1250,22 @@ class KioskController:
         self._screen = Idle()
 
   async def tick(self) -> None:
-    """Expire timed screens and messages, follow business hours, and read the update banner; every 0.5 s (R5)."""
+    """Expire timed screens and messages, follow business hours, and read the update files; every 0.5 s (R5)."""
     async with self._transition():
       if self._status_dir is not None:
-        self._banner = read_banner(self._status_dir, self._wall().timestamp())
+        wall = self._wall().timestamp()
+        self._app_updating = read_banner(self._status_dir, wall)
+        update = read_host_update(self._status_dir, wall)
+        # A scheduled install's toast has nothing more to say a moment after the download, so the page only renders what
+        # it's given. An immediate one stays until the updater removes the file at the restart.
+        if (
+          update is not None
+          and update.downloaded
+          and update.window_start is not None
+          and wall - update.at >= HOST_DOWNLOADED_SHOW_SECS
+        ):
+          update = None
+        self._host_update = update
       now = self._mono()
       s = self._screen
       if isinstance(s, Idle | Confirmation):

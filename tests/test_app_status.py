@@ -4,12 +4,12 @@
 import json
 import os
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time as dtime, timedelta
 from importlib.metadata import version
 from typing import TYPE_CHECKING
 
 # First party imports
-from timeclock_system.app_status import read_banner, write_status
+from timeclock_system.app_status import HostUpdate, read_banner, read_host_update, write_status
 
 if TYPE_CHECKING:
   # Standard library imports
@@ -52,20 +52,62 @@ def banner(tmp_path: Path, text: str = "An update is being installed.", age: flo
   return tmp_path
 
 
-def test_banner_fresh_is_shown(tmp_path: Path) -> None:
-  assert read_banner(banner(tmp_path, age=599), time.time()) == "An update is being installed."
+def test_banner_fresh_is_up(tmp_path: Path) -> None:
+  assert read_banner(banner(tmp_path, age=599), time.time()) is True
 
 
 def test_banner_older_than_10_minutes_is_ignored(tmp_path: Path) -> None:
-  assert read_banner(banner(tmp_path, age=600), time.time()) is None
+  assert read_banner(banner(tmp_path, age=600), time.time()) is False
 
 
-def test_banner_missing_or_malformed_is_none(tmp_path: Path) -> None:
+def test_banner_missing_or_malformed_is_down(tmp_path: Path) -> None:
   now = time.time()
-  assert read_banner(tmp_path, now) is None
+  assert read_banner(tmp_path, now) is False
   (tmp_path / "banner.json").write_text("{not json")
-  assert read_banner(tmp_path, now) is None
+  assert read_banner(tmp_path, now) is False
   (tmp_path / "banner.json").write_text(json.dumps({"words": "x"}))
-  assert read_banner(tmp_path, now) is None
+  assert read_banner(tmp_path, now) is False
   (tmp_path / "banner.json").write_text(json.dumps({"text": ""}))
-  assert read_banner(tmp_path, now) is None
+  assert read_banner(tmp_path, now) is False
+
+
+def host_update(tmp_path: Path, data: dict[str, object] | None = None, age: float = 0) -> Path:
+  path = tmp_path / "host-update.json"
+  path.write_text(
+    json.dumps(
+      data
+      or {"state": "downloading", "done": 312000000, "total": 740000000, "mode": "window", "window_start": "03:00", "at": 1762905600}
+    )
+  )
+  stamp = time.time() - age
+  os.utime(path, (stamp, stamp))
+  return tmp_path
+
+
+def test_host_update_window_mode_parses(tmp_path: Path) -> None:
+  assert read_host_update(host_update(tmp_path), time.time()) == HostUpdate(
+    downloaded=False, done=312000000, total=740000000, window_start=dtime(3, 0), at=1762905600.0
+  )
+
+
+def test_host_update_immediate_mode_has_no_window(tmp_path: Path) -> None:
+  data = {"state": "downloaded", "done": 5, "total": 5, "mode": "immediate", "window_start": None, "at": 1.0}
+  update = read_host_update(host_update(tmp_path, data), time.time())
+  assert update is not None
+  assert update.downloaded
+  assert update.window_start is None
+
+
+def test_a_stale_downloading_file_is_ignored_but_a_stale_downloaded_one_is_read(tmp_path: Path) -> None:
+  assert read_host_update(host_update(tmp_path, age=300), time.time()) is None
+  data = {"state": "downloaded", "done": 5, "total": 5, "mode": "window", "window_start": "03:00", "at": 1.0}
+  assert read_host_update(host_update(tmp_path, data, age=3000), time.time()) is not None
+
+
+def test_host_update_missing_or_malformed_is_none(tmp_path: Path) -> None:
+  now = time.time()
+  assert read_host_update(tmp_path, now) is None
+  (tmp_path / "host-update.json").write_text("{not json")
+  assert read_host_update(tmp_path, now) is None
+  (tmp_path / "host-update.json").write_text(json.dumps({"state": "downloading"}))
+  assert read_host_update(tmp_path, now) is None

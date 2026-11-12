@@ -1,14 +1,15 @@
-"""The app's side of the standby screen (standby-screen spec §6): its startup steps out, the update banner in.
+"""The app's side of the standby screen (standby-screen spec §6): its startup steps out, the update banner and the host update in.
 
 The host's status app (timeclock-standby) reads the steps from `status/app.json` and writes the banner to
-`status/banner.json`, both in the persisted folder the host shares with the container.
+`status/banner.json`; the host updater writes `status/host-update.json`. All in the persisted folder the host shares with the container.
 """
 
 # Standard library imports
 import json
 import os
 import tempfile
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, time
 from importlib.metadata import version
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,8 @@ if TYPE_CHECKING:
 STATUS_FILE = "app.json"
 BANNER_FILE = "banner.json"
 BANNER_MAX_AGE_SECS = 600
+HOST_UPDATE_FILE = "host-update.json"
+HOST_UPDATE_STALE_SECS = 300
 
 
 def write_status(status_dir: Path, step: str) -> None:
@@ -37,17 +40,48 @@ def write_status(status_dir: Path, step: str) -> None:
     pass
 
 
-def read_banner(status_dir: Path, now: float) -> str | None:
-  """The update banner's text while its file exists and is under 10 minutes old, else None.
+def read_banner(status_dir: Path, now: float) -> bool:
+  """Whether the host's update banner is up: its file exists, is under 10 minutes old, and carries text.
 
-  The age limit means a status app that died mid-deploy can't leave the banner up. An unreadable or malformed file
+  Only the fact is used: the page words its own toast, while the file's text keeps serving the previous app release.
+  The age limit means a status app that died mid-deploy can't leave the toast up. An unreadable or malformed file
   reads as no banner.
   """
   path = status_dir / BANNER_FILE
   try:
     if now - path.stat().st_mtime >= BANNER_MAX_AGE_SECS:
-      return None
+      return False
     text = json.loads(path.read_text())["text"]
   except OSError, ValueError, KeyError, TypeError:
+    return False
+  return isinstance(text, str) and bool(text)
+
+
+@dataclass(frozen=True)
+class HostUpdate:
+  """A host update's download, as the host updater reports it in `host-update.json`."""
+
+  downloaded: bool
+  done: int  # bytes
+  total: int  # bytes
+  window_start: time | None  # None: installs as soon as it downloads
+  at: float  # unix seconds of the file's write
+
+
+def read_host_update(status_dir: Path, now: float) -> HostUpdate | None:
+  """The host updater's download state, or None when there's none to show.
+
+  A `downloading` file older than 5 minutes is stale (the updater dies without removing it). A `downloaded` one stays
+  until the updater removes it at the restart. An unreadable or malformed file reads as none.
+  """
+  path = status_dir / HOST_UPDATE_FILE
+  try:
+    stale = now - path.stat().st_mtime >= HOST_UPDATE_STALE_SECS
+    data = json.loads(path.read_text())
+    downloaded = data["state"] == "downloaded"
+    if stale and not downloaded:
+      return None
+    window_start = time.fromisoformat(data["window_start"]) if data["mode"] == "window" else None
+    return HostUpdate(downloaded, int(data["done"]), int(data["total"]), window_start, float(data["at"]))
+  except OSError, ValueError, KeyError, TypeError:
     return None
-  return text if isinstance(text, str) and text else None

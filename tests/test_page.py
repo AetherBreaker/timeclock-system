@@ -502,19 +502,58 @@ async def test_approval_prompt_names_the_change(controller: KioskController, tmp
     await user.should_see(kind=ui.button, content=text.USE_PIN)
 
 
-async def test_banner_shown_on_idle_and_menu(controller: KioskController, tmp_path: Path) -> None:
-  # The host's standby screen puts it up during a deploy's build (standby-screen spec §6.2).
-  banner = "An update is being installed. The clock will restart in about a minute."
+async def test_app_update_toast_shown_on_idle_and_menu(controller: KioskController, tmp_path: Path) -> None:
+  # The host's standby screen puts the banner file up during a deploy's build (standby-screen spec §6.2); only that it's up
+  # matters, the toast has the app's own words.
+  banner = "A host-worded banner that must not appear."
   (tmp_path / "status").mkdir()
   (tmp_path / "status" / "banner.json").write_text(json.dumps({"text": banner}))
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")
-    await user.should_not_see(banner)
+    await user.should_not_see(text.APP_UPDATE_TITLE)
     await controller.tick()
-    await user.should_see(banner)
+    await user.should_see(text.APP_UPDATE_TITLE)
+    await user.should_see(text.APP_UPDATE_DETAIL)
+    await user.should_not_see(banner)
     await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
     await user.should_not_see(text.IDLE_READY)
-    await user.should_see(banner)
+    await user.should_see(text.APP_UPDATE_TITLE)
+    (tmp_path / "status" / "banner.json").unlink()
+    await controller.tick()
+    await asyncio.sleep(1.2)  # the toast slides away over 0.4 s, on the page's own 0.5 s timer
+    await user.should_not_see(text.APP_UPDATE_TITLE)
+
+
+async def test_host_toast_downloading_window(controller: KioskController, tmp_path: Path) -> None:
+  (tmp_path / "status").mkdir()
+  (tmp_path / "status" / "host-update.json").write_text(
+    json.dumps(
+      {"state": "downloading", "done": 312000000, "total": 740000000, "mode": "window", "window_start": "03:00", "at": 1762905600}
+    )
+  )
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await user.should_not_see(text.HOST_UPDATE_DOWNLOADING)
+    await controller.tick()
+    await user.should_see(text.HOST_UPDATE_DOWNLOADING)
+    await user.should_see("42% · 312 of 740 MB")
+    await user.should_see("Installs at the scheduled time, 3:00 AM tonight.")
+    await user.should_see(text.IDLE_READY)
+
+
+async def test_host_toast_downloaded_immediate(controller: KioskController, tmp_path: Path) -> None:
+  (tmp_path / "status").mkdir()
+  (tmp_path / "status" / "host-update.json").write_text(
+    json.dumps(
+      {"state": "downloaded", "done": 740000000, "total": 740000000, "mode": "immediate", "window_start": None, "at": 1762905600}
+    )
+  )
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.tick()
+    await user.should_see("System update downloaded")
+    await user.should_see("The clock will restart to install it immediately.")
+    await user.should_see("740 MB")
 
 
 # -- registration's screens -----------------------------------------------------------------------------------------
