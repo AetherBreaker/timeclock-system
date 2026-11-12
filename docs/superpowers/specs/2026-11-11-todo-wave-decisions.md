@@ -111,6 +111,8 @@ Mockup (approved, version 4): https://claude.ai/artifact/92neD6jb6Ae9X7Ts42e9Qa
    standby screen can show the problem.
 4. A RustDesk session's mouse counts as input, so remoting in wakes the screen.
 5. No touch-while-asleep test up front (owner); the dev-clock round and the rollout show it on each monitor.
+6. If a monitor can't be woken by touch while its screen is off: no code; the screen service is masked on that clock
+   over SSH (owner, 2026-11-12).
 
 ## 19, recorder (for 15's pass)
 

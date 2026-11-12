@@ -227,6 +227,8 @@ Any input turns it back on. A RustDesk session's mouse is input, so remoting in 
    shows the problem even if the asleep file was left behind.
 4. Whether each monitor's touch panel keeps sending touches while the screen is off isn't tested up front (owner); the
    dev-clock round and the rollout show it on each monitor.
+5. If a monitor can't be woken by touch while off, the fallback is no code: `systemctl mask timeclock-screen` on that
+   clock over SSH (owner). The mask lives in `/etc`, so host updates keep it.
 
 ## 10. TODO.md
 
