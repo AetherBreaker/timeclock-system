@@ -39,7 +39,7 @@ def test_crash_alert_line_shape(tmp_path: Path) -> None:
   writer(tmp_path).write((a_trail(),))
   [line] = (tmp_path / "crash-alerts.0.jsonl").read_text(encoding="utf-8").splitlines()
   record = json.loads(line)
-  assert set(record) == {"at", "program", "host", "trails", "errors"}
+  assert set(record) == {"at", "program", "host", "clip", "trails", "errors"}
   assert (record["at"], record["program"], record["host"]) == (NOW.isoformat(), "timeclock-system-1", "timeclock-system-1")
   [trail] = record["trails"]
   assert set(trail) == {"origin", "entries"}
@@ -111,3 +111,14 @@ def test_critical_records_with_a_traceback_reach_the_line(tmp_path: Path, monkey
   [error] = json.loads(line)["errors"]
   assert error["message"] == "boom"
   assert "ValueError" in error["traceback"]
+
+
+def test_crash_record_names_the_open_clip(tmp_path: Path) -> None:
+  status = tmp_path / "status"
+  status.mkdir()
+  (status / "recording").write_text("2026-11-13_08-15-02\n")
+  CrashAlertWriter(tmp_path / "a", program="p", host="h", status_dir=status, now=lambda: NOW).write((a_trail(),))
+  CrashAlertWriter(tmp_path / "b", program="p", host="h", status_dir=tmp_path / "none", now=lambda: NOW).write((a_trail(),))
+  writer(tmp_path / "c").write((a_trail(),))
+  clips = [json.loads((tmp_path / d / "crash-alerts.0.jsonl").read_text())["clip"] for d in "abc"]
+  assert clips == ["2026-11-13_08-15-02", None, None]

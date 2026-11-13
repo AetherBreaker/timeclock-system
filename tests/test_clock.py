@@ -584,6 +584,13 @@ async def test_add_employee_numbers_from_the_clocks_block(env: Env) -> None:
   assert info.valid_next == (PunchKind.CLOCK_IN,)
 
 
+async def test_add_employee_logs_its_number(env: Env, caplog: pytest.LogCaptureFixture) -> None:
+  caplog.set_level("INFO")
+  e = await env.clock.add_employee(NEW, SecretStr("2468"))
+  assert any(str(e.id) in r.getMessage() for r in caplog.records)
+  assert not any("2468" in r.getMessage() or "$2a$" in r.getMessage() for r in caplog.records)
+
+
 async def test_add_employee_skips_numbers_the_clock_knows(env: Env) -> None:
   # 10005 is taken, 10006 is someone's username, and clock 2's numbers don't count toward clock 1's.
   env.store.replace_table(

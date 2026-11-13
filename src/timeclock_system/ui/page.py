@@ -11,7 +11,7 @@ import time
 from datetime import UTC, date, datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 # Third party imports
 from nicegui import app, ui
@@ -63,6 +63,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The screen recorder's heartbeat block: the page background and one step off it, alternating (spec §5.1).
+BEAT_COLOURS: Final = ("#161514", "#171615")
+BEAT_SECS: Final = 0.25
+BEAT_PX: Final = 4
 LOGO_FILE = "SFT-Logo-June-2022-color.svg"
 # The host's os-release, mounted read-only by the compose file: timeclock-host stamps its version there.
 HOST_OS_RELEASE = Path("/run/host/os-release")
@@ -236,6 +240,21 @@ class _KioskPage:
     ui.add_head_html(_NO_CONTEXT_MENU)
     ui.add_head_html(NO_BUTTON_FOCUS)
     ui.keyboard(on_key=self._on_key)
+
+    # The screen recorder reads this block to tell a frozen screen. A server timer drives it, so a stalled server stops it too.
+    beat = ui.element("div").mark("screen-beat")
+    beat.style(
+      f"position: fixed; left: 0; top: 0; width: {BEAT_PX}px; height: {BEAT_PX}px; z-index: 2147483647; pointer-events: none;"
+      f" background: {BEAT_COLOURS[0]}"
+    )
+    beat_phase = 0
+
+    def flip() -> None:
+      nonlocal beat_phase
+      beat_phase ^= 1
+      beat.style(f"background: {BEAT_COLOURS[beat_phase]}")
+
+    ui.timer(BEAT_SECS, flip)
 
     clock_label = ui.label().classes("fixed top-2 right-4 text-xl")
     # Small and dim: for whoever services the clock, telling which releases it runs (the app's, and the host image's).

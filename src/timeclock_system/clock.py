@@ -598,6 +598,8 @@ class Clock:
     self.notify_changed({"employees"})
     for cb in self._record_listeners:
       cb(e)
+    # The database stamps the row on arrival, so this line gives the moment for finding its screen recording.
+    logger.info("employee %d added at this clock", e.id)
     return e
 
   async def register_fingerprint(
