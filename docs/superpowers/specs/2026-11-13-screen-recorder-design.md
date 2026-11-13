@@ -114,6 +114,7 @@ inotify, so it sees each change at once. File names are Claude's call.
 | `freeze_secs` | 1 |
 | `cap_gb` | 40 |
 | `keyframe_secs` | 2 |
+| `max_clip_secs` | 600 |
 
 ### 4.2 When it records
 
@@ -173,6 +174,11 @@ inotify, so it sees each change at once. File names are Claude's call.
    - An interaction with no clip open opens one.
    - The clip's footage starts at the last keyframe at or before `before_secs` before that interaction.
    - It closes once `after_secs` pass with no interaction (an ongoing freeze holds it open).
+   - A clip that reaches `max_clip_secs` closes, and the next one opens at once and carries on. It has its own name, and
+     each `.txt` names the other.
+   - So a freeze that lasts all night, or a mouse that never stops jittering, can't make one clip that's never
+     processed or can't be deleted. The watcher keeps the clock window up while the browser still reaches the app, so a
+     deadlocked app server can hold a freeze for hours.
 2. **Name.** The local time its footage starts, `YYYY-MM-DD_HH-MM-SS` (e.g. `2026-11-13_08-15-02`), with `-2`, `-3`
    and so on added if two would collide.
    - While a clip is open, the recorder keeps its name in `status/recording`, and removes the file when the clip closes.
@@ -203,7 +209,8 @@ inotify, so it sees each change at once. File names are Claude's call.
    frame repeats until the next one's capture time, so the clip plays at real speed. On top it draws:
    - Each frame's capture time, local, to the microsecond.
    - A ring at each touch and click with a known position, held for half a second.
-   - During a freeze, an `ss.ff` timer counting from the freeze's start, over the repeated last frame.
+   - During a freeze, an `ss.ff` timer counting from the freeze's start, over the repeated last frame. Past a minute it
+     reads `m:ss.ff`, and past an hour `h:mm:ss.ff`.
 3. **Layout.** The time and the freeze timer go on a strip added below the picture, so they never cover the screen.
    The font is DejaVu Sans, which the image already has.
 4. **If it's interrupted,** a clip without a finished `.mp4` gets processed again (§4.6.5).
@@ -213,7 +220,7 @@ inotify, so it sees each change at once. File names are Claude's call.
 1. Everything lives under `recordings_dir`: segments and every clip's four files.
 2. The folder's total is held under `cap_gb`. After each clip is saved and at start, the oldest clips' files are deleted
    until it fits.
-3. The open clip and the live segments are never deleted to make room.
+3. The open clip (at most `max_clip_secs`) and the live segments are never deleted to make room.
 
 ## 5. The clock app (timeclock-system)
 
@@ -310,6 +317,7 @@ About two weeks after it ships, re-read the production drives' SMART data agains
    held half a second (§4.7).
 10. The heartbeat's shape and colours (§5.1).
 11. Log lines for employee changes at the clock (§5.4).
+12. Clips split at 10 minutes (§4.6.1), and the freeze timer grows past `ss.ff` for long freezes (§4.7.2).
 
 ## 13. Left to the builder
 
