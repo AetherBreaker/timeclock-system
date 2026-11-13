@@ -66,7 +66,20 @@ it, so the recorder skips asleep time as soon as screen off lands, with no chang
 3. The recorder logs each clip's start and end. While a clip is open, it keeps the clip's name in a small file in the
    status folder; the app reads it to name the clip in progress in crash records and alerts (owner, 2026-11-13).
 
+## Interactions
+
+1. Scans: the app updates a file in the status folder each time a finger lands on the reader; the recorder notices each
+   update at once and counts it as an interaction (owner, 2026-11-13).
+2. A scan counts when the finger lands, not when matching ends, so a scan that hangs or fails still starts a clip
+   (owner).
+3. Scan times go in the text file beside the clip, with touches and freezes (owner).
+4. The recorder reads keyboards and mice itself (owner):
+   1. Each key press is an interaction; the text file gets its time, never which key, so a PIN typed on a keyboard can't
+      end up in it.
+   2. A mouse click is an interaction, written down and marked with its position like a touch; a RustDesk session's
+      mouse included.
+   3. Mouse movement keeps a clip going but isn't written down.
+
 ## Open
 
-1. How the app tells the recorder about interactions it can't see itself (a fingerprint scan).
-2. The rest of the details.
+1. The rest of the details.
