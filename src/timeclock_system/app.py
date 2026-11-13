@@ -100,8 +100,10 @@ def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of ev
   register_for_shutdown(lambda _trails: scanner.stop(), phase=ShutdownPhase.THREADED)
 
   async def refresh_gallery() -> None:
+    # Settings read after the await: a refresh that stalls in it must not put back what a newer one already applied.
+    prints = await clock.gallery()
     s = clock.settings()
-    scanner.set_gallery(await clock.gallery(), s.fingerprint_match_margin, s.fingerprint_match_min_score)
+    scanner.set_gallery(prints, s.fingerprint_match_margin, s.fingerprint_match_min_score)
 
   async def tick_forever() -> None:
     # An app task, not a page timer, so business hours drive the reader with no browser connected.

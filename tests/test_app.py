@@ -170,6 +170,31 @@ async def test_a_settings_change_reaches_the_scanner_margin_and_minimum(wired_sc
   assert scanner.galleries[-1][1:] == (NEW_MARGIN, NEW_MIN_SCORE)
 
 
+async def test_a_slow_gallery_read_never_puts_older_settings_back(
+  wired_scanner: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+  [startup] = wired_scanner["startup"]
+  await invoke_like_nicegui(startup)
+  scanner, clock = wired_scanner["scanner"], wired_scanner["clock"]
+  release, real_gallery, calls = asyncio.Event(), clock.gallery, [0]
+
+  async def gallery() -> object:
+    calls[0] += 1
+    if calls[0] == 1:  # the first refresh's read stalls until the settings change has been applied
+      await release.wait()
+    return await real_gallery()
+
+  monkeypatch.setattr(clock, "gallery", gallery)
+  clock.notify_changed({"fingerprints"})
+  await invoke_like_nicegui(lambda: None)
+  clock._store.set_settings(Settings(fingerprint_match_margin=NEW_MARGIN, fingerprint_match_min_score=NEW_MIN_SCORE))
+  clock.notify_changed({"settings"})
+  await invoke_like_nicegui(lambda: None)
+  release.set()
+  await invoke_like_nicegui(lambda: None)
+  assert scanner.galleries[-1][1:] == (NEW_MARGIN, NEW_MIN_SCORE)
+
+
 async def test_a_correction_refreshes_the_gallery(wired_scanner: dict[str, Any]) -> None:
   [startup] = wired_scanner["startup"]
   await invoke_like_nicegui(startup)
