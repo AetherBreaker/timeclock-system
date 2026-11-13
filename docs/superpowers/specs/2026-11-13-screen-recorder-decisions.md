@@ -125,4 +125,4 @@ main-office 1920x1080. CPUs: dev i5-8500T (6 cores, 15 GB), main-office i5-4590S
 
 ## Open
 
-Nothing; the spec is next.
+Nothing. The spec (`2026-11-13-screen-recorder-design.md`) was approved on 2026-11-13; the plan is next.
