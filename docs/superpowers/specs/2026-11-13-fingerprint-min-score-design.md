@@ -4,9 +4,9 @@ Approved by the owner on 2026-11-13.
 
 ## Why
 
-On 2026-11-13 a press at main-warehouse matched another employee's right index at 46 against a runner-up of 30. The
-reader's threshold is 40 and the lead rule asked for 15, so the clock opened that employee's punch menu and recorded a
-lunch on their record. The person pressing scored 27 on their own registered thumb: a poor press, or a finger they never
+On 2026-11-13 a weak press at main-warehouse matched another employee's print, just clearing the reader's threshold
+(40) and the lead rule (then 15), so the clock opened that employee's punch menu and recorded a lunch on their record.
+The person pressing scored far below a normal match on their own registered print: a poor press, or a finger they never
 registered. Genuine matches and wrong-person scores overlap between 40 and about 58 (83 of 478 genuine punches scored
 under 50, and other people's prints reached 40 or more on 20 of 348 clear genuine scans), so the lead rule is the only
 thing standing between a weak press and the wrong record.
