@@ -34,16 +34,20 @@ async def recorder_watch_loop(
   stopped = False
   while True:
     current = now()
+    shown = ""
     try:
       at = datetime.fromisoformat(json.loads((status_dir / RECORDER_FILE).read_text())["at"])
-    except OSError, ValueError, KeyError, TypeError:
-      at = None
-    if at is not None:
+      if at.tzinfo is None:  # the recorder writes UTC; a zoneless time can't be subtracted from an aware one
+        at = at.replace(tzinfo=UTC)
       age = (current - at).total_seconds()
+      shown = f"{at.astimezone(tz):%Y-%m-%d %H:%M:%S %Z}"  # here too: an extreme year overflows the conversion
+    except OSError, ValueError, KeyError, TypeError, OverflowError:
+      age = None  # no usable file: no alert, and the loop must live on (a crash here shuts the clock down)
+    if age is not None:
       if not stopped and age > STALE_SECS and (current - started).total_seconds() >= STALE_SECS:
         stopped = True
-        alert("Screen recorder stopped", f"The screen recorder's last report was at {at.astimezone(tz):%Y-%m-%d %H:%M:%S %Z}.")
+        alert("Screen recorder stopped", f"The screen recorder's last report was at {shown}.")
       elif stopped and age <= STALE_SECS:
         stopped = False
-        alert("Screen recorder running again", f"The screen recorder reported again at {at.astimezone(tz):%Y-%m-%d %H:%M:%S %Z}.")
+        alert("Screen recorder running again", f"The screen recorder reported again at {shown}.")
     await sleep(CHECK_SECS)

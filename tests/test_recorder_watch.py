@@ -7,6 +7,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+# Third party imports
+import pytest
+
 # First party imports
 from timeclock_system.recorder_watch import RECORDER_FILE, recorder_watch_loop
 
@@ -77,3 +80,14 @@ def test_recovery_alerts_once(tmp_path: Path) -> None:
 
   alerts = run_watch(tmp_path, 30, on_tick)
   assert [r for r, _ in alerts] == ["Screen recorder stopped", "Screen recorder running again"]
+
+
+@pytest.mark.parametrize("content", ["{}", "not json", '{"at": "0001-01-01T00:00:00+14:00"}'])
+def test_an_unusable_file_leaves_the_loop_running_without_alerting(tmp_path: Path, content: str) -> None:
+  (tmp_path / RECORDER_FILE).write_text(content)
+  assert run_watch(tmp_path, 30) == []
+
+
+def test_a_naive_time_reads_as_utc(tmp_path: Path) -> None:
+  (tmp_path / RECORDER_FILE).write_text(json.dumps({"at": (START - timedelta(minutes=11)).replace(tzinfo=None).isoformat()}))
+  assert [r for r, _ in run_watch(tmp_path, 30)] == ["Screen recorder stopped"]
