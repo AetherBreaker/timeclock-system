@@ -44,10 +44,19 @@ it, so the recorder skips asleep time as soon as screen off lands, with no chang
 2. No grace periods for now (owner, 2026-11-13). The idea: also record a short while before business hours start and
    after they end, where a problem with the screen and sleep is most likely; the asleep file would carry the next
    opening time for it. When the recorder lands, add it to `TODO.md` as a possible future item.
+3. The recorder records while the clock window is showing and there's no asleep file, noticing the file's changes at once
+   (owner, 2026-11-13).
+4. Until screen off lands nothing writes the file, so the recorder records whenever the clock window shows, around the
+   clock (owner).
+5. A touch or key while the file exists starts recording at once: it catches the waking tap, and a clock that froze while
+   asleep and so can't remove its file (owner).
+6. Sleep never cuts a clip short: the clock sleeps 30 s after the last tap, and the clip ended 15 s after it.
+7. Screen off brings the app's side (write the file when the reader closes, remove it when it opens, clear a leftover at
+   startup). The file has no contents. Until then the recorder's side is tested on the dev clock with a hand-made file
+   (owner).
 
 ## Open
 
-1. What the recorder does with the asleep file.
-2. Who names a clip (proposal: the recorder names it and keeps the current name in a shared file the app reads).
+1. Who names a clip (proposal: the recorder names it and keeps the current name in a shared file the app reads).
 3. How the app tells the recorder about interactions it can't see itself (a fingerprint scan).
 4. The rest of the details.
