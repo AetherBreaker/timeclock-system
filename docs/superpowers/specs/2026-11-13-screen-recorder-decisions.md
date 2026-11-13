@@ -41,12 +41,13 @@ it, so the recorder skips asleep time as soon as screen off lands, with no chang
 
 1. The signal is a file in the clock's status folder, `/data/timeclock_system_files/status/asleep`, present while the
    clock is asleep (owner, 2026-11-13; screen off's decision 20.3 already used it).
-2. The recorder also records for a short grace period before business hours start and after they end, where a problem
-   with the screen and sleep is most likely (owner, 2026-11-13). How it learns the hours: open.
+2. No grace periods for now (owner, 2026-11-13). The idea: also record a short while before business hours start and
+   after they end, where a problem with the screen and sleep is most likely; the asleep file would carry the next
+   opening time for it. When the recorder lands, add it to `TODO.md` as a possible future item.
 
 ## Open
 
-1. What the recorder does with the asleep file, and the grace periods' details.
+1. What the recorder does with the asleep file.
 2. Who names a clip (proposal: the recorder names it and keeps the current name in a shared file the app reads).
 3. How the app tells the recorder about interactions it can't see itself (a fingerprint scan).
 4. The rest of the details.
