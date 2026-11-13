@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 NY = ZoneInfo("America/New_York")
 NEW_MARGIN = 7
+NEW_MIN_SCORE = 50
 
 
 class FakeReader:
@@ -38,13 +39,13 @@ class FailingClock(Clock):
 
 
 class FakeScanner:
-  """Records the gallery and margin the app hands over; every other call does nothing."""
+  """Records the gallery, margin and minimum score the app hands over; every other call does nothing."""
 
   def __init__(self, *_args: object) -> None:
-    self.galleries: list[tuple[object, int]] = []
+    self.galleries: list[tuple[object, int, int]] = []
 
-  def set_gallery(self, prints: object, margin: int) -> None:
-    self.galleries.append((prints, margin))
+  def set_gallery(self, prints: object, margin: int, min_score: int) -> None:
+    self.galleries.append((prints, margin, min_score))
 
   def __getattr__(self, _name: str) -> Callable[..., None]:
     return lambda *_a, **_k: None
@@ -158,15 +159,15 @@ def wired_scanner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[d
   next(serving, None)  # runs serve_with's teardown, which closes the store
 
 
-async def test_a_settings_change_reaches_the_scanner_margin(wired_scanner: dict[str, Any]) -> None:
+async def test_a_settings_change_reaches_the_scanner_margin_and_minimum(wired_scanner: dict[str, Any]) -> None:
   [startup] = wired_scanner["startup"]
   await invoke_like_nicegui(startup)
   scanner, clock = wired_scanner["scanner"], wired_scanner["clock"]
-  assert scanner.galleries[-1][1] == Settings().fingerprint_match_margin
-  clock._store.set_settings(Settings(fingerprint_match_margin=NEW_MARGIN))
+  assert scanner.galleries[-1][1:] == (Settings().fingerprint_match_margin, Settings().fingerprint_match_min_score)
+  clock._store.set_settings(Settings(fingerprint_match_margin=NEW_MARGIN, fingerprint_match_min_score=NEW_MIN_SCORE))
   clock.notify_changed({"settings"})
   await invoke_like_nicegui(lambda: None)  # the gallery refresh is a task
-  assert scanner.galleries[-1][1] == NEW_MARGIN
+  assert scanner.galleries[-1][1:] == (NEW_MARGIN, NEW_MIN_SCORE)
 
 
 async def test_a_correction_refreshes_the_gallery(wired_scanner: dict[str, Any]) -> None:

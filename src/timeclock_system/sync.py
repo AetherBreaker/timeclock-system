@@ -46,7 +46,7 @@ _SELECT: Final[dict[str, LiteralString]] = {
   "config.settings": (
     "SELECT auto_clock_out_enabled, auto_clock_out_run_time, auto_clock_out_stamp_time, lunches_enabled, breaks_enabled, "
     "paid_break_minutes, break_limit_minutes, weekly_hours_alert, save_scan_images, fingerprint_match_margin, "
-    "registration_min_detail_points, registration_max_detail_points, registration_centre_tolerance, "
+    "fingerprint_match_min_score, registration_min_detail_points, registration_max_detail_points, registration_centre_tolerance, "
     "registration_agreement_bar, registration_agreement_needed, registration_resemblance_bar, "
     "registration_disagreement_retries FROM config.settings"
   ),

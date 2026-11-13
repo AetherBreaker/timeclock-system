@@ -239,6 +239,7 @@ GALLERY = [
   GalleryPrint(B, 2, b"tb", Finger.RIGHT_THUMB),
 ]
 MARGIN = 15
+MIN_SCORE = 45
 PROBE = b"probe-bytes"
 IMAGE = ScanImage(b"pixels", 2, 3)
 
@@ -274,12 +275,14 @@ def make(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Harness]]:
   def build(
     reader: FakeReader,
     timings: ScannerTimings = DEFAULT_TIMINGS,
+    *,
     mode: ReaderMode = ReaderMode.READY,
     margin: int = MARGIN,
     registrant: int | None = None,
+    min_score: int = MIN_SCORE,
   ) -> Harness:
     harness = Harness(reader, timings, hooked)
-    harness.scanner.set_gallery(GALLERY, margin)
+    harness.scanner.set_gallery(GALLERY, margin, min_score)
     if registrant is None:
       harness.scanner.set_mode(mode)
     else:
@@ -439,7 +442,7 @@ def test_set_gallery_restarts_identify_with_the_new_gallery(make: Callable[..., 
   h = make(FakeReader())
   _, gallery = h.reader.next_call("identify")
   assert gallery == tuple(GALLERY)
-  h.scanner.set_gallery(GALLERY[1:], MARGIN)
+  h.scanner.set_gallery(GALLERY[1:], MARGIN, MIN_SCORE)
   _, gallery = h.reader.next_call("identify")
   assert gallery == tuple(GALLERY[1:])
   h.no_event(0.0)
@@ -449,7 +452,7 @@ def test_set_gallery_with_an_equal_gallery_does_not_restart(make: Callable[..., 
   # Every echoed punch rebuilds the gallery; an unchanged one must not cut a capture in progress (R6).
   h = make(FakeReader())
   h.reader.next_call("identify")
-  h.scanner.set_gallery([GalleryPrint(p.print_id, p.employee_id, p.template, p.finger) for p in GALLERY], MARGIN)
+  h.scanner.set_gallery([GalleryPrint(p.print_id, p.employee_id, p.template, p.finger) for p in GALLERY], MARGIN, MIN_SCORE)
   with pytest.raises(queue.Empty):
     h.reader.next_call("identify_end", timeout=0.3)
 
@@ -459,7 +462,7 @@ def test_set_gallery_with_a_reordered_gallery_applies_from_the_next_identify(mak
   # where the cancel is dropped and the call waits for the next press (main-warehouse, 2026-11-05).
   h = make(FakeReader(), ScannerTimings(rearm_every=0.5))
   h.reader.next_call("identify")
-  h.scanner.set_gallery(GALLERY[::-1], MARGIN)
+  h.scanner.set_gallery(GALLERY[::-1], MARGIN, MIN_SCORE)
   with pytest.raises(queue.Empty):
     h.reader.next_call("identify_end", timeout=0.3)
   _, gallery = h.reader.next_call("identify")  # after the re-arm
@@ -500,7 +503,7 @@ def test_a_cancel_after_an_early_result_is_no_failure_and_still_pauses(make: Cal
   h.reader.next_call("identify")
   matched(h.event(), A)
   cancelled = time.monotonic()
-  h.scanner.set_gallery(GALLERY[1:], MARGIN)  # cancels the call still waiting for the lift
+  h.scanner.set_gallery(GALLERY[1:], MARGIN, MIN_SCORE)  # cancels the call still waiting for the lift
   started, _ = h.reader.next_call("identify")
   assert started - cancelled >= 0.3 - TICK
   h.no_event(0.0)
@@ -562,7 +565,7 @@ def test_register_decodes_each_gallery_print_once(make: Callable[..., Harness]) 
   h.scanner.register(1)
   assert h.event() == B_GALLERY
   # A print whose template changed is decoded again.
-  h.scanner.set_gallery([*GALLERY[:2], GalleryPrint(B, 2, b"tb-new", Finger.RIGHT_THUMB)], MARGIN)
+  h.scanner.set_gallery([*GALLERY[:2], GalleryPrint(B, 2, b"tb-new", Finger.RIGHT_THUMB)], MARGIN, MIN_SCORE)
   h.scanner.set_mode(ReaderMode.READY)
   h.scanner.register(1)
   gallery_of(h.event())
@@ -764,6 +767,36 @@ def test_tie_with_another_person_is_too_close(make: Callable[..., Harness]) -> N
   assert scan_of(matched(make(FakeReader([tie]), margin=0).event(), A)).result is ScanResult.MATCHED
 
 
+def test_a_match_under_the_minimum_is_too_weak(make: Callable[..., Harness]) -> None:
+  scan = scan_of(no_match(make(FakeReader([cap(A, (A, 44), (B, 10))])).event()))
+  assert scan.result is ScanResult.TOO_WEAK
+  assert scan.best == ScoredPrint(A, 1, Finger.RIGHT_THUMB, 44)
+
+
+def test_a_match_at_the_minimum_counts(make: Callable[..., Harness]) -> None:
+  assert scan_of(matched(make(FakeReader([cap(A, (A, 45), (B, 10))])).event(), A)).result is ScanResult.MATCHED
+
+
+def test_too_weak_comes_before_too_close(make: Callable[..., Harness]) -> None:
+  assert scan_of(no_match(make(FakeReader([cap(A, (A, 44), (B, 40))])).event())).result is ScanResult.TOO_WEAK
+
+
+def test_a_minimum_of_zero_leaves_the_reader_in_charge(make: Callable[..., Harness]) -> None:
+  assert scan_of(matched(make(FakeReader([cap(A, (A, 41), (B, 10))]), min_score=0).event(), A)).result is ScanResult.MATCHED
+
+
+def test_new_minimum_applies_without_restarting(make: Callable[..., Harness]) -> None:
+  weak = cap(A, (A, 44), (B, 10))
+  holder: list[Harness] = []
+  h = make(
+    FakeReader([Do(lambda: holder[0].scanner.set_gallery(GALLERY, MARGIN, 0)), weak, weak]), ScannerTimings(finger_off_pause=0.01)
+  )
+  holder.append(h)
+  # The call running when the minimum changed finishes with the minimum it started with, so it wasn't restarted.
+  assert scan_of(no_match(h.event())).result is ScanResult.TOO_WEAK
+  assert scan_of(matched(h.event(), A)).result is ScanResult.MATCHED
+
+
 def test_no_match_reports_the_best_print(make: Callable[..., Harness]) -> None:
   h = make(FakeReader([cap(None, (A, 30), (B, 25))]))
   scan = scan_of(no_match(h.event()))
@@ -802,9 +835,11 @@ def test_retry_posts_a_retry_report(make: Callable[..., Harness]) -> None:
 
 
 def test_new_margin_applies_without_restarting(make: Callable[..., Harness]) -> None:
-  close = cap(A, (A, 41), (B, 40))
+  close = cap(A, (A, 50), (B, 49))
   holder: list[Harness] = []
-  h = make(FakeReader([Do(lambda: holder[0].scanner.set_gallery(GALLERY, 0)), close, close]), ScannerTimings(finger_off_pause=0.01))
+  h = make(
+    FakeReader([Do(lambda: holder[0].scanner.set_gallery(GALLERY, 0, MIN_SCORE)), close, close]), ScannerTimings(finger_off_pause=0.01)
+  )
   holder.append(h)
   # The call running when the margin changed finishes with the margin it started with, so it wasn't restarted.
   assert scan_of(no_match(h.event())).margin == MARGIN

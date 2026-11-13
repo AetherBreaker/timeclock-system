@@ -1734,7 +1734,7 @@ requires-dist = [
     { name = "nicegui", specifier = ">=3.18,<4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.10" },
     { name = "psycopg-pool", specifier = ">=3.3.3" },
-    { name = "timeclock-schema", specifier = ">=0.14.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "timeclock-schema", specifier = ">=0.15.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "tzdata", specifier = ">=2026.5" },
     { name = "xlsxwriter", specifier = ">=3.3.1" },
 ]
@@ -1766,14 +1766,14 @@ wheels = [
 
 [[package]]
 name = "timeclock-schema"
-version = "0.14.0"
+version = "0.16.0"
 source = { registry = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/697/c92a1522fb167/timeclock_schema-0.14.0.tar.gz", hash = "sha256:697c92a1522fb167ed019596e9555b8371e832e61d0db87fa127a8c8968efaa7" }
+sdist = { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/b1f/a3715e01e332e/timeclock_schema-0.16.0.tar.gz", hash = "sha256:b1fa3715e01e332e453a9736763ddaae3a17f9f98f98115d8cd4e0ec8ada232c" }
 wheels = [
-    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/ec6/7ad7eb42aefda/timeclock_schema-0.14.0-py3-none-any.whl", hash = "sha256:ec67ad7eb42aefda119b4cf35c262893df744eab8cd601568596de30c8873b34" },
+    { url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+f/c5c/a4d71b15cd3fe/timeclock_schema-0.16.0-py3-none-any.whl", hash = "sha256:c5ca4d71b15cd3fe19a5d88aaa64286523b98949fbadcdd7ddbdfbe0905b0009" },
 ]
 
 [[package]]
@@ -1823,7 +1823,7 @@ requires-dist = [
     { name = "pycairo", marker = "sys_platform == 'linux'", specifier = ">=1.29.2", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "pygobject", marker = "sys_platform == 'linux'", specifier = ">=3.58.1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "timeclock-libfprint", marker = "sys_platform == 'linux'", specifier = ">=1.94.100.post3", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
-    { name = "timeclock-schema", specifier = ">=0.14.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "timeclock-schema", specifier = ">=0.16.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "uvicorn", specifier = ">=0.54,<0.55" },
     { name = "uvloop", marker = "sys_platform == 'linux'", specifier = ">=0.23" },
 ]
