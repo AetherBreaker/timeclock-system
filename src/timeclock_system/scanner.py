@@ -265,8 +265,12 @@ class ScannerTimings:
   enroll_idle_timeout: float = 30.0
 
 
-def _decide(capture: Capture, gallery: Sequence[GalleryPrint], margin: int) -> Matched | NoMatch:
-  """Turn a capture into the event to post: a match must beat every other person's best print by `margin` (0: no rule)."""
+def _decide(capture: Capture, gallery: Sequence[GalleryPrint], margin: int, min_score: int) -> Matched | NoMatch:
+  """Turn a capture into the event to post: a reader match, refused when weak or close.
+
+  A match must score at least `min_score` (40 or less: the reader's own threshold decides), then beat every other
+  person's best print by `margin` (0: no rule).
+  """
   known = {p.print_id: p for p in gallery}
   scored = [ScoredPrint(i, known[i].employee_id, known[i].finger, score) for i, score in capture.scores if i in known and score >= 0]
   best = next((s for s in scored if s.print_id == capture.match), None)
@@ -277,6 +281,8 @@ def _decide(capture: Capture, gallery: Sequence[GalleryPrint], margin: int) -> M
   other = max(others, key=lambda s: s.score, default=None)
   if best is None or not matched:
     result = ScanResult.NO_MATCH
+  elif best.score < min_score:
+    result = ScanResult.TOO_WEAK
   elif margin > 0 and best.score - (0 if other is None else other.score) < margin:
     result = ScanResult.TOO_CLOSE
   else:
@@ -325,6 +331,7 @@ class Scanner:
     self._merge: tuple[bytes, ...] | None = None  # a queued merge's presses
     self._gallery: tuple[GalleryPrint, ...] = ()
     self._margin = 0
+    self._min_score = 0
     self._token: CancelToken | None = None
     self._busy_since: float | None = None
     self._stopping = False
@@ -392,17 +399,17 @@ class Scanner:
     if token is not None:
       token.cancel()
 
-  def set_gallery(self, prints: Sequence[GalleryPrint], margin: int) -> None:
+  def set_gallery(self, prints: Sequence[GalleryPrint], margin: int, min_score: int) -> None:
     """Replace the gallery, restarting a running identify when its prints change; an equal gallery changes nothing (R6).
 
     Only an identify is restarted: a registration reads the gallery once as its session begins, and cancelling it would
     lose the user's presses.
-    A new `margin`, or a new order alone (every punch moves its employee first), applies from the next call: neither is
-    worth starting the reader over for.
+    A new `margin` or `min_score`, or a new order alone (every punch moves its employee first), applies from the next
+    call: none is worth starting the reader over for.
     """
     gallery = tuple(prints)
     with self._lock:
-      self._margin = margin
+      self._margin, self._min_score = margin, min_score
       if gallery == self._gallery:
         return
       reordered = set(gallery) == set(self._gallery)
@@ -531,12 +538,12 @@ class Scanner:
       if self._stopping or self._mode is not ReaderMode.READY or self._merge is not None:
         raise ScanCancelled
       self._token = token
-      gallery, margin = self._gallery, self._margin
+      gallery, margin, min_score = self._gallery, self._margin, self._min_score
 
     early: list[Matched | NoMatch] = []  # a list, not a nonlocal: pyright doesn't see a closure assign a local
 
     def on_result(capture: Capture) -> None:
-      early.append(_decide(capture, gallery, margin))
+      early.append(_decide(capture, gallery, margin, min_score))
       self._post(early[-1])
 
     # The periodic re-arm bounds every identify, so a call that outlives it is hung (busy_seconds, §6.2).
@@ -559,7 +566,7 @@ class Scanner:
       if self._last_status not in {None, _NO_FINGER}:
         self._post(_NO_FINGER)  # a cancelled call may never report the lift
       self._last_status = None
-    return (early[-1], True) if early else (_decide(capture, gallery, margin), False)
+    return (early[-1], True) if early else (_decide(capture, gallery, margin, min_score), False)
 
   def _register_once(self, mode_changes: int) -> None:
     # One capture of the REGISTER session that began at `mode_changes`; the session's first call posts RegisterGallery. A

@@ -1115,6 +1115,15 @@ async def test_too_close_says_it_matches_more_than_one_person(kiosk: Kiosk) -> N
   assert kiosk.ctl.reader_message == ReaderMessage("Matches more than one person, try again", "unrecognized", read_at)
 
 
+async def test_too_weak_says_not_recognized(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(WAITING)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  read_at = kiosk.t.mono
+  await kiosk.ctl.on_scanner_event(NoMatch(ScanReport(ScanResult.TOO_WEAK, None, None, (), 20)))
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.UNRECOGNIZED
+  assert kiosk.ctl.reader_message == ReaderMessage("Not recognized, try again", "unrecognized", read_at)
+
+
 async def test_plain_no_match_scan_still_says_not_recognized(kiosk: Kiosk) -> None:
   await kiosk.ctl.on_scanner_event(WAITING)
   await kiosk.ctl.on_scanner_event(DOWN)

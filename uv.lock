@@ -1708,7 +1708,7 @@ wheels = [
 
 [[package]]
 name = "timeclock-backend"
-version = "0.18.0"
+version = "0.19.0"
 source = { editable = "backend" }
 dependencies = [
     { name = "aeth-ext", extra = ["async"] },
@@ -1734,7 +1734,7 @@ requires-dist = [
     { name = "nicegui", specifier = ">=3.18,<4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.10" },
     { name = "psycopg-pool", specifier = ">=3.3.3" },
-    { name = "timeclock-schema", specifier = ">=0.15.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "timeclock-schema", specifier = ">=0.16.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "tzdata", specifier = ">=2026.5" },
     { name = "xlsxwriter", specifier = ">=3.3.1" },
 ]
@@ -1823,7 +1823,7 @@ requires-dist = [
     { name = "pycairo", marker = "sys_platform == 'linux'", specifier = ">=1.29.2", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "pygobject", marker = "sys_platform == 'linux'", specifier = ">=3.58.1", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "timeclock-libfprint", marker = "sys_platform == 'linux'", specifier = ">=1.94.100.post3", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
-    { name = "timeclock-schema", specifier = ">=0.14.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
+    { name = "timeclock-schema", specifier = ">=0.16.0", index = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple" },
     { name = "uvicorn", specifier = ">=0.54,<0.55" },
     { name = "uvloop", marker = "sys_platform == 'linux'", specifier = ">=0.23" },
 ]
