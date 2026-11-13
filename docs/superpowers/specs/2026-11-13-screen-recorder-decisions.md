@@ -80,6 +80,12 @@ it, so the recorder skips asleep time as soon as screen off lands, with no chang
       mouse included.
    3. Mouse movement keeps a clip going but isn't written down.
 
+## PINs in clips
+
+1. A clip of a PIN login shows which digits were tapped (the keys ripple, and the touch markers and text file show the
+   taps). Accepted (owner, 2026-11-13): clips stay on the clock, reachable only over SSH, where PINs could be captured
+   other ways anyway, and they help with "my PIN doesn't work" reports.
+
 ## Open
 
 1. The rest of the details.
