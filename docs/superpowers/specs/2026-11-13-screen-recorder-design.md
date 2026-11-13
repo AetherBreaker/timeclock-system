@@ -131,7 +131,7 @@ inotify, so it sees each change at once. File names are Claude's call.
 1. **Frames.**
    - It captures the output through `ext-image-copy-capture` or `wlr-screencopy` (the builder's choice).
    - A frame is taken only when the screen has changed, at most `max_fps` a second.
-   - Each frame is cropped to the clock window's rectangle (from sway's tree, followed through sway's window events) at
+   - Each frame is cropped to the clock window's rectangle (from sway's tree, read 4 times a second) at
      full resolution.
    - Each frame's capture time is kept to the microsecond, from the recorder's own clock.
 2. **Encoding.**
