@@ -31,8 +31,9 @@ menu, before a punch; after a punch the problem is a wrong button press (owner).
    once past it. The limit is `config.settings.weekly_hours_alert` (40). Today the only hook fires at ≥ the limit with
    lead 0 (`timeclock_schema/alerts.py`); `WEEKLY_HOURS_EARLY_NOTICE` exists in `text.py` but nothing triggers it.
 6. It shows on both the punch menu and the after-punch screen (owner, 2026-11-13).
-7. My call, drawn on the canvas: plain white, 30 px, under the name. Wording: "1 hr 55 min left to 40 hours this week",
-   and past 40, "2 hr 10 min over 40 hours this week".
+7. Plain white, 30 px, under the name on both screens, as drawn on the canvas; on the menu it pushes the break/lunch row
+   down. Wording: "1 hr 55 min left to 40 hours this week", and past 40, "2 hr 10 min over 40 hours this week" (owner,
+   2026-11-13, approving the drawn mockups).
 
 ## After a punch
 
@@ -48,5 +49,6 @@ menu, before a punch; after a punch the problem is a wrong button press (owner).
 
 ## Open
 
+- The hours line's color past 40: white as under 40, or yellow like today's over-40 alert (Claude's suggestion).
 - Making the employee's name harder to miss. Floated after the 2026-11-13 false match, where a scan opened another
   employee's menu and they pressed Start lunch without noticing the name. Not decided.
