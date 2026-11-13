@@ -22,7 +22,7 @@ from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, ScanOutco
 from timeclock_schema.models import EMAIL_PATTERN
 
 # First party imports
-from timeclock_system.app_status import read_banner, read_host_update
+from timeclock_system.app_status import read_banner, read_host_update, write_scan
 from timeclock_system.clock import (
   Approval,
   EmployeeBlockFull,
@@ -770,6 +770,9 @@ class KioskController:
       self._outcome = None  # a new press has none yet; the lift ends the last one's
     if ev.present and not self._present:
       self._failed_at = None  # a new finger ends the red at once
+      if self._status_dir is not None:
+        # The landing itself, so a hung or failed scan still starts a screen-recorder clip.
+        write_scan(self._status_dir, self._wall())
       if not isinstance(s, Idle | Confirmation):
         self._screen = replace(s, touched_at=self._mono())
     self._present, self._waiting = ev.present, ev.waiting

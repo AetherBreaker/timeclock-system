@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING, override
 # Third party imports
 from aeth_ext.errors.shutdown import SHUTDOWN, ShutdownKind, ShutdownPhase, register_for_shutdown
 
+# First party imports
+from timeclock_system.app_status import read_open_clip
+
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Callable, Sequence
@@ -28,18 +31,28 @@ LINES_PER_FILE = 200
 class CrashAlertWriter:
   """Appends one line per crash to `crash-alerts.<n>.jsonl`, moving to the next of five files every 200 lines."""
 
-  def __init__(self, directory: Path, *, program: str, host: str, now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
+  def __init__(
+    self,
+    directory: Path,
+    *,
+    program: str,
+    host: str,
+    status_dir: Path | None = None,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+  ) -> None:
     """Pick up where the newest file left off.
 
     Args:
       directory: Where the files live (created on the first write).
       program: The program name the alert names (`PROJECT_NAME-INSTANCE_ID`).
       host: This machine's host name.
+      status_dir: The status folder; its `recording` file names the screen-recorder clip open at the crash.
       now: The wall clock, injectable for tests.
     """
     self._dir = directory
     self._program = program
     self._host = host
+    self._status_dir = status_dir
     self._now = now
     existing = [p for n in range(CRASH_FILES) if (p := self._path(n)).exists()]
     if existing:
@@ -61,6 +74,7 @@ class CrashAlertWriter:
       "at": self._now().astimezone(UTC).isoformat(),
       "program": self._program,
       "host": self._host,
+      "clip": read_open_clip(self._status_dir) if self._status_dir else None,
       "trails": [
         {
           "origin": {"module": t.origin.module, "file": t.origin.file},
