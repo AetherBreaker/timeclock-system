@@ -39,17 +39,15 @@ A deferred item needs its own design before it's built.
     picture with the matcher's detail points circled (failed presses included), in memory only, never saved or logged.
     Samples on 2026-10-29 showed ridge cut-offs at the window's left edge counted as detail points, and a faint line
     across the middle of every press.
-12. [ ] *Deferred.* **Screen recordings of interactions** (owner, 2026-11-04): any interaction (a touch, a key, a scan)
-    starts a recording of the screen, which runs until 15 seconds pass with none. When someone reports the screen saying
-    or showing something odd, the owner can check what it actually showed. Specifics to be discussed, such as where
-    recordings are kept, for how long, and who can view them.
-13. [ ] *On hold.* **Turn the screen off after hours, waking on touch** (owner, 2026-10-29). Designed 2026-11-11 (the
+12. [ ] *On hold.* **Turn the screen off after hours, waking on touch** (owner, 2026-10-29). Designed 2026-11-11 (the
     TODO wave's spec, §9, and its decisions log). On hold 2026-11-12 until the owner investigates a report of a clock
-    not quite waking early in the morning.
-14. [ ] *Deferred.* **Payroll previews in the punch-editing page's test mode** (owner, 2026-11-05): while the page is
+    not quite waking early in the morning. Its `asleep` file is also the screen recorder's signal: recording pauses while
+    it exists (the recorder's spec, 2026-11-13, §3). A clip that runs on after the clock sleeps gets no frames once the
+    screen is off, which the recorder would count as a freeze; screen off has to account for that.
+13. [ ] *Deferred.* **Payroll previews in the punch-editing page's test mode** (owner, 2026-11-05): while the page is
     switched to the test database, buttons beside the shift editor's save button preview the result in each format
     payroll will receive by email. Waits on the automatic payroll emails, which don't exist yet.
-15. [ ] *Deferred.* **The clock prompts for a new PIN** (owner, 2026-11-05): the shift-corrections page's Employees menu
+14. [ ] *Deferred.* **The clock prompts for a new PIN** (owner, 2026-11-05): the shift-corrections page's Employees menu
     gets a "prompt for a new PIN" flag. The next time a clock knows it's really that employee (a fingerprint scan, or a
     login with their current PIN), it asks them to set a new one. For someone without a fingerprint, an editor first
     sets a PIN on the page, gives it to them, and sets the flag; they log in with it and reach the prompt. Clocks never
@@ -57,8 +55,14 @@ A deferred item needs its own design before it's built.
     applies it (and clears the flag) only while the employee's flag is set, refusing it otherwise the way it refuses a
     clock-made admin. The first version of the page only sets a PIN directly. Related: "Employees without a PIN" above
     could reuse this prompt.
-16. [ ] *Deferred.* **Text someone who walks away mid-break** (owner, 2026-11-13). Waits on text-message alerts, which
+15. [ ] *Deferred.* **Text someone who walks away mid-break** (owner, 2026-11-13). Waits on text-message alerts, which
     don't exist yet. When someone scans while on break or at lunch and their punch menu closes without a punch (cancelled
     or timed out), the system sends a text. Since 2026-10-28, 11 menus opened on a break or lunch closed that way, and one
     of those lunches ran 10 hours. Still open: who gets the text (the employee's phone is on
     file, or a manager), its wording, and whether a menu cancelled to check hours counts.
+16. [ ] *Deferred.* **Record around opening and closing** (owner, 2026-11-13): once screen off (12) lands, the screen
+    recorder also records a short while before business hours start and after they end, where a problem with the
+    screen and sleep is most likely. The `asleep` file would carry the next opening time.
+17. [ ] *Deferred.* **Mouse clicks get their position** (owner, 2026-11-13): a mouse that reports only movement can't
+    give the screen recorder a click's position, so its clicks have no ring. The clock itself would report the exact
+    position of the clicks it receives.
