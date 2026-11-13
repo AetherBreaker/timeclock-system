@@ -370,6 +370,23 @@ async def test_a_cleared_pin_error_keeps_its_line(controller: KioskController, t
     assert shown_text(user, "pin-error") == ""
 
 
+async def test_screen_beat_flips_between_two_colours(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    [beat] = user.find(marker="screen-beat").elements
+    for want in ("position: fixed", "left: 0", "top: 0", "width: 4px", "height: 4px", "z-index: 2147483647", "pointer-events: none"):
+      prop, value = want.split(": ")
+      assert beat.style[prop] == value
+    assert beat.style["background"] == page.BEAT_COLOURS[0]
+    seen = [beat.style["background"]]
+    async with asyncio.timeout(5):
+      while len(seen) < 4:  # noqa: PLR2004
+        await asyncio.sleep(0.02)
+        if beat.style["background"] != seen[-1]:
+          seen.append(beat.style["background"])
+    assert seen == [page.BEAT_COLOURS[0], page.BEAT_COLOURS[1]] * 2
+
+
 async def test_the_version_shows_in_the_corner(controller: KioskController, tmp_path: Path) -> None:
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
     await user.open("/")

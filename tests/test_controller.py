@@ -2030,6 +2030,28 @@ def put_banner(status_dir: Path, wall: datetime, age: float = 0) -> None:
   os.utime(path, (stamp, stamp))
 
 
+async def test_a_finger_landing_writes_the_scan_file(kiosk: Kiosk, tmp_path: Path) -> None:
+  (tmp_path / "status").mkdir()  # the app creates it at startup
+  scan = tmp_path / "status" / "scan"
+  await kiosk.ctl.on_scanner_event(DOWN)
+  landed = kiosk.t.wall.isoformat()
+  assert scan.read_text() == landed
+  kiosk.t.advance(3)
+  await kiosk.ctl.on_scanner_event(DOWN)  # still down
+  assert scan.read_text() == landed
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  assert scan.read_text() == kiosk.t.wall.isoformat() != landed
+
+
+async def test_no_status_dir_means_no_scan_file(kiosk: Kiosk, tmp_path: Path) -> None:
+  ctl = KioskController(
+    kiosk.clock, kiosk.reader, tz=NY, monotonic=lambda: kiosk.t.mono, wall_now=lambda: kiosk.t.wall, status_dir=None
+  )
+  await ctl.on_scanner_event(DOWN)
+  assert not (tmp_path / "status").exists()
+
+
 async def test_app_updating_appears_on_tick_without_notifying(kiosk: Kiosk, tmp_path: Path) -> None:
   heard: list[bool] = []
   kiosk.ctl.add_listener(lambda: heard.append(kiosk.ctl.app_updating))

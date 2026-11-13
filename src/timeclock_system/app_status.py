@@ -22,6 +22,8 @@ BANNER_FILE = "banner.json"
 BANNER_MAX_AGE_SECS = 600
 HOST_UPDATE_FILE = "host-update.json"
 HOST_UPDATE_STALE_SECS = 300
+SCAN_FILE = "scan"
+RECORDING_FILE = "recording"
 
 
 def write_status(status_dir: Path, step: str) -> None:
@@ -38,6 +40,26 @@ def write_status(status_dir: Path, step: str) -> None:
     os.replace(tmp, status_dir / STATUS_FILE)
   except OSError:
     pass
+
+
+def write_scan(status_dir: Path, at: datetime) -> None:
+  """Mark the moment a finger landed, for the host's screen recorder; atomically, ignoring any failure like `write_status`."""
+  try:
+    fd, tmp = tempfile.mkstemp(dir=status_dir, prefix=".scan-")
+    with os.fdopen(fd, "w") as f:
+      f.write(at.isoformat())
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, status_dir / SCAN_FILE)
+  except OSError:
+    pass
+
+
+def read_open_clip(status_dir: Path) -> str | None:
+  """The name of the clip the host's screen recorder has open, or None when none is (missing, empty or unreadable file)."""
+  try:
+    return (status_dir / RECORDING_FILE).read_text().strip() or None
+  except OSError:
+    return None
 
 
 def read_banner(status_dir: Path, now: float) -> bool:
