@@ -47,10 +47,12 @@ menu, before a punch; after a punch the problem is a wrong button press (owner).
 9. On the device every button is NiceGUI's default primary #5898D4 with white text: Quasar's `bg-primary`/`text-white`
    beat the `.sft-punch`/`.sft-plain` CSS, so the yellow never showed. The build must switch that default off, or the new
    colors get overridden the same way.
+10. The fix covers every screen, not just the punch menu and after-punch screen (owner, 2026-11-13): every screen shows
+    the colors its CSS always asked for (`sft-plain` and the PIN pad keys white with black text, `sft-punch` yellow).
 
 ## Deferred
 
-10. Making the employee's name harder to miss, floated after the 2026-11-13 false match (a scan opened another employee's
+11. Making the employee's name harder to miss, floated after the 2026-11-13 false match (a scan opened another employee's
     menu, and they pressed Start lunch without noticing the name). Not in this pass: fixing the fingerprint tuning should
     make it unnecessary; revisit if wrong-person punches persist after that (owner, 2026-11-13). The name stays at 40 px
     under the bar, as drawn.
