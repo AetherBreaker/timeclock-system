@@ -86,6 +86,29 @@ it, so the recorder skips asleep time as soon as screen off lands, with no chang
    taps). Accepted (owner, 2026-11-13): clips stay on the clock, reachable only over SSH, where PINs could be captured
    other ways anyway, and they help with "my PIN doesn't work" reports.
 
+## Frames, freezes and the build
+
+1. The heartbeat stays at about 4 changes a second, driven by the app's server (owner, 2026-11-13). Every frame from the
+   page was weighed and turned down: it would make the recorder encode 30 frames a second the whole time it records, and
+   count ordinary 0.1 s browser hiccups as freezes.
+2. A freeze starts when the heartbeat hasn't changed for 15 frames or 1 second, whichever comes first (owner): frames
+   catch a stalled server while the page still draws; seconds catch a screen that stopped changing. Both are recorder
+   settings, tuned in the dev-clock round. The freeze timer counts from the last frame where the heartbeat changed.
+3. Frames at full resolution, captured only when the screen changes, up to 30 a second. The recorder runs below the clock
+   app's priority and drops frames rather than slow the clock (owner).
+4. It captures only the clock window; if sway 1.11 can't capture one window, it captures the screen and crops to the
+   window (owner).
+5. A Rust program with its own service in timeclock-host, built like the updater (owner).
+6. A dev-clock round, then promotion to `:stable` like any host release; the app's part (the scan file, naming the open
+   clip in crash records and alerts) ships as an app release (owner).
+7. Status file names: my call (owner).
+
+## Facts checked (2026-11-13)
+
+All three clocks run sway 1.11 and have OpenH264 2.6.0 installed. Screens: dev and main-warehouse 1366x768,
+main-office 1920x1080. CPUs: dev i5-8500T (6 cores, 15 GB), main-office i5-4590S and main-warehouse i5-4570S (4 cores,
+7 GB). `/var` free: main-office 104 GB (the least), main-warehouse 214 GB, dev 451 GB.
+
 ## Open
 
-1. The rest of the details.
+Nothing; the spec is next.
