@@ -60,5 +60,5 @@ A deferred item needs its own design before it's built.
 16. [ ] *Deferred.* **Text someone who walks away mid-break** (owner, 2026-11-13). Waits on text-message alerts, which
     don't exist yet. When someone scans while on break or at lunch and their punch menu closes without a punch (cancelled
     or timed out), the system sends a text. Since 2026-10-28, 11 menus opened on a break or lunch closed that way, and one
-    of those lunches ran 10 hours before a manager caught it. Still open: who gets the text (the employee's phone is on
+    of those lunches ran 10 hours. Still open: who gets the text (the employee's phone is on
     file, or a manager), its wording, and whether a menu cancelled to check hours counts.
