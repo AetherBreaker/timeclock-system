@@ -109,6 +109,20 @@ All three clocks run sway 1.11 and have OpenH264 2.6.0 installed. Screens: dev a
 main-office 1920x1080. CPUs: dev i5-8500T (6 cores, 15 GB), main-office i5-4590S and main-warehouse i5-4570S (4 cores,
 7 GB). `/var` free: main-office 104 GB (the least), main-warehouse 214 GB, dev 451 GB.
 
+## After the builder check (2026-11-13)
+
+1. During the dev-clock round, Claude may look at dev-clock clips to check them. The owner does the real touches and a
+   finger scan at the dev clock when asked (owner).
+2. A broken recorder is reported: the recorder updates a file in the status folder every minute, and the app sends its
+   usual alert when the file goes more than 10 minutes without an update, and again when it recovers (owner).
+3. Fatal-crash alerts built inside aeth_ext stay as they are, without the clip's name; their time finds the clip, and
+   the local crash record names it (owner).
+4. A mouse that reports only movement can't give a click's position: its clicks get their time in the text file but no
+   ring. Touches and devices with exact positions keep theirs (owner, "for now"). When the recorder lands, add a
+   `TODO.md` item: the clock itself reports the exact position of the clicks it receives (owner).
+5. Clips split at 10 minutes, so a night-long freeze or a jittering mouse can't make one clip that's never processed or
+   deleted; the freeze timer grows past `ss.ff` (my call).
+
 ## Open
 
 Nothing; the spec is next.

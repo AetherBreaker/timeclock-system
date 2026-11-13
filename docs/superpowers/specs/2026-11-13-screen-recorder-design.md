@@ -74,6 +74,7 @@ Anti-goals (a failure even if it works):
 | `asleep` | the app, with screen off (`TODO.md` 13), not this pass | exists while the clock is asleep; empty | recorder; screen off's service |
 | `scan` | the app | rewritten each time a finger lands on the reader | recorder |
 | `recording` | the recorder | the open clip's name; gone when no clip is open | the app |
+| `recorder.json` | the recorder | `{"at": <now>, "state": "recording" or "idle"}`, rewritten every minute while it works | the app (§5.5) |
 
 All are replaced atomically: write a temp file in the same folder, then rename it. The recorder watches the folder with
 inotify, so it sees each change at once. File names are Claude's call.
@@ -151,8 +152,10 @@ inotify, so it sees each change at once. File names are Claude's call.
    - **Touchscreen** (direct multitouch): each finger landing is an interaction. Its position goes from the device's
      raw range to the clock window's pixels in a straight line.
    - **Keyboard:** each key press (not autorepeat) is an interaction. The text file gets its time, never which key.
-   - **Mouse:** each button press is an interaction. Movement keeps a clip open but isn't written down. Click position:
-     see §10 question 2.
+   - **Mouse:** each button press is an interaction. Movement keeps a clip open but isn't written down.
+     - A device that reports exact positions gets them mapped like a touch.
+     - A mouse that reports only movement can't give a click's position from outside sway (owner, "for now"): its
+       clicks get a time and no ring. §9 adds the fix.
    - RustDesk's virtual devices count like any other.
 2. **Scan.** Each change of `scan` is an interaction at that moment.
 3. **Freeze.** See §4.5. A freeze is an interaction for as long as it lasts.
@@ -187,7 +190,7 @@ inotify, so it sees each change at once. File names are Claude's call.
    - `.frames`: one line per frame with its capture time.
    - `.txt`: the event log. One line per event, each with its time:
      - `touch x y`
-     - `click x y` (or no position; see §10)
+     - `click x y`, or `click` from a mouse that reports only movement
      - `key`
      - `scan`
      - `freeze <start> <length>`
@@ -243,13 +246,29 @@ starts a clip.
 1. **Crash records.** `CrashAlertWriter`'s record gains `clip`: the contents of `status/recording` when it's written, or
    none.
 2. **The app's own alerts** (`_send_alert`) add a line naming the open clip, when there is one.
-3. **Fatal-crash alerts** are built inside aeth_ext: see §10 question 1.
+3. **Fatal-crash alerts** are built inside aeth_ext and stay as they are, without the clip's name (owner). The alert's
+   time finds the clip, and the crash record names it.
 
 ### 5.4 Log lines for employee changes at the clock
 
 Employee changes and employees added at the clock are stamped by the database when they arrive, so their clip is found
 through the clock's log. The app logs one info line each time the clock adds an employee or changes one: the employee's
 id and what changed, never a PIN.
+
+### 5.5 A broken recorder is reported
+
+The owner's decision: the app alerts when the recorder stops. Each step below follows from it.
+
+1. **What the recorder writes.** It rewrites `status/recorder.json` every minute while it works: connected to sway, with
+   OpenH264 loaded, whether recording or idle. A capture or encoding failure ends the process with the error in the
+   journal, so a recorder in a restart loop stops writing.
+2. **When the app alerts.** Through `_send_alert`, once, when both hold:
+   - the file's `at` is more than 10 minutes old;
+   - the app itself has been up 10 minutes, so a host restart doesn't trip it.
+3. **Recovery.** One more alert when the file updates again.
+4. **No file, no alert.** A clock that has never run the recorder isn't alerted on, so the app release can ship before
+   the host release.
+5. **Wording:** Claude's call.
 
 ## 6. Finding a row's clip
 
@@ -262,9 +281,14 @@ id and what changed, never a PIN.
 
 1. **Two releases.** A host release with the recorder, and an app release with §5. Either works without the other:
    - Without the app's part, the recorder never sees a heartbeat (so it checks for no freezes) and never sees a scan.
-   - Without the recorder, nothing writes `recording`, and the app names no clip.
-2. **The dev-clock round** (the dev clock is on the test database). Each item is checked from the clips and their text
-   files:
+   - Without the recorder, nothing writes `recording` or `recorder.json`, and the app names no clip and alerts on
+     nothing.
+2. **The dev-clock round** (the dev clock is on the test database).
+   - Each item is checked from the clips and their text files.
+   - Claude may look at dev-clock clips for these checks (owner).
+   - The owner does the real touches and the finger scan at the dev clock when asked (owner).
+
+   The items:
    1. A touch makes a clip from about 15 s before to 15 s after the last touch. `status/recording` appears and goes.
       Touch positions match the screen.
    2. A scan with no touch starts a clip.
@@ -277,6 +301,9 @@ id and what changed, never a PIN.
    8. A small `cap_gb` deletes the oldest clips first.
    9. A crash record made on the dev clock names the open clip.
    10. The recorder's CPU use, with the screen busy and with it still, is measured and reported to the owner.
+   11. With the recorder stopped and `recorder.json` backdated past 10 minutes, the app alerts. Starting the recorder
+       sends the recovery alert.
+   12. A click from the dev clock's Logitech mouse is written as `click` with no position.
 3. **Production.**
    - The host release goes to `:stable` by promotion after the round. Whether production takes it at once or in its
      03:00 window is asked at the time.
@@ -294,10 +321,17 @@ id and what changed, never a PIN.
 1. Remove item 12 once the recorder lands.
 2. Add a deferred item: also record a short while before business hours start and after they end, where a problem with
    the screen and sleep is most likely. The `asleep` file would carry the next opening time.
+3. Add a deferred item: the clock itself reports the exact position of the clicks it receives, so a mouse's clicks get
+   rings too (owner).
 
-## 10. Open questions for the owner
+## 10. Owner answers after the builder check
 
-Raised after the builder check; answers are written in here.
+All four are written in above:
+
+1. Dev-round viewing and touches (§7.2).
+2. The broken-recorder alert (§5.5).
+3. Fatal-crash alerts left as they are (§5.3.3).
+4. Mouse clicks with no position (§4.4.1).
 
 ## 11. After it ships
 
@@ -318,6 +352,8 @@ About two weeks after it ships, re-read the production drives' SMART data agains
 10. The heartbeat's shape and colours (§5.1).
 11. Log lines for employee changes at the clock (§5.4).
 12. Clips split at 10 minutes (§4.6.1), and the freeze timer grows past `ss.ff` for long freezes (§4.7.2).
+13. The recorder-alert details: the file's format, the 10 minutes of app uptime first, no alert without a file, and the
+    alerts' wording (§5.5).
 
 ## 13. Left to the builder
 
