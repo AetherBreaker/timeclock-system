@@ -605,9 +605,12 @@ async def test_refused_scans_are_dropped_and_dont_hold_back_later_ones(pg: Pg, r
 
 
 async def test_catch_up_mirrors_the_scan_switches(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
-  await admin_execute(pg, "UPDATE config.settings SET save_scan_images = false, fingerprint_match_margin = 7")
+  await admin_execute(
+    pg, "UPDATE config.settings SET save_scan_images = false, fingerprint_match_margin = 7, fingerprint_match_min_score = 50"
+  )
   r = await rig()
-  assert (r.clock.settings().save_scan_images, r.clock.settings().fingerprint_match_margin) == (False, 7)
+  s = r.clock.settings()
+  assert (s.save_scan_images, s.fingerprint_match_margin, s.fingerprint_match_min_score) == (False, 7, 50)
 
 
 async def test_catch_up_mirrors_the_registration_bars(pg: Pg, rig: Callable[[], Awaitable[Rig]]) -> None:
