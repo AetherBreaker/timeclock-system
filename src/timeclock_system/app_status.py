@@ -23,6 +23,7 @@ BANNER_MAX_AGE_SECS = 600
 HOST_UPDATE_FILE = "host-update.json"
 HOST_UPDATE_STALE_SECS = 300
 SCAN_FILE = "scan"
+RECORDING_FILE = "recording"
 
 
 def write_status(status_dir: Path, step: str) -> None:
@@ -51,6 +52,14 @@ def write_scan(status_dir: Path, at: datetime) -> None:
     os.replace(tmp, status_dir / SCAN_FILE)
   except OSError:
     pass
+
+
+def read_open_clip(status_dir: Path) -> str | None:
+  """The name of the clip the host's screen recorder has open, or None when none is (missing, empty or unreadable file)."""
+  try:
+    return (status_dir / RECORDING_FILE).read_text().strip() or None
+  except OSError:
+    return None
 
 
 def read_banner(status_dir: Path, now: float) -> bool:

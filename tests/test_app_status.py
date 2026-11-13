@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 # First party imports
-from timeclock_system.app_status import HostUpdate, read_banner, read_host_update, write_scan, write_status
+from timeclock_system.app_status import HostUpdate, read_banner, read_host_update, read_open_clip, write_scan, write_status
 
 if TYPE_CHECKING:
   # Standard library imports
@@ -136,3 +136,11 @@ def test_write_scan_replaces_atomically(tmp_path: Path) -> None:
 
 def test_write_scan_ignores_a_missing_folder(tmp_path: Path) -> None:
   write_scan(tmp_path / "absent", datetime.now(UTC))
+
+
+def test_read_open_clip(tmp_path: Path) -> None:
+  assert read_open_clip(tmp_path) is None
+  (tmp_path / "recording").write_text("2026-11-13_08-15-02\n")
+  assert read_open_clip(tmp_path) == "2026-11-13_08-15-02"
+  (tmp_path / "recording").write_text("")
+  assert read_open_clip(tmp_path) is None

@@ -16,11 +16,12 @@ from aeth_ext.errors.shutdown import ShutdownPhase, register_for_shutdown
 from nicegui import app, ui
 
 # First party imports
-from timeclock_system.app_status import write_status
+from timeclock_system.app_status import read_open_clip, write_status
 from timeclock_system.clock import Clock
 from timeclock_system.crash_alerts import CrashAlertWriter, register_crash_alert_writer
 from timeclock_system.fprint_reader import FprintReader
 from timeclock_system.heartbeat import heartbeat_loop
+from timeclock_system.recorder_watch import recorder_watch_loop
 from timeclock_system.scanner import Scanner
 from timeclock_system.settings import ClockSettings
 from timeclock_system.store import LocalStore
@@ -41,30 +42,37 @@ _TICK_SECS = 0.5
 _GALLERY_TABLES: frozenset[ChangeTable] = frozenset({"employees", "fingerprints", "punches", "punch_corrections", "settings"})
 
 
-def _send_alert(reason: str, details: str) -> None:
-  alert(reason, details, in_except_block=False, wait=False)  # wait=False: the loop never waits on a send
-
-
 @contextlib.contextmanager
 def _no_signal_capture(_server: uvicorn.Server) -> Generator[None]:
   # R21: aeth_ext's signal handlers drive the shutdown; uvicorn's own capture would take the signals from them.
   yield
 
 
-def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of every part; splitting it would only scatter it
+def serve(project_name: str) -> None:  # noqa: C901, PLR0915 - one linear wiring of every part; splitting it would only scatter it
   """Build every part, then run NiceGUI until the shutdown stops it.
 
   Args:
     project_name: `__main__.PROJECT_NAME`, passed in so this module doesn't import `__main__`.
   """
   settings = ClockSettings.get_settings()
+
+  def send_alert(reason: str, details: str) -> None:
+    if clip := read_open_clip(settings.status_dir):
+      details += f"\n\nRecording: {clip}"
+    alert(reason, details, in_except_block=False, wait=False)  # wait=False: the loop never waits on a send
+
   # Before the store opens, so a failed store check or a missing reader leaves a crash record.
   register_crash_alert_writer(
-    CrashAlertWriter(settings.crash_alerts_dir, program=f"{project_name}-{settings.instance_id}", host=socket.gethostname())
+    CrashAlertWriter(
+      settings.crash_alerts_dir,
+      program=f"{project_name}-{settings.instance_id}",
+      host=socket.gethostname(),
+      status_dir=settings.status_dir,
+    )
   )
   store = LocalStore(settings.store_path)
   clock = Clock(  # the validator sets the id
-    store, instance_id=settings.instance_id or "", clock_number=settings.clock_number, tz=settings.tz, alert=_send_alert
+    store, instance_id=settings.instance_id or "", clock_number=settings.clock_number, tz=settings.tz, alert=send_alert
   )
   write_status(settings.status_dir, "Connecting to the fingerprint reader")  # shown on the host's standby page
   reader = FprintReader()  # a missing reader raises ReaderGone here, uncaught: fatal at startup (R14.7)
@@ -92,7 +100,7 @@ def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of ev
       loop.call_soon_threadsafe(lambda: keep("Scanner event", controller.on_scanner_event(ev)))
 
   scanner = Scanner(reader, post)
-  sync = DatabaseSync(clock, store, settings.conninfo(), alert=_send_alert)
+  sync = DatabaseSync(clock, store, settings.conninfo(), alert=send_alert)
   controller = KioskController(clock, scanner, tz=settings.tz, status_dir=settings.status_dir)
 
   # Plain lambdas: aeth_ext holds bound methods weakly. app.shutdown() sets uvicorn's should_exit.
@@ -123,6 +131,7 @@ def serve(project_name: str) -> None:  # noqa: PLR0915 - one linear wiring of ev
     await controller.tick()  # sets the first reader mode
     keep("Database sync", sync.run())
     keep("Heartbeat", heartbeat_loop(settings.heartbeat_path, scanner.busy_seconds, tz=settings.tz))
+    keep("Recorder watch", recorder_watch_loop(settings.status_dir, send_alert, tz=settings.tz))
     keep("Week rollover", clock.run_week_rollover())
     keep("Screen timer", tick_forever())
     write_status(settings.status_dir, "Ready")
