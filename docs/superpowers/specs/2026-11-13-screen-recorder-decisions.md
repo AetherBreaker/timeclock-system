@@ -39,9 +39,14 @@ These were settled under "19, recorder" in `2026-11-11-todo-wave-decisions.md`:
 Screen off (`TODO.md` 13) is on hold. The asleep signal it will use is designed in this pass, and the recorder follows
 it, so the recorder skips asleep time as soon as screen off lands, with no change to the recorder (owner, 2026-11-13).
 
+1. The signal is a file in the clock's status folder, `/data/timeclock_system_files/status/asleep`, present while the
+   clock is asleep (owner, 2026-11-13; screen off's decision 20.3 already used it).
+2. The recorder also records for a short grace period before business hours start and after they end, where a problem
+   with the screen and sleep is most likely (owner, 2026-11-13). How it learns the hours: open.
+
 ## Open
 
-1. The asleep signal itself, and what the recorder does until screen off lands.
+1. What the recorder does with the asleep file, and the grace periods' details.
 2. Who names a clip (proposal: the recorder names it and keeps the current name in a shared file the app reads).
 3. How the app tells the recorder about interactions it can't see itself (a fingerprint scan).
 4. The rest of the details.
