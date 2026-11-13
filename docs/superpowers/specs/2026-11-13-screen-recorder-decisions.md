@@ -55,8 +55,18 @@ it, so the recorder skips asleep time as soon as screen off lands, with no chang
    startup). The file has no contents. Until then the recorder's side is tested on the dev clock with a hand-made file
    (owner).
 
+## Clip names, rows, logs and alerts
+
+1. The recorder names each clip, since it starts clips on its own: the local time its footage starts, like
+   `2026-11-13_08-15-02` (owner, 2026-11-13).
+2. Rows don't name clips; a row's clip is the one covering its time on its clock (owner, 2026-11-13). This replaces the
+   rows part of carried-over decision 8. Punches, fingerprint scans, fingerprint changes and fingerprint bypasses store
+   the clock's own time (`at`) and clock (`instance_id`). Employee changes and employees added at the clock are stamped
+   by the database on arrival, so the clock's log line gives their moment.
+3. The recorder logs each clip's start and end. While a clip is open, it keeps the clip's name in a small file in the
+   status folder; the app reads it to name the clip in progress in crash records and alerts (owner, 2026-11-13).
+
 ## Open
 
-1. Who names a clip (proposal: the recorder names it and keeps the current name in a shared file the app reads).
-3. How the app tells the recorder about interactions it can't see itself (a fingerprint scan).
-4. The rest of the details.
+1. How the app tells the recorder about interactions it can't see itself (a fingerprint scan).
+2. The rest of the details.
