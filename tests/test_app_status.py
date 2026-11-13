@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 # First party imports
-from timeclock_system.app_status import HostUpdate, read_banner, read_host_update, write_status
+from timeclock_system.app_status import HostUpdate, read_banner, read_host_update, write_scan, write_status
 
 if TYPE_CHECKING:
   # Standard library imports
@@ -124,3 +124,15 @@ def test_host_update_with_an_unrecognised_or_unrepresentable_field_is_none(tmp_p
   data = {"state": "downloading", "done": 1, "total": 2, "mode": "window", "window_start": "03:00", "at": 1.0} | change
   (tmp_path / "host-update.json").write_text(json.dumps(data))  # json.dumps writes inf as Infinity, which json.loads reads back
   assert read_host_update(tmp_path, time.time()) is None
+
+
+def test_write_scan_replaces_atomically(tmp_path: Path) -> None:
+  first = datetime(2026, 11, 13, 9, 0, tzinfo=UTC)
+  write_scan(tmp_path, first)
+  write_scan(tmp_path, first + timedelta(seconds=5))
+  assert (tmp_path / "scan").read_text() == (first + timedelta(seconds=5)).isoformat()
+  assert [p.name for p in tmp_path.iterdir()] == ["scan"]
+
+
+def test_write_scan_ignores_a_missing_folder(tmp_path: Path) -> None:
+  write_scan(tmp_path / "absent", datetime.now(UTC))

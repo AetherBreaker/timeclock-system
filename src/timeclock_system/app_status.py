@@ -22,6 +22,7 @@ BANNER_FILE = "banner.json"
 BANNER_MAX_AGE_SECS = 600
 HOST_UPDATE_FILE = "host-update.json"
 HOST_UPDATE_STALE_SECS = 300
+SCAN_FILE = "scan"
 
 
 def write_status(status_dir: Path, step: str) -> None:
@@ -36,6 +37,18 @@ def write_status(status_dir: Path, step: str) -> None:
       json.dump({"step": step, "version": version("timeclock-system"), "at": datetime.now(UTC).isoformat()}, f)
     os.chmod(tmp, 0o644)  # the host's status app runs as root, but keep it readable like the rest
     os.replace(tmp, status_dir / STATUS_FILE)
+  except OSError:
+    pass
+
+
+def write_scan(status_dir: Path, at: datetime) -> None:
+  """Mark the moment a finger landed, for the host's screen recorder; atomically, ignoring any failure like `write_status`."""
+  try:
+    fd, tmp = tempfile.mkstemp(dir=status_dir, prefix=".scan-")
+    with os.fdopen(fd, "w") as f:
+      f.write(at.isoformat())
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, status_dir / SCAN_FILE)
   except OSError:
     pass
 
