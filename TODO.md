@@ -57,3 +57,8 @@ A deferred item needs its own design before it's built.
     applies it (and clears the flag) only while the employee's flag is set, refusing it otherwise the way it refuses a
     clock-made admin. The first version of the page only sets a PIN directly. Related: "Employees without a PIN" above
     could reuse this prompt.
+16. [ ] *Deferred.* **Text someone who walks away mid-break** (owner, 2026-11-13). Waits on text-message alerts, which
+    don't exist yet. When someone scans while on break or at lunch and their punch menu closes without a punch (cancelled
+    or timed out), the system sends a text. Since 2026-10-28, 11 menus opened on a break or lunch closed that way, and one
+    of those lunches ran 10 hours. Still open: who gets the text (the employee's phone is on
+    file, or a manager), its wording, and whether a menu cancelled to check hours counts.
