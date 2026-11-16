@@ -4,6 +4,7 @@
 import dataclasses
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -179,6 +180,28 @@ async def test_menu_info_since_is_the_last_event_at_lunch_and_none_when_off(env:
   info = await env.clock.menu_info(1)
   assert info.state is EmployeeState.AT_LUNCH
   assert info.since == T - timedelta(hours=1)
+
+
+@pytest.mark.parametrize(("start", "end"), [(PunchKind.BREAK_START, PunchKind.BREAK_END), (PunchKind.LUNCH_START, PunchKind.LUNCH_END)])
+async def test_a_break_or_lunch_menu_offers_only_its_end(env: Env, start: PunchKind, end: PunchKind) -> None:
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=3)), origin="db")
+  env.store.insert_punch(punch_at(1, start, T - timedelta(minutes=10)), origin="db")
+  assert (await env.clock.menu_info(1)).valid_next == (end,)
+
+
+async def test_a_clock_out_from_a_break_still_records(env: Env) -> None:
+  # The menu no longer offers it, but the automatic clock-out still closes a shift from a break this way.
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=3)), origin="db")
+  env.store.insert_punch(punch_at(1, PunchKind.BREAK_START, T - timedelta(minutes=10)), origin="db")
+  outcome = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
+  assert outcome.punch.kind is PunchKind.CLOCK_OUT
+
+
+async def test_the_hours_carry_the_weekly_limit(env: Env) -> None:
+  assert (await env.clock.menu_info(1)).hours.week_limit == timedelta(hours=40)
+  env.store.set_settings(Settings(weekly_hours_alert=Decimal("37.5")))
+  env.clock.notify_changed({"settings"})
+  assert (await env.clock.menu_info(1)).hours.week_limit == timedelta(hours=37, minutes=30)
 
 
 async def test_a_punch_stamped_later_than_now_waits_for_its_time(env: Env) -> None:

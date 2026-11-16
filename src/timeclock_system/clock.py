@@ -142,6 +142,8 @@ class HoursSummary:
 
   week: timedelta
   """Worked plus paid break time, this week."""
+  week_limit: timedelta
+  """`weekly_hours_alert` as a duration: the hours line's limit."""
   today: timedelta
   """Worked plus paid break time, today."""
   breaks: timedelta | None
@@ -410,6 +412,10 @@ class Clock:
     s = self._settings
     # A switched-off lunch or break hides only its start: someone already on one can still end it.
     off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
+    # A break or lunch menu offers only the way back to work (owner, 2026-11-13); record_punch still takes a clock-out
+    # from one, for the automatic clock-out.
+    if timeline.state in (EmployeeState.ON_BREAK, EmployeeState.AT_LUNCH):
+      off.add(PunchKind.CLOCK_OUT)
     valid = tuple(k for k in timeline.valid_next if k not in off)
     hours = self._hours_summary(punches, corrections, now)
     is_admin = e.active and e.role is EmployeeRole.ADMIN
@@ -432,6 +438,7 @@ class Clock:
         lengths.extend((now if i.end is None else i.end) - i.start for i in spans if i.start >= day_start)
     return HoursSummary(
       week=week.worked + week.paid_break,
+      week_limit=timedelta(seconds=int(s.weekly_hours_alert * 3600)),  # two decimal places fit whole seconds
       today=day.worked + day.paid_break,
       breaks=sum(breaks, timedelta()) if s.breaks_enabled or breaks else None,
       last_break=breaks[-1] if breaks else timedelta(),

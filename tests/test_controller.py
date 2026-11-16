@@ -267,6 +267,7 @@ def test_format_duration_and_db_status() -> None:
 def test_hours_lines() -> None:
   hours = HoursSummary(
     week=timedelta(hours=32, minutes=30),
+    week_limit=timedelta(hours=40),
     today=timedelta(hours=7, minutes=5),
     breaks=timedelta(minutes=25),
     last_break=timedelta(minutes=10),
