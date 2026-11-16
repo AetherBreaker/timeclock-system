@@ -191,7 +191,7 @@ async def test_a_break_or_lunch_menu_offers_only_its_end(env: Env, start: PunchK
 
 
 async def test_a_clock_out_from_a_break_still_records(env: Env) -> None:
-  # The menu no longer offers it, but the automatic clock-out still closes a shift from a break this way.
+  # The menu no longer offers it, but a menu drawn before a break started on another clock can still send it.
   env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=3)), origin="db")
   env.store.insert_punch(punch_at(1, PunchKind.BREAK_START, T - timedelta(minutes=10)), origin="db")
   outcome = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)

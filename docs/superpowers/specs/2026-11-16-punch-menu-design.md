@@ -110,7 +110,8 @@ and End break `coffee`, Start and End lunch `restaurant`.
 
 **No Clock out on a break or lunch** is a menu rule only: `Clock.menu_info` drops `CLOCK_OUT` from `valid_next` while the
 state is on break or at lunch, beside where it drops a switched-off break or lunch start. `record_punch` keeps accepting
-it, so the automatic clock-out and any other path still close a shift from a break.
+it, as the timeline allows it: a menu drawn before a break started on another clock can still send it. (The backend's
+automatic clock-out writes to the database directly and never passes through `record_punch`.)
 
 ## The after-punch screen
 
