@@ -46,13 +46,24 @@ class Failure(StrEnum):
 
 @dataclass(frozen=True)
 class Press:
-  """One captured press, scored on the scanner thread."""
+  """One captured press, scored on the matcher threads."""
 
   press_id: int  # the session's capture count, from 0
   minutiae: Minutiae = field(repr=False)  # R15: biometric, like the probe
   probe: bytes = field(repr=False)  # R15: biometric; the single-press print a template is merged from
   vs_session: Mapping[int, int]  # agreement with each earlier press by press_id: the higher of both directions' scores
   vs_gallery: Mapping[UUID, tuple[int, ...]]  # score against each press of each other person's print, by print id
+  # The other prints it scores the resemblance bar against, with their presses and agreement: how a session learns them.
+  resembled: Mapping[UUID, OtherPrint] = field(default_factory=dict, repr=False)  # R15: biometric
+
+
+@dataclass(frozen=True)
+class OtherRef:
+  """Another person's print by identity alone: what a session knows of it until a press resembles it."""
+
+  print_id: UUID
+  employee_id: int
+  finger: Finger
 
 
 @dataclass(frozen=True)
@@ -134,10 +145,15 @@ def failing_presses(p: OtherPrint, settings: Settings) -> frozenset[int]:
 class Session:
   """One registration's presses: judged once `PRESSES` are kept, then compared with other people's prints."""
 
-  def __init__(self, others: Sequence[OtherPrint], settings: Settings) -> None:
-    """`others` leaves out the registrant's own prints (a re-registration's old print, their other fingers)."""
+  def __init__(self, others: Sequence[OtherRef], settings: Settings) -> None:
+    """`others`: every print but the registrant's (a re-registration's old print, their other fingers), in gallery order.
+
+    A print's presses and agreement only matter once a press resembles it, so they arrive on the first press that does
+    (`Press.resembled`), kept or replaced, and its failing presses are worked out then.
+    """
     self._others = others
-    self._failing = {p.print_id: failing_presses(p, settings) for p in others}
+    self._known: dict[UUID, OtherPrint] = {}
+    self._failing: dict[UUID, frozenset[int]] = {}
     self._settings = settings
     self._kept: list[Press] = []
     self._presses: list[Press] = []  # every press added, kept or replaced, for `best`
@@ -186,6 +202,9 @@ class Session:
     replaced as in A; with none, or with every kept press resembling it, the finger resembles it (case C).
     """
     s = self._settings
+    for pid, other in press.resembled.items():
+      if pid not in self._known:
+        self._known[pid], self._failing[pid] = other, failing_presses(other, s)
     self._kept.append(press)
     self._presses.append(press)
     kept = self._kept
@@ -209,14 +228,17 @@ class Session:
       flagged: list[OtherPrint] = []
       similar: list[tuple[int, OtherPrint]] = []
       if not failures:
-        for other in self._others:
+        for ref in self._others:
           pairs = [
             (p.press_id, j, score)
             for p in kept
-            for j, score in enumerate(p.vs_gallery.get(other.print_id, ()))
+            for j, score in enumerate(p.vs_gallery.get(ref.print_id, ()))
             if score >= s.registration_resemblance_bar
           ]
           if not pairs:
+            continue
+          if (other := self._known.get(ref.print_id)) is None:  # the matcher attaches every print at the bar
+            LOGGER.warning("Registration: print %s is resembled but none of its presses arrived; not judged", ref.print_id)
             continue
           failing = self._failing[other.print_id]
           healthy = [(i, score) for i, j, score in pairs if j not in failing]
