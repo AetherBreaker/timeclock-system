@@ -285,6 +285,18 @@ def test_hours_lines() -> None:
   assert [label for label, _ in text.hours_lines(replace(hours, breaks=None, lunch=None))] == ["This week", "Today"]
 
 
+def test_week_line() -> None:
+  hours = HoursSummary(
+    week=timedelta(), week_limit=timedelta(hours=40), today=timedelta(), breaks=None, last_break=timedelta(), on_break=False, lunch=None
+  )
+  assert text.week_line(replace(hours, week=timedelta(hours=38, minutes=5))) == ("1 hr 55 min left to 40 hours this week", False)
+  assert text.week_line(replace(hours, week=timedelta(hours=40))) == ("0 min over 40 hours this week", True)  # >=, as the alert was
+  over = timedelta(hours=42, minutes=10, seconds=30)
+  assert text.week_line(replace(hours, week=over)) == ("2 hr 10 min over 40 hours this week", True)
+  fraction = replace(hours, week_limit=timedelta(hours=37, minutes=30))
+  assert text.week_line(fraction) == ("37 hr 30 min left to 37.5 hours this week", False)
+
+
 async def test_match_opens_the_menu(kiosk: Kiosk) -> None:
   await kiosk.ctl.on_scanner_event(matched(ANN))
   screen = kiosk.ctl.screen

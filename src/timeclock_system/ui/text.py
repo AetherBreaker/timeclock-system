@@ -207,6 +207,20 @@ STATE_LABELS: Final[Mapping[EmployeeState, str]] = MappingProxyType(
     EmployeeState.AT_LUNCH: "At lunch since {time}",
   }
 )
+# The state bar on the punch menu and the after-punch screen: the word, then since when (a break or lunch adds how long).
+STATE_WORDS: Final[Mapping[EmployeeState, str]] = MappingProxyType(
+  {
+    EmployeeState.OFF: "CLOCKED OUT",
+    EmployeeState.WORKING: "CLOCKED IN",
+    EmployeeState.ON_BREAK: "ON BREAK",
+    EmployeeState.AT_LUNCH: "AT LUNCH",
+  }
+)
+STATE_SINCE: Final = "since {time}"
+STATE_SINCE_FOR: Final = "since {time} · {duration}"
+# The hours line under the name (`week_line`).
+WEEK_LEFT: Final = "{left} left to {limit} hours this week"
+WEEK_OVER: Final = "{over} over {limit} hours this week"
 
 
 def format_clock_time(at: datetime, tz: ZoneInfo) -> str:
@@ -231,6 +245,14 @@ def hours_lines(hours: HoursSummary) -> tuple[tuple[str, str], ...]:
   if hours.lunch is not None:
     rows.append((HOURS_LUNCH, hours.lunch))
   return tuple((label, format_duration(td)) for label, td in rows)
+
+
+def week_line(hours: HoursSummary) -> tuple[str, bool]:
+  """The hours line under the name, and whether the week has reached the limit (`>=`, as the old alert)."""
+  limit = _hours_number(hours.week_limit)
+  if hours.week >= hours.week_limit:
+    return WEEK_OVER.format(over=format_duration(hours.week - hours.week_limit), limit=limit), True
+  return WEEK_LEFT.format(left=format_duration(hours.week_limit - hours.week), limit=limit), False
 
 
 def format_db_status(status: DbStatus, tz: ZoneInfo) -> str:
