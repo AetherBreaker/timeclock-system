@@ -1,6 +1,6 @@
-"""The clock's domain rules (spec §4.5, §4.6, §6.4-§6.6, §6.11).
+"""The clock's domain rules (spec §4.5, §4.6, §6.4-§6.6).
 
-Punches, PINs, fingerprint bypasses, registration, adding employees, the weekly alert, the gallery and the prune.
+Punches, PINs, fingerprint bypasses, registration, adding employees, the gallery and the prune.
 
 Sync store calls run in `asyncio.to_thread`. The small mirrored tables are cached in memory and reloaded synchronously
 by `notify_changed`.
@@ -19,7 +19,6 @@ from uuid import uuid4
 # Third party imports
 import bcrypt
 from pydantic import SecretBytes, SecretStr
-from timeclock_schema.alerts import AlertContext, Firing, fired_hooks
 from timeclock_schema.enums import (
   BypassReason,
   EmployeeRole,
@@ -171,12 +170,13 @@ class MenuInfo:
 
 @dataclass(frozen=True)
 class PunchOutcome:
-  """A stored punch with the warnings its rules raised and the alert hooks it reached (§6.11)."""
+  """A stored punch with the warnings its rules raised, the hours after it, and who punched."""
 
   punch: Punch
   warnings: tuple[str, ...]
   hours: HoursSummary
-  firings: tuple[Firing, ...]
+  name: str
+  """`Employee.display_name`, for the after-punch screen."""
 
 
 class EmployeeBlockFull(Exception):  # noqa: N818  # a domain signal shown to the admin, like PunchRefused
@@ -510,9 +510,7 @@ class Clock:
         cb(p)
     self.notify_changed({"punches"})
     punches = [*punches, *written]
-    # Alerts only inform; nothing here can refuse the punch (§2).
-    firings = fired_hooks(AlertContext(employee_id, punches, corrections, self._settings, self._tz, now))
-    return PunchOutcome(punch, warnings, self._hours_summary(punches, corrections, now), firings)
+    return PunchOutcome(punch, warnings, self._hours_summary(punches, corrections, now), e.display_name)
 
   async def record_scan(self, scan: ScanReport) -> UUID | None:
     """Store a scan in the log; a matched one stays open until `settle_scan`. Never raises: the log must not stop a punch.

@@ -140,7 +140,7 @@ def ann_punched(store: LocalStore, *punches: tuple[PunchKind, timedelta]) -> Non
 
 def button(user: User, label: str) -> ui.button:
   [found] = user.find(kind=ui.button, content=label).elements
-  return cast("ui.button", found)
+  return found
 
 
 async def test_a_clocked_out_menu_shows_the_gray_bar_and_clock_in(controller: KioskController, tmp_path: Path) -> None:
@@ -256,6 +256,19 @@ async def test_a_double_tap_anywhere_ends_the_confirmation(controller: KioskCont
     user.find(marker="confirm-tap").click()
     user.find(marker="confirm-tap").click()
     await user.should_see(text.IDLE_READY)
+
+
+async def test_the_after_punch_screen_shows_the_new_state(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await controller.punch(PunchKind.CLOCK_IN)
+    await user.should_see("CLOCKED IN")
+    [bar] = user.find(marker="state-bar").elements
+    assert "sft-state-working" in bar.classes
+    assert shown_text(user, "state-since").startswith("Clocked in at")
+    await user.should_see("Ann Lee")
+    assert shown_text(user, "week-line").endswith("left to 40 hours this week")
 
 
 def shown_text(user: User, marker: str) -> str:

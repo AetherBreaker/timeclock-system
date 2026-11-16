@@ -470,7 +470,7 @@ class _KioskPage:
       if (self._branding_dir / LOGO_FILE).exists():
         ui.image(f"/branding/{LOGO_FILE}").classes("w-96")
       ui.label(s.message or (text.IDLE_READY if self._controller.reader_awake else text.IDLE_ASLEEP)).classes("sft-title")
-      if s.advice:  # a registration's re-register advice (case B), styled as the confirmation's alert notices
+      if s.advice:  # a registration's re-register advice (case B), yellow as the hours line past its limit
         ui.label(s.advice).classes("text-3xl").style("color: var(--sft-yellow)").mark("reregister-advice")
       self._button(text.USE_PIN, self._controller.use_pin)
     self._gear()
@@ -698,15 +698,20 @@ class _KioskPage:
     # A double tap anywhere ends it early; the same full-screen layer as the idle screen's.
     layer = ui.column().classes("fixed inset-0 z-10 items-center gap-6 pt-8").mark("confirm-tap")
     with layer.on("click", lambda: self._guarded(self._controller.tap)):
-      ui.label(s.text).classes("sft-title")
+      # The menu's bar, in the state the punch left them in, with the punch's sentence under the word.
+      with ui.element("div").classes(f"sft-state sft-state-{s.state}").mark("state-bar"):
+        ui.label(text.STATE_WORDS[s.state]).classes("sft-state-word")
+        ui.label(s.text).classes("sft-state-since").mark("state-since")
       with ui.grid(columns=2).classes("sft-hours gap-x-8 gap-y-0").mark("hours"):
-        for label, value in s.hours:
+        for label, value in text.hours_lines(s.hours):
           ui.label(label)
           ui.label(value).classes("text-right")
-      for warning in s.warnings:
-        ui.label(warning).classes("sft-error")
-      for notice in s.notices:
-        ui.label(notice).classes("text-3xl").style("color: var(--sft-yellow)").mark("alert-notice")
+      with ui.column().classes("sft-below-state items-center gap-12"):
+        ui.label(s.name).classes("sft-title")
+        week, over = text.week_line(s.hours)
+        ui.label(week).classes("sft-week sft-over" if over else "sft-week").mark("week-line")
+        for warning in s.warnings:
+          ui.label(warning).classes("sft-error")
 
   def _pin_pad(self, title: str, shown: str, error: str | None) -> None:
     ui.label(title).classes("sft-title")

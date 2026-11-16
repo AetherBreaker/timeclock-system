@@ -19,9 +19,6 @@ if TYPE_CHECKING:
   from datetime import datetime
   from zoneinfo import ZoneInfo
 
-  # Third party imports
-  from timeclock_schema.alerts import Firing
-
   # First party imports
   from timeclock_system.clock import HoursSummary
   from timeclock_system.sync import DbStatus
@@ -176,8 +173,6 @@ BLOCK_FULL: Final = "This clock has no employee numbers left"
 NEW_FINGERPRINT: Final = "Register {name}'s fingerprint?"
 EMPLOYEE_ADDED: Final = "Added {name}"
 EMPLOYEE_NUMBER: Final = "Employee number (PIN username): {number}"
-WEEKLY_HOURS_NOTICE: Final = "You've worked over {limit} hours this week"
-WEEKLY_HOURS_EARLY_NOTICE: Final = "You're within {lead} h of {limit} hours this week"
 
 PUNCH_LABELS: Final[Mapping[PunchKind, str]] = MappingProxyType(
   {
@@ -256,11 +251,3 @@ def format_db_status(status: DbStatus, tz: ZoneInfo) -> str:
 def _hours_number(td: timedelta) -> str:
   # Whole hours plainly, otherwise truncated hundredths without trailing zeros: 40, 37.5, 0.25.
   return f"{Decimal(td // timedelta(seconds=36)).scaleb(-2).normalize():f}"
-
-
-def alert_notice(firing: Firing) -> str:
-  """The confirmation-screen line for an alert hook the punch reached (§6.11); the weekly-hours type is the only one."""
-  limit = _hours_number(firing.limit)
-  if firing.hook.lead:
-    return WEEKLY_HOURS_EARLY_NOTICE.format(lead=_hours_number(firing.hook.lead), limit=limit)
-  return WEEKLY_HOURS_NOTICE.format(limit=limit)

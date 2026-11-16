@@ -3,7 +3,6 @@ import json
 import os
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
-from decimal import Decimal
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -12,9 +11,9 @@ from zoneinfo import ZoneInfo
 import bcrypt
 import pytest
 from pydantic import SecretBytes, SecretStr
-from timeclock_schema.alerts import CONFIRMATION_NOTICE, WEEKLY_HOURS, Firing, Hook
 from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, FingerprintChangeAction, PunchKind, ScanOutcome, ScanResult
 from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Punch, Settings
+from timeclock_schema.shifts import EmployeeState
 
 # First party imports
 from timeclock_system.clock import Approval, Clock, HoursSummary, NewEmployee, OverrideGrant
@@ -287,7 +286,13 @@ def test_hours_lines() -> None:
 
 def test_week_line() -> None:
   hours = HoursSummary(
-    week=timedelta(), week_limit=timedelta(hours=40), today=timedelta(), breaks=None, last_break=timedelta(), on_break=False, lunch=None
+    week=timedelta(),
+    week_limit=timedelta(hours=40),
+    today=timedelta(),
+    breaks=None,
+    last_break=timedelta(),
+    on_break=False,
+    lunch=None,
   )
   assert text.week_line(replace(hours, week=timedelta(hours=38, minutes=5))) == ("1 hr 55 min left to 40 hours this week", False)
   assert text.week_line(replace(hours, week=timedelta(hours=40))) == ("0 min over 40 hours this week", True)  # >=, as the alert was
@@ -313,7 +318,7 @@ async def test_punch_within_30s_records_and_confirms(kiosk: Kiosk) -> None:
   screen = kiosk.ctl.screen
   assert isinstance(screen, Confirmation)
   assert screen.text == "Clocked in at 8:02 AM"
-  assert screen.hours == tuple((label, "0 min") for label in ("This week", "Today", "Breaks", "Last break", "Lunch"))
+  assert text.hours_lines(screen.hours) == tuple((label, "0 min") for label in ("This week", "Today", "Breaks", "Last break", "Lunch"))
   assert [p.kind for p in kiosk.store.punches(ANN)] == [PunchKind.CLOCK_IN]
   kiosk.t.advance(5.1)
   await kiosk.ctl.tick()
@@ -1605,24 +1610,22 @@ async def test_a_timeout_while_registering_the_new_employee_counts_as_a_skip(kio
   assert kiosk.ctl.screen == EmployeeAdded("Zed New", 10001, touched_at=kiosk.t.mono)
 
 
-async def test_the_weekly_hours_notice_shows_on_the_confirmation(kiosk: Kiosk) -> None:
-  kiosk.store.set_settings(Settings(weekly_hours_alert=Decimal(30)))
-  kiosk.clock.notify_changed({"settings"})
-  monday = datetime(2026, 10, 26, 0, 1, tzinfo=NY)
-  for kind, at in ((PunchKind.CLOCK_IN, monday), (PunchKind.CLOCK_OUT, monday + timedelta(hours=31))):
-    kiosk.store.insert_punch(Punch(id=uuid4(), employee_id=ANN, kind=kind, at=at, instance_id="1"), origin="db")
-  await kiosk.ctl.on_scanner_event(matched(ANN))
-  await kiosk.ctl.punch(PunchKind.CLOCK_IN)
-  screen = kiosk.ctl.screen
-  assert isinstance(screen, Confirmation) and screen.notices == ("You've worked over 30 hours this week",)
-
-
-def test_alert_notice_wording() -> None:
-  limit = timedelta(hours=37, minutes=30)
-  at_limit = Firing(Hook(WEEKLY_HOURS, timedelta(), (CONFIRMATION_NOTICE,)), measure=limit, limit=limit)
-  assert text.alert_notice(at_limit) == "You've worked over 37.5 hours this week"
-  early = Firing(Hook(WEEKLY_HOURS, timedelta(hours=1), (CONFIRMATION_NOTICE,)), measure=limit, limit=timedelta(hours=40))
-  assert text.alert_notice(early) == "You're within 1 h of 40 hours this week"
+async def test_the_confirmation_shows_the_new_state_and_name(kiosk: Kiosk) -> None:
+  steps = (
+    (PunchKind.CLOCK_IN, EmployeeState.WORKING),
+    (PunchKind.BREAK_START, EmployeeState.ON_BREAK),
+    (PunchKind.BREAK_END, EmployeeState.WORKING),
+    (PunchKind.CLOCK_OUT, EmployeeState.OFF),
+  )
+  for kind, state in steps:
+    await kiosk.ctl.on_scanner_event(matched(ANN))
+    await kiosk.ctl.punch(kind)
+    screen = kiosk.ctl.screen
+    assert isinstance(screen, Confirmation)
+    assert (screen.name, screen.state) == ("Ann Lee", state)
+    assert screen.text.startswith(text.CONFIRMATIONS[kind].format(time=""))
+    kiosk.t.advance(CONFIRM_SECS + 0.1)
+    await kiosk.ctl.tick()
 
 
 async def test_a_digit_on_the_idle_screen_opens_the_pad_with_it_typed(kiosk: Kiosk) -> None:

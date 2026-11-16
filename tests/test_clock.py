@@ -14,7 +14,6 @@ import bcrypt
 import pytest
 from pydantic import BaseModel, SecretBytes, SecretStr
 from timeclock_schema import rules as schema_rules
-from timeclock_schema.alerts import WEEKLY_HOURS
 from timeclock_schema.enums import (
   BypassReason,
   CorrectionAction,
@@ -182,7 +181,9 @@ async def test_menu_info_since_is_the_last_event_at_lunch_and_none_when_off(env:
   assert info.since == T - timedelta(hours=1)
 
 
-@pytest.mark.parametrize(("start", "end"), [(PunchKind.BREAK_START, PunchKind.BREAK_END), (PunchKind.LUNCH_START, PunchKind.LUNCH_END)])
+@pytest.mark.parametrize(
+  ("start", "end"), [(PunchKind.BREAK_START, PunchKind.BREAK_END), (PunchKind.LUNCH_START, PunchKind.LUNCH_END)]
+)
 async def test_a_break_or_lunch_menu_offers_only_its_end(env: Env, start: PunchKind, end: PunchKind) -> None:
   env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=3)), origin="db")
   env.store.insert_punch(punch_at(1, start, T - timedelta(minutes=10)), origin="db")
@@ -727,18 +728,8 @@ async def test_hours_summary_counts_the_calendar_day(env: Env) -> None:
   assert (ended.breaks, ended.last_break, ended.on_break) == (timedelta(minutes=27), timedelta(minutes=12), False)
 
 
-async def test_a_punch_reaching_the_weekly_threshold_fires_the_hook(env: Env) -> None:
-  monday = datetime(2026, 10, 26, 8, tzinfo=NY)
-  for day in range(4):
-    env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, monday + timedelta(days=day)), origin="db")
-    env.store.insert_punch(punch_at(1, PunchKind.CLOCK_OUT, monday + timedelta(days=day, hours=9.5)), origin="db")
-  env.now = monday + timedelta(days=4)
-  under = await env.clock.record_punch(1, PunchKind.CLOCK_IN)  # 38 h
-  assert under.firings == ()
-  env.now += timedelta(hours=3)
-  over = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
-  assert over.hours.week == timedelta(hours=41)
-  assert [(f.hook.alert, f.limit) for f in over.firings] == [(WEEKLY_HOURS, timedelta(hours=40))]
+async def test_record_punch_names_who_punched(env: Env) -> None:
+  assert (await env.clock.record_punch(1, PunchKind.CLOCK_IN)).name == "Emp 1"
 
 
 def scan_report(result: ScanResult = ScanResult.MATCHED) -> ScanReport:
