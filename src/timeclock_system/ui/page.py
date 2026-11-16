@@ -11,6 +11,7 @@ import time
 from datetime import UTC, date, datetime
 from importlib.metadata import version
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 # Third party imports
@@ -18,7 +19,8 @@ from nicegui import app, ui
 
 # At runtime: NiceGUI inspects a handler's signature before calling it, which evaluates its annotations (_on_key).
 from nicegui.events import KeyEventArguments  # noqa: TC002
-from timeclock_schema.enums import Finger
+from timeclock_schema.enums import Finger, PunchKind
+from timeclock_schema.shifts import EmployeeState
 
 # First party imports
 from timeclock_system.registration import PRESSES
@@ -51,7 +53,7 @@ from timeclock_system.ui.controller import (
 
 if TYPE_CHECKING:
   # Standard library imports
-  from collections.abc import Callable
+  from collections.abc import Callable, Mapping
   from zoneinfo import ZoneInfo
 
   # Third party imports
@@ -67,6 +69,17 @@ logger = logging.getLogger(__name__)
 BEAT_COLOURS: Final = ("#161514", "#171615")
 BEAT_SECS: Final = 0.25
 BEAT_PX: Final = 4
+# A punch button's color (its `sft-kind-*` class) and Material icon, by kind (owner, 2026-11-13).
+_PUNCH_STYLE: Final[Mapping[PunchKind, tuple[str, str]]] = MappingProxyType(
+  {
+    PunchKind.CLOCK_IN: ("in", "login"),
+    PunchKind.CLOCK_OUT: ("out", "logout"),
+    PunchKind.BREAK_START: ("break", "coffee"),
+    PunchKind.BREAK_END: ("break", "coffee"),
+    PunchKind.LUNCH_START: ("lunch", "restaurant"),
+    PunchKind.LUNCH_END: ("lunch", "restaurant"),
+  }
+)
 LOGO_FILE = "SFT-Logo-June-2022-color.svg"
 # The host's os-release, mounted read-only by the compose file: timeclock-host stamps its version there.
 HOST_OS_RELEASE = Path("/run/host/os-release")
@@ -83,6 +96,31 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 .sft-title { font-size: 2.5rem; font-weight: 600; }
 /* The hours table (punch menu, confirmation): docked on the left edge, centred vertically (owner, 2026-11-06). */
 .sft-hours { position: fixed; left: 2rem; top: 50%; transform: translateY(-50%); }
+/* The punch menu and after-punch screen (owner, 2026-11-13): a full-width bar in the state's color under the clock line,
+   and punch buttons colored by kind. Clocked out is gray, not red: red is the error color, and a red bar over the green
+   Clock in button is the red-green colorblind pair. */
+:root { --sft-working: #38753B; --sft-break: #386BA8; --sft-lunch: #D98826; --sft-clocked-out: #4A4641;
+  --sft-clock-out: #BC2F3B; }
+.sft-state { position: fixed; left: 0; right: 0; top: 84px; height: 168px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px; color: var(--sft-white); }
+.sft-state-word { font-size: 96px; line-height: 1; font-weight: 800; letter-spacing: 4px; }
+.sft-state-since { font-size: 32px; line-height: 1.2; font-weight: 500; }
+.sft-state-off { background: var(--sft-clocked-out); }
+.sft-state-working { background: var(--sft-working); }
+.sft-state-on_break { background: var(--sft-break); }
+.sft-state-at_lunch { background: var(--sft-lunch); color: var(--sft-black); }
+.sft-below-state { margin-top: 256px; }  /* the screen's pt-8 (32 px) + 256: the name's top at 288 px, under the bar */
+.sft-week { font-size: 30px; }
+.sft-over { color: var(--sft-yellow); }
+/* Two classes deep, to outrank Quasar's own .q-btn rules whatever order the stylesheets load in. */
+.sft-button.sft-kind { min-height: 112px; min-width: 380px; padding: 0 40px; border-radius: 12px; font-size: 36px;
+  font-weight: 600; color: var(--sft-white); }
+.sft-button.sft-kind .q-icon { font-size: 44px; }
+.sft-button.sft-kind-in { background: var(--sft-working); }
+.sft-button.sft-kind-out { background: var(--sft-clock-out); }
+.sft-button.sft-kind-break { background: var(--sft-break); }
+.sft-button.sft-kind-lunch { background: var(--sft-lunch); color: var(--sft-black); }
+.sft-button.sft-docked { position: fixed; right: 64px; top: 720px; }
 .reader-ready { color: var(--sft-yellow); }
 .reader-scanning { color: var(--sft-blue); }
 .reader-read { color: var(--sft-read-green); }
@@ -440,19 +478,40 @@ class _KioskPage:
   def _menu(self, s: Menu) -> None:
     self._gear()
     info = s.info
-    ui.label(info.name).classes("sft-title")
-    state = text.STATE_LABELS[info.state]
-    ui.label(state.format(time=text.format_clock_time(info.since, self._tz)) if info.since else state)
+    with ui.element("div").classes(f"sft-state sft-state-{info.state}").mark("state-bar"):
+      ui.label(text.STATE_WORDS[info.state]).classes("sft-state-word")
+      if info.since is not None:
+        # A break or lunch adds how long it has run, as of the menu's drawing: it closes after 120 s idle.
+        at = text.format_clock_time(info.since, self._tz)
+        if info.state is EmployeeState.WORKING:
+          since = text.STATE_SINCE.format(time=at)
+        else:
+          since = text.STATE_SINCE_FOR.format(time=at, duration=text.format_duration(datetime.now(UTC) - info.since))
+        ui.label(since).classes("sft-state-since").mark("state-since")
     with ui.grid(columns=2).classes("sft-hours gap-x-8 gap-y-0").mark("hours"):
       for label, value in text.hours_lines(info.hours):
         ui.label(label)
         ui.label(value).classes("text-right")
-    with ui.row().classes("gap-4"):
-      for kind in info.valid_next:
-        self._button(text.PUNCH_LABELS[kind], lambda kind=kind: self._controller.punch(kind), "sft-punch")
-    if s.notice:
-      ui.label(s.notice).classes("sft-error")
-    self._button(text.CANCEL, self._controller.cancel)
+    # Clock out docks on the right, below the break and lunch row (owner, 2026-11-13), unless it's the only punch.
+    row = tuple(k for k in info.valid_next if k is not PunchKind.CLOCK_OUT) or info.valid_next
+    with ui.column().classes("sft-below-state items-center gap-12"):
+      ui.label(info.name).classes("sft-title")
+      week, over = text.week_line(info.hours)
+      ui.label(week).classes("sft-week sft-over" if over else "sft-week").mark("week-line")
+      with ui.row().classes("gap-8"):
+        for kind in row:
+          color, icon = _PUNCH_STYLE[kind]
+          self._button(
+            text.PUNCH_LABELS[kind], lambda kind=kind: self._controller.punch(kind), f"sft-kind sft-kind-{color}", icon=icon
+          )
+      if s.notice:
+        ui.label(s.notice).classes("sft-error")
+      self._button(text.CANCEL, self._controller.cancel)
+    if PunchKind.CLOCK_OUT not in row and PunchKind.CLOCK_OUT in info.valid_next:
+      out = PunchKind.CLOCK_OUT
+      self._button(
+        text.PUNCH_LABELS[out], lambda: self._controller.punch(out), "sft-kind sft-kind-out sft-docked", icon=_PUNCH_STYLE[out][1]
+      )
     if info.is_admin:
       # Near the bottom, well away from the punch buttons (owner, 2026-10-27).
       with ui.row().classes("fixed bottom-14 left-0 right-0 justify-center"):

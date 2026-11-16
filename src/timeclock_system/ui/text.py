@@ -199,14 +199,6 @@ CONFIRMATIONS: Final[Mapping[PunchKind, str]] = MappingProxyType(
     PunchKind.LUNCH_END: "Lunch ended at {time}",
   }
 )
-STATE_LABELS: Final[Mapping[EmployeeState, str]] = MappingProxyType(
-  {
-    EmployeeState.OFF: "Clocked out",
-    EmployeeState.WORKING: "Clocked in since {time}",
-    EmployeeState.ON_BREAK: "On break since {time}",
-    EmployeeState.AT_LUNCH: "At lunch since {time}",
-  }
-)
 # The state bar on the punch menu and the after-punch screen: the word, then since when (a break or lunch adds how long).
 STATE_WORDS: Final[Mapping[EmployeeState, str]] = MappingProxyType(
   {

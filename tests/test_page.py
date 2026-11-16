@@ -1,7 +1,7 @@
 # Standard library imports
 import asyncio
 import json
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from importlib.metadata import version
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
@@ -15,7 +15,7 @@ from nicegui.events import GenericEventArguments
 from nicegui.testing import user_simulation
 from pydantic import SecretBytes, SecretStr
 from timeclock_schema.enums import EmployeeRole, Finger, PunchKind
-from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group
+from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Punch, Settings
 
 # First party imports
 from timeclock_system.clock import Clock
@@ -29,7 +29,7 @@ from timeclock_system.ui.page import build_root
 
 if TYPE_CHECKING:
   # Standard library imports
-  from collections.abc import AsyncIterator, Sequence
+  from collections.abc import Iterator, Sequence
   from pathlib import Path
 
   # Third party imports
@@ -60,7 +60,7 @@ class RecordingReader:
 
 
 @pytest.fixture
-async def controller(tmp_path: Path) -> AsyncIterator[KioskController]:
+def store(tmp_path: Path) -> Iterator[LocalStore]:
   store = LocalStore(tmp_path / "clock.sqlite3")
   pin_hash = SecretStr(bcrypt.hashpw(b"1234", bcrypt.gensalt(rounds=4)).decode())
   store.replace_table(
@@ -80,10 +80,20 @@ async def controller(tmp_path: Path) -> AsyncIterator[KioskController]:
       Fingerprint(id=print_id, employee_id=employee_id, finger=finger, template=SecretBytes(b"t"), registered_at=NOW, instance_id="1"),
       origin="db",
     )
+  yield store
+  store.close()
+
+
+@pytest.fixture
+async def clock(store: LocalStore) -> Clock:
   clock = Clock(store, instance_id="1", clock_number=1, tz=NY, alert=lambda _s, _b: None)
   await clock.load()
-  yield KioskController(clock, RecordingReader(), tz=NY, status_dir=tmp_path / "status")
-  store.close()
+  return clock
+
+
+@pytest.fixture
+def controller(clock: Clock, tmp_path: Path) -> KioskController:
+  return KioskController(clock, RecordingReader(), tz=NY, status_dir=tmp_path / "status")
 
 
 def offline() -> DbStatus:
@@ -119,6 +129,71 @@ async def test_menu_shows_valid_punch_buttons(controller: KioskController, tmp_p
     await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
     await user.should_see("Ann")
     await user.should_see("Clock in")
+    await user.should_not_see("Clock out")
+
+
+def ann_punched(store: LocalStore, *punches: tuple[PunchKind, timedelta]) -> None:
+  """Store Ann's punches, each at that long before now (the page's own clock runs on real time)."""
+  for kind, ago in punches:
+    store.insert_punch(Punch(id=uuid4(), employee_id=1, kind=kind, at=datetime.now(UTC) - ago, instance_id="1"), origin="db")
+
+
+def button(user: User, label: str) -> ui.button:
+  [found] = user.find(kind=ui.button, content=label).elements
+  return cast("ui.button", found)
+
+
+async def test_a_clocked_out_menu_shows_the_gray_bar_and_clock_in(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("CLOCKED OUT")
+    [bar] = user.find(marker="state-bar").elements
+    assert {"sft-state", "sft-state-off"} <= set(bar.classes)
+    await user.should_not_see(marker="state-since")
+    [week] = user.find(marker="week-line").elements
+    assert cast("ui.label", week).text == "40 hr left to 40 hours this week"
+    assert "sft-over" not in week.classes
+    clock_in = button(user, "Clock in")
+    assert {"sft-kind", "sft-kind-in"} <= set(clock_in.classes)
+    assert clock_in.props["icon"] == "login"
+
+
+async def test_a_working_menu_docks_clock_out(controller: KioskController, store: LocalStore, tmp_path: Path) -> None:
+  ann_punched(store, (PunchKind.CLOCK_IN, timedelta(hours=2)))
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("CLOCKED IN")
+    assert shown_text(user, "state-since").startswith("since ")
+    assert "sft-kind-break" in button(user, "Start break").classes
+    assert "sft-kind-lunch" in button(user, "Start lunch").classes
+    assert {"sft-kind-out", "sft-docked"} <= set(button(user, "Clock out").classes)
+
+
+async def test_with_breaks_and_lunches_off_clock_out_is_centred(
+  controller: KioskController, clock: Clock, store: LocalStore, tmp_path: Path
+) -> None:
+  store.set_settings(Settings(breaks_enabled=False, lunches_enabled=False))
+  clock.notify_changed({"settings"})
+  ann_punched(store, (PunchKind.CLOCK_IN, timedelta(hours=2)))
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("Clock out")
+    classes = set(button(user, "Clock out").classes)
+    assert "sft-kind-out" in classes
+    assert "sft-docked" not in classes
+
+
+async def test_a_long_break_shows_hours_and_no_clock_out(controller: KioskController, store: LocalStore, tmp_path: Path) -> None:
+  ann_punched(store, (PunchKind.CLOCK_IN, timedelta(hours=3)), (PunchKind.BREAK_START, timedelta(minutes=65)))
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("ON BREAK")
+    assert shown_text(user, "state-since").endswith("· 1 hr 5 min")
+    await user.should_see("End break")
     await user.should_not_see("Clock out")
 
 
