@@ -180,19 +180,8 @@ class FprintReader:
       self._device.disconnect(handler)
 
   def presses(self, template: bytes) -> tuple[Minutiae, ...]:
-    """Decode a template's presses: (x, y, theta) per detail point, from the FP3 payload after the 3-byte header.
-
-    Raises:
-      ReaderFailure: The template doesn't decode.
-    """
-    try:
-      variant = GLib.Variant.new_from_bytes(GLib.VariantType("(issbymsmsia{sv}v)"), GLib.Bytes(template[3:]), False)  # noqa: FBT003
-      nbis = variant.get_child_value(9).get_variant().unpack()  # (a(aiaiai)): per press, its x, y and theta columns
-      return tuple(tuple(zip(x, y, theta, strict=True)) for x, y, theta in nbis[0])
-    except (GLib.Error, LookupError, TypeError, ValueError) as e:
-      # Escaping, these would end the scanner thread. R15: the message names only the error, and `from None` drops the
-      # chained traceback, whose frames' locals hold detail points.
-      raise ReaderFailure(f"undecodable template: {e.message if isinstance(e, GLib.Error) else type(e).__name__}") from None
+    """Decode a template's presses (`_decode_presses`)."""
+    return _decode_presses(template)
 
   def score(self, press: bytes, index: int, other: bytes) -> tuple[int, ...]:
     """Score `press`'s press `index` against each of `other`'s presses (bozorth3, as the scans are scored)."""
@@ -201,7 +190,7 @@ class FprintReader:
         if len(self._scored) >= _SCORED_CACHE_MAX:
           self._scored.clear()
         self._scored[other] = FPrint.Print.deserialize(other)
-      return tuple(FPrint.Print.deserialize(press).score_press(index, self._scored[other]))
+      return tuple(FPrint.Print.deserialize(press).score_press(index, self._scored[other], None))
     except GLib.Error as e:
       raise _reader_error(e) from e
 
@@ -209,6 +198,63 @@ class FprintReader:
     """Merge one-press templates into one template, in order."""
     try:
       return bytes(FPrint.Print.new_from_presses([FPrint.Print.deserialize(p) for p in presses]).serialize())
+    except GLib.Error as e:
+      raise _reader_error(e) from e
+
+
+def _decode_presses(template: bytes) -> tuple[Minutiae, ...]:
+  """Decode a template's presses: (x, y, theta) per detail point, from the FP3 payload after the 3-byte header.
+
+  Pure (GLib.Variant only), so any thread may call it.
+
+  Raises:
+    ReaderFailure: The template doesn't decode.
+  """
+  try:
+    variant = GLib.Variant.new_from_bytes(GLib.VariantType("(issbymsmsia{sv}v)"), GLib.Bytes(template[3:]), False)  # noqa: FBT003
+    nbis = variant.get_child_value(9).get_variant().unpack()  # (a(aiaiai)): per press, its x, y and theta columns
+    return tuple(tuple(zip(x, y, theta, strict=True)) for x, y, theta in nbis[0])
+  except (GLib.Error, LookupError, TypeError, ValueError) as e:
+    # Escaping, these would end the scanner thread. R15: the message names only the error, and `from None` drops the
+    # chained traceback, whose frames' locals hold detail points.
+    raise ReaderFailure(f"undecodable template: {e.message if isinstance(e, GLib.Error) else type(e).__name__}") from None
+
+
+class FprintMatching:
+  """Registration's scoring through the patched libfprint (`matching.Matching`), from any number of threads at once.
+
+  libfprint's bozorth3 is thread-local and cancellable (timeclock-libfprint post4). Each thread deserializes the prints
+  it scores into its own FpPrint objects, so no libfprint object is shared between threads.
+  """
+
+  def __init__(self) -> None:
+    """Start with no thread's prints deserialized."""
+    self._local = threading.local()  # per thread: `other` templates' FpPrint objects, by bytes
+
+  def new_cancel(self) -> Gio.Cancellable:
+    """Return a fresh cancellable for one call; `cancel()` is safe from any thread."""
+    return Gio.Cancellable()
+
+  def presses(self, template: bytes) -> tuple[Minutiae, ...]:
+    """Decode a template's presses (`_decode_presses`)."""
+    return _decode_presses(template)
+
+  def score(self, press: bytes, index: int, other: bytes, cancel: Gio.Cancellable) -> tuple[int, ...]:
+    """Score `press`'s press `index` against each of `other`'s presses, stopping early if `cancel` fires.
+
+    Raises:
+      ScanCancelled: `cancel` fired before or during the call.
+      ReaderFailure: Any other libfprint error.
+    """
+    prints: dict[bytes, FPrint.Print] | None = getattr(self._local, "prints", None)
+    if prints is None:
+      prints = self._local.prints = {}
+    try:
+      if other not in prints:
+        if len(prints) >= _SCORED_CACHE_MAX:
+          prints.clear()
+        prints[other] = FPrint.Print.deserialize(other)
+      return tuple(FPrint.Print.deserialize(press).score_press(index, prints[other], cancel))
     except GLib.Error as e:
       raise _reader_error(e) from e
 
