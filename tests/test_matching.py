@@ -1,6 +1,8 @@
 # Standard library imports
+import gc
 import threading
 import time
+import weakref
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -96,6 +98,17 @@ class Recorder:
   def wait(self, predicate: Callable[[], bool]) -> None:
     with self.cond:
       assert self.cond.wait_for(predicate, timeout=WAIT), "the matcher threads didn't get there in time"
+
+
+def eventually(predicate: Callable[[], bool]) -> None:
+  deadline = time.monotonic() + WAIT
+  while not predicate():
+    assert time.monotonic() < deadline, "never happened"
+    time.sleep(0.01)
+
+
+def no_matcher_threads() -> bool:
+  return not any(t.name.startswith("matcher") for t in threading.enumerate())
 
 
 def session(matching: FakeMatching, others: list[GalleryPrint], rec: Recorder, **kwargs: object) -> ScoringSession:
@@ -202,7 +215,7 @@ def test_a_hung_job_is_cancelled_at_its_deadline(closing: list[ScoringSession]) 
     return None
 
   m.behave = behave
-  s = session(m, others, rec, threads=1, deadline=0.2)
+  s = session(m, others, rec, threads=1, deadline=0.2, grace=0.2)  # a 5 s grace timer would outlive the test
   closing.append(s)
   s.add(0, b"p0")
   rec.wait(lambda: len(rec.delivered) == 1)
@@ -210,7 +223,9 @@ def test_a_hung_job_is_cancelled_at_its_deadline(closing: list[ScoringSession]) 
   assert len(m.threads) == 1  # the one thread came back from its cancel and ran the retry
 
 
-def test_a_job_ignoring_its_cancel_is_abandoned_within_the_cap(closing: list[ScoringSession]) -> None:
+def test_a_job_ignoring_its_cancel_is_abandoned_within_the_cap(
+  closing: list[ScoringSession], caplog: pytest.LogCaptureFixture
+) -> None:
   others = gallery(1)
   m, rec, stuck = FakeMatching({}), Recorder(), threading.Event()
 
@@ -224,9 +239,59 @@ def test_a_job_ignoring_its_cancel_is_abandoned_within_the_cap(closing: list[Sco
   s = session(m, others, rec, threads=2, deadline=0.1, grace=0.1)
   closing.append(s)
   s.add(0, b"p0")
-  rec.wait(lambda: len(rec.delivered) == 1)
+  rec.wait(lambda: len(rec.delivered) == 1)  # the retry, on the other thread
+  eventually(lambda: "abandoned" in caplog.text)  # the stuck call outlived its grace
   assert m.alive_peak <= 2  # noqa: PLR2004
+  assert rec.failed == 0  # a thread is left
   m.release.set()
+  s.close()
+  eventually(no_matcher_threads)  # the abandoned thread exits once its call returns
+
+
+def test_results_that_never_come_back_fail_the_registration(closing: list[ScoringSession]) -> None:
+  # Review Focus 1: each deadline cancels the job and retries it; the third ends the registration, not "checking".
+  others = gallery(1)
+  m, rec = FakeMatching({}), Recorder()
+  m.behave = lambda _p, _o: "block"
+  s = session(m, others, rec, threads=2, deadline=0.1, grace=0.1)
+  closing.append(s)
+  s.add(0, b"p0")
+  rec.wait(lambda: rec.failed == 1)
+  time.sleep(0.2)
+  assert (rec.failed, rec.delivered) == (1, [])
+  assert len(m.calls) == 3  # noqa: PLR2004
+
+
+def test_the_last_thread_abandoned_fails_the_registration(closing: list[ScoringSession]) -> None:
+  # No thread is left to retry on: the registration ends at once rather than waiting on calls that ignore their cancel.
+  others = gallery(1)
+  m, rec = FakeMatching({}), Recorder()
+  m.behave = lambda _p, _o: "ignore"
+  s = session(m, others, rec, threads=1, deadline=0.1, grace=0.1)
+  closing.append(s)
+  s.add(0, b"p0")
+  rec.wait(lambda: rec.failed == 1)
+  m.release.set()
+  eventually(no_matcher_threads)
+  assert rec.failed == 1
+
+
+def test_ended_threads_are_freed_without_the_collector() -> None:
+  # glibc releases an unjoined thread's stack, with its thread-local bozorth3 tables (about 47 MB), only once CPython
+  # detaches it, when its Thread object is freed: a reference cycle would hold the tables until a full collection.
+  others = gallery(2)
+  m, rec = FakeMatching({}), Recorder()
+  gc.disable()
+  try:
+    s = session(m, others, rec, threads=3)
+    s.add(0, b"p0")
+    rec.wait(lambda: len(rec.delivered) == 1)
+    workers = [weakref.ref(t) for t in threading.enumerate() if t.name.startswith("matcher")]
+    assert len(workers) == 3  # noqa: PLR2004
+    s.close()
+    eventually(lambda: all(w() is None for w in workers))
+  finally:
+    gc.enable()
 
 
 def test_close_drops_outstanding_work() -> None:

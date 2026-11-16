@@ -200,37 +200,46 @@ class ScoringSession:
 
   def _work_loop(self) -> None:
     me = threading.current_thread()
-    while True:
+    try:
+      while True:
+        with self._lock:
+          while not self._jobs and not self._closed:
+            self._work.wait()
+          if self._closed or me in self._abandoned:
+            return
+          job = self._jobs.popleft()
+          job.token, job.thread = self._matching.new_cancel(), me
+          self._running.add(job)
+          timer = threading.Timer(self._deadline, self._on_deadline, args=(job,))
+          timer.daemon = True
+        timer.start()
+        result: object = None
+        error: Exception | None = None
+        try:
+          result = self._run(job)
+        except Exception as e:  # noqa: BLE001  # every failure counts toward the limit; none may end the thread
+          error = e
+        finally:
+          timer.cancel()
+        with self._lock:
+          self._running.discard(job)
+          job.thread = None  # a timer may still hold the job
+          if me in self._abandoned:
+            return
+          if self._closed or job.dropped:
+            continue
+          if error is not None:
+            self._failed(job, error)
+          else:
+            self._record(job, result)
+            self._deliver_ready()
+    finally:
+      # The thread's Thread object must be freed as the thread ends: CPython then detaches it, and glibc releases its
+      # stack, thread-local bozorth3 tables included. Held here, through the cycle the scanner's callbacks make with
+      # this session, it would wait on a full collection. An abandoned thread's slot is free again from here.
       with self._lock:
-        while not self._jobs and not self._closed:
-          self._work.wait()
-        if self._closed or me in self._abandoned:
-          return
-        job = self._jobs.popleft()
-        job.token, job.thread = self._matching.new_cancel(), me
-        self._running.add(job)
-        timer = threading.Timer(self._deadline, self._on_deadline, args=(job,))
-        timer.daemon = True
-      timer.start()
-      result: object = None
-      error: Exception | None = None
-      try:
-        result = self._run(job)
-      except Exception as e:  # noqa: BLE001  # every failure counts toward the limit; none may end the thread
-        error = e
-      finally:
-        timer.cancel()
-      with self._lock:
-        self._running.discard(job)
-        if me in self._abandoned:
-          return
-        if self._closed or job.dropped:
-          continue
-        if error is not None:
-          self._failed(job, error)
-        else:
-          self._record(job, result)
-          self._deliver_ready()
+        self._workers.remove(me)
+        self._abandoned.discard(me)
 
   def _run(self, job: _Job) -> object:
     m, token = self._matching, job.token

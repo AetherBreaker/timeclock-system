@@ -667,7 +667,12 @@ class Scanner:
     self._wake.set()
     if token is not None:
       token.cancel()
-    alert("Fingerprint matching kept failing", f"A registration ended after {FAILURE_LIMIT} matching failures", wait=False)
+    alert(
+      "Fingerprint matching kept failing",
+      f"A registration ended after {FAILURE_LIMIT} matching failures",
+      in_except_block=False,  # a condition: there's no exception to render
+      wait=False,
+    )
 
   def _end_scoring(self) -> ScoringSession | None:
     # Under _lock: the session's scoring ends, for the caller to close outside it.

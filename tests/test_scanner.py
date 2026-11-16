@@ -709,8 +709,8 @@ def test_the_idle_timeout_waits_for_outstanding_results(make: Callable[..., Harn
 
 
 def test_scoring_failures_end_register(make: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch) -> None:
-  alerts: list[str] = []
-  monkeypatch.setattr(scanner_module, "alert", lambda reason, *_a, **_k: alerts.append(reason))
+  alerts: list[tuple[str, object]] = []
+  monkeypatch.setattr(scanner_module, "alert", lambda reason, *_a, **k: alerts.append((reason, k.get("in_except_block"))))
   matching = FakeMatching()
   matching.error = ReaderFailure("matcher hiccup")
   h = make(FakeReader(captures=[b"p0"]), FAST, registrant=1, matching=matching)
@@ -719,7 +719,7 @@ def test_scoring_failures_end_register(make: Callable[..., Harness], monkeypatch
   assert h.event() == EnrollFailed("error")
   h.reader.next_call("identify")
   assert h.scanner.mode is ReaderMode.READY
-  assert alerts == ["Fingerprint matching kept failing"]
+  assert alerts == [("Fingerprint matching kept failing", False)]  # a condition, not an exception: no traceback
   h.no_event(0.2)
 
 
