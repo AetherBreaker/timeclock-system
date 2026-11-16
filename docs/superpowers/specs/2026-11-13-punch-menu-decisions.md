@@ -50,6 +50,13 @@ menu, before a punch; after a punch the problem is a wrong button press (owner).
 10. The fix covers every screen, not just the punch menu and after-punch screen (owner, 2026-11-13): every screen shows
     the colors its CSS always asked for (`sft-plain` and the PIN pad keys white with black text, `sft-punch` yellow).
 
+## How it's built
+
+12. Approach approved (owner, 2026-11-16): switch NiceGUI's default button color off in the shared helpers and color each
+    button kind from the page's stylesheet; compute the hours line from the week's hours the clock already totals,
+    against `weekly_hours_alert`. The weekly-hours alert's only action was the after-punch notice, so the clock stops
+    checking it; its registration in timeclock-schema goes in that repo's next change.
+
 ## Deferred
 
 11. Making the employee's name harder to miss, floated after the 2026-11-13 false match (a scan opened another employee's
