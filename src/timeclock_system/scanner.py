@@ -1,9 +1,12 @@
 """The fingerprint scanner thread (spec §6.2): one daemon thread owns the reader; the event loop drives its mode.
 
 Concurrency: `_lock` guards the fields `set_mode`/`register`/`merge`/`set_gallery`/`stop`/`busy_seconds` share with the
-thread. It is never held across a blocking reader call or a `post` call. Every pause waits on `_wake`, which a
-mode change, a merge or `stop` sets, so pauses end early; the one exception, the pause after an early result, waits on
-`_stopped` (see `_ready_once`). Every reader call runs on the thread: bozorth3, behind `score`, keeps global state.
+thread. It is never held across a blocking reader call. A registration's events are posted under it, so none lands after
+the change that ended its session (`post` never blocks); every other `post` is made outside it. A registration's
+presses are scored on its matcher threads (`ScoringSession`), whose callbacks take `_lock` inside the session's own lock:
+so a `ScoringSession` method is never called under `_lock`. Every pause waits on `_wake`, which a mode change, a merge or
+`stop` sets, so pauses end early; the one exception, the pause after an early result, waits on `_stopped` (see
+`_ready_once`). Every reader call runs on the thread.
 """
 
 # Standard library imports
@@ -20,14 +23,15 @@ from aeth_ext.errors import alert
 from timeclock_schema.enums import Finger, ScanResult  # the dataclass annotations are evaluated at runtime
 
 # First party imports
-from timeclock_system.registration import OtherPrint, Press
+from timeclock_system.matching import FAILURE_LIMIT, ScoringSession
+from timeclock_system.registration import OtherRef, Press
 
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Callable, Sequence
 
   # First party imports
-  from timeclock_system.registration import Minutiae
+  from timeclock_system.matching import Matching
 
 LOGGER = logging.getLogger(__name__)
 
@@ -144,12 +148,20 @@ class EnrollFailed:
 class RegisterGallery:
   """A REGISTER session began: every gallery print but the registrant's, which its presses are scored against."""
 
-  others: tuple[OtherPrint, ...]
+  others: tuple[OtherRef, ...]
+  resemblance_bar: int  # the session's, from `set_gallery` as it began
+
+
+@dataclass(frozen=True)
+class Captured:
+  """A REGISTER capture, posted as it's made; its `Pressed` follows once it's scored."""
+
+  press_id: int
 
 
 @dataclass(frozen=True)
 class Pressed:
-  """A REGISTER capture, scored against the session's earlier presses and the session's `others`."""
+  """A REGISTER capture, scored against the session's earlier presses and the session's `others`; in capture order."""
 
   press: Press
 
@@ -167,7 +179,7 @@ class Merged:
 
 
 type ScannerEvent = (
-  Matched | NoMatch | Retry | FingerStatus | ReaderPaused | EnrollFailed | RegisterGallery | Pressed | PressRetry | Merged
+  Matched | NoMatch | Retry | FingerStatus | ReaderPaused | EnrollFailed | RegisterGallery | Captured | Pressed | PressRetry | Merged
 )
 
 
@@ -238,14 +250,6 @@ class Reader(Protocol):
     """Capture one press and return it as a serialized one-press template. Raises like `identify`."""
     ...
 
-  def presses(self, template: bytes) -> tuple[Minutiae, ...]:
-    """Decode a template's presses into their detail points."""
-    ...
-
-  def score(self, press: bytes, index: int, other: bytes) -> tuple[int, ...]:
-    """Score `press`'s press `index` against each of `other`'s presses."""
-    ...
-
   def merge(self, presses: Sequence[bytes]) -> bytes:
     """Merge one-press templates into one template, in order."""
     ...
@@ -262,7 +266,7 @@ class ScannerTimings:
   rearm_every: float = 60.0
   finger_off_pause: float = 1.0  # after a capture, about twice the 0.54 s tail the spike saw; see _ready_once
   failure_limit: float = 180.0  # a ReaderFailure streak this long is fatal
-  enroll_idle_timeout: float = 30.0
+  enroll_idle_timeout: float = 30.0  # a registration's press timeout; it doesn't run while a press's results are out
 
 
 def _decide(capture: Capture, gallery: Sequence[GalleryPrint], margin: int, min_score: int) -> Matched | NoMatch:
@@ -301,12 +305,14 @@ class Scanner:
     reader: Reader,
     post: Callable[[ScannerEvent], None],
     *,
+    matching: Matching,
     timings: ScannerTimings = ScannerTimings(),  # noqa: B008  # frozen, so sharing the default is safe
     monotonic: Callable[[], float] = time.monotonic,
   ) -> None:
-    """Create a scanner in CLOSED mode; `start` launches the thread."""
+    """Create a scanner in CLOSED mode; `start` launches the thread. `matching` scores a registration's presses."""
     self._reader = reader
     self._post = post
+    self._matching = matching
     self._timings = timings
     self._monotonic = monotonic
     self._thread = threading.Thread(target=self._run, name="scanner", daemon=True)
@@ -314,13 +320,9 @@ class Scanner:
     self._last_status: FingerStatus | None = None  # the current call's last posted status; None once it ends
     self._backoff = timings.backoff_start  # doubles per ReaderFailure, reset by a completed capture
     self._failing_since: float | None = None  # start of the current ReaderFailure streak, reset with _backoff
-    # The REGISTER session, scanner thread only: the _mode_changes it began at, the prints it scores against, and its
-    # presses' probes by press_id. Decoded presses and agreement are cached across sessions, keyed by the whole print so
-    # one whose template changed is decoded again (and no raw template sits in a key a traceback's locals would show).
+    # The REGISTER session, scanner thread only: the _mode_changes it began at, and its next capture's press_id.
     self._session: int | None = None
-    self._others: tuple[GalleryPrint, ...] = ()
-    self._probes: list[bytes] = []
-    self._decoded: dict[GalleryPrint, tuple[tuple[Minutiae, ...], tuple[tuple[int, ...], ...]]] = {}
+    self._next_press = 0
     self._lock = threading.Lock()
     self._wake = threading.Event()
     self._stopped = threading.Event()  # set only by stop
@@ -332,6 +334,11 @@ class Scanner:
     self._gallery: tuple[GalleryPrint, ...] = ()
     self._margin = 0
     self._min_score = 0
+    self._resemblance_bar = 0
+    self._scoring: ScoringSession | None = None  # the REGISTER session's, until a mode change, merge or failure ends it
+    self._outstanding = 0  # its captures not yet delivered
+    self._idle: threading.Timer | None = None  # the capture's press timeout, while no results are out
+    self._timed_out: CancelToken | None = None  # the capture token the press timeout cancelled
     self._token: CancelToken | None = None
     self._busy_since: float | None = None
     self._stopping = False
@@ -351,10 +358,13 @@ class Scanner:
     with self._lock:
       self._stopping = True
       token = self._token
+      scoring = self._end_scoring()
     self._stopped.set()
     self._wake.set()
     if token is not None:
       token.cancel()
+    if scoring is not None:
+      scoring.close()
 
   def set_mode(self, mode: ReaderMode) -> None:
     """Switch mode, cancelling the current call; the same mode again is a no-op so it can't cut a capture.
@@ -368,10 +378,10 @@ class Scanner:
     self._switch(mode, None)
 
   def register(self, employee_id: int) -> None:
-    """Enter REGISTER for `employee_id`: a new session, which posts `RegisterGallery`, then a `Pressed` per capture.
+    """Enter REGISTER for `employee_id`: a new session, which posts `RegisterGallery`, then `Captured`s and `Pressed`s.
 
-    The same registrant again is a no-op, as in `set_mode`. The session lasts until `set_mode`, or until a press times
-    out or the reader fails (`EnrollFailed`, then READY).
+    Each capture posts a `Captured` at once and a `Pressed` once it's scored. The same registrant again is a no-op, as in `set_mode`. The session lasts until `set_mode`, or until a press times
+    out, the reader fails or its matching keeps failing (`EnrollFailed`, then READY); a merge ends its scoring.
     """
     self._switch(ReaderMode.REGISTER, employee_id)
 
@@ -382,34 +392,40 @@ class Scanner:
       self._mode, self._registrant = mode, registrant
       self._mode_changes += 1
       token = self._token
+      scoring = self._end_scoring()
     self._wake.set()
     if token is not None:
       token.cancel()
+    if scoring is not None:
+      scoring.close()
 
   def merge(self, presses: Sequence[bytes]) -> None:
     """Queue a merge of one-press templates, in order, for the thread to run next in any mode; posts `Merged`.
 
-    Cancels the current call so the merge needn't wait for a press; a REGISTER session goes on after it. A failed merge
-    posts `EnrollFailed("error")`.
+    Cancels the current call so the merge needn't wait for a press. A REGISTER session's capturing goes on after it, but
+    its scoring ends: the verdict is in, so no later press counts. A failed merge posts `EnrollFailed("error")`.
     """
     with self._lock:
       self._merge = tuple(presses)
       token = self._token
+      scoring = self._end_scoring()
     self._wake.set()
     if token is not None:
       token.cancel()
+    if scoring is not None:
+      scoring.close()
 
-  def set_gallery(self, prints: Sequence[GalleryPrint], margin: int, min_score: int) -> None:
+  def set_gallery(self, prints: Sequence[GalleryPrint], margin: int, min_score: int, resemblance_bar: int) -> None:
     """Replace the gallery, restarting a running identify when its prints change; an equal gallery changes nothing (R6).
 
-    Only an identify is restarted: a registration reads the gallery once as its session begins, and cancelling it would
-    lose the user's presses.
+    Only an identify is restarted: a registration reads the gallery and `resemblance_bar` once as its session begins,
+    and cancelling it would lose the user's presses.
     A new `margin` or `min_score`, or a new order alone (every punch moves its employee first), applies from the next
     call: none is worth starting the reader over for.
     """
     gallery = tuple(prints)
     with self._lock:
-      self._margin, self._min_score = margin, min_score
+      self._margin, self._min_score, self._resemblance_bar = margin, min_score, resemblance_bar
       if gallery == self._gallery:
         return
       reordered = set(gallery) == set(self._gallery)
@@ -569,83 +585,130 @@ class Scanner:
     return (early[-1], True) if early else (_decide(capture, gallery, margin, min_score), False)
 
   def _register_once(self, mode_changes: int) -> None:
-    # One capture of the REGISTER session that began at `mode_changes`; the session's first call posts RegisterGallery. A
-    # set_mode or stop supersedes the call and posts nothing (its cancel is the user's Cancel, not a failure: R16), while a
-    # timed-out press or a reader error ends the session in READY.
+    # One capture of the REGISTER session that began at `mode_changes`; the session's first call posts RegisterGallery.
+    # A set_mode or stop supersedes the call and posts nothing (its cancel is the user's Cancel, not a failure: R16),
+    # while a timed-out press or a reader error ends the session in READY. A capture is posted and handed to the
+    # session's scoring at once, so the reader re-arms without waiting for its scores.
+    if self._session != mode_changes:
+      self._start_session(mode_changes)
     token = self._reader.new_cancel()
     with self._lock:
       if self._stopping or self._mode_changes != mode_changes or self._merge is not None:
         return  # a queued merge runs first
-      # Set before the gallery decoding, so a cancel landing during it still stops the capture that follows.
       self._token = token
-      gallery, registrant = self._gallery, self._registrant
-    timed_out = threading.Event()
-
-    def expire() -> None:
-      timed_out.set()
-      token.cancel()
-
-    idle = threading.Timer(self._timings.enroll_idle_timeout, expire)  # per capture, so a press or a retry restarts it
-    idle.daemon = True
-    outcome: ScannerEvent | None
-    try:
-      if self._session != mode_changes:
-        self._start_session(mode_changes, gallery, registrant)
-      idle.start()
-      probe = self._blocking(self._reader.capture, token, self._on_status)
-      idle.cancel()
-      outcome = Pressed(self._press(probe))
-      self._probes.append(probe)
-    except ScanCancelled:
-      outcome = EnrollFailed("timeout") if timed_out.is_set() else None  # else a merge, set_mode or stop
-    except RetryScan:
-      outcome = PressRetry()
-    except ReaderTooHot, ReaderFailure:
-      outcome = EnrollFailed("error")
-    finally:
-      idle.cancel()
-      if self._last_status not in {None, _NO_FINGER}:
-        self._post(_NO_FINGER)  # a cancelled capture may never report the lift
-      self._last_status = None
+      self._arm_idle()
+    probe, outcome = self._capture(token)
     with self._lock:
-      self._token = None
-      superseded = self._stopping or self._mode_changes != mode_changes
-      if not superseded and isinstance(outcome, EnrollFailed):
+      self._token, self._timed_out = None, None
+      if self._idle is not None:
+        self._idle.cancel()
+        self._idle = None
+      if self._stopping or self._mode_changes != mode_changes:
+        return
+      ended = add = None
+      if isinstance(outcome, EnrollFailed):
         self._mode, self._registrant = ReaderMode.READY, None
-    if superseded or outcome is None:
-      return
-    self._post(outcome)
+        ended = self._end_scoring()
+      elif probe is not None and (scoring := self._scoring) is not None:  # none once a merge ended it
+        outcome = Captured(self._next_press)
+        add = scoring, self._next_press, probe
+        self._next_press += 1
+        self._outstanding += 1
+      if outcome is not None:
+        self._post(outcome)
+    if ended is not None:
+      ended.close()
+    if add is not None:
+      scoring, press_id, probe = add
+      scoring.add(press_id, probe)  # outside _lock (module docstring); a no-op if the session ended meanwhile
     # As _ready_once: a retry's finger may still rest, and a bounce mustn't read as the next press (or, after a failure,
     # as READY's next match).
     self._wake.wait(self._timings.retry_pause if isinstance(outcome, PressRetry) else self._timings.finger_off_pause)
 
-  def _press(self, probe: bytes) -> Press:
-    # Split out of _register_once for C901: the captured press, scored against the session's earlier presses and others.
-    # A ReaderFailure, not the IndexError that would end the thread; decoded before scoring asks for its press 0.
-    if not (presses := self._blocking(self._reader.presses, probe)):
-      raise ReaderFailure("the press decoded to no press")
-    score = self._reader.score
+  def _capture(self, token: CancelToken) -> tuple[bytes | None, PressRetry | EnrollFailed | None]:
+    # Split out of _register_once for C901: one capture, as its probe or what to post instead. None for both: a merge,
+    # set_mode or stop cancelled it.
     try:
-      vs_session = {
-        i: max(self._blocking(score, probe, 0, e)[0], self._blocking(score, e, 0, probe)[0]) for i, e in enumerate(self._probes)
-      }
-    except IndexError:
-      raise ReaderFailure("a press scored nothing against an earlier one") from None  # R15: the frames' locals hold probes
-    vs_gallery = {p.print_id: self._blocking(score, probe, 0, p.template) for p in self._others}
-    return Press(len(self._probes), presses[0], probe, vs_session, vs_gallery)
+      return self._blocking(self._reader.capture, token, self._on_status), None
+    except ScanCancelled:
+      with self._lock:
+        timed_out = self._timed_out is token  # set before the press timeout cancels
+      return None, EnrollFailed("timeout") if timed_out else None
+    except RetryScan:
+      return None, PressRetry()
+    except ReaderTooHot, ReaderFailure:
+      return None, EnrollFailed("error")
+    finally:
+      if self._last_status not in {None, _NO_FINGER}:
+        self._post(_NO_FINGER)  # a cancelled capture may never report the lift
+      self._last_status = None
 
-  def _start_session(self, mode_changes: int, gallery: tuple[GalleryPrint, ...], registrant: int | None) -> None:
-    # Split out of _register_once for C901: score every other person's print against itself, then post RegisterGallery.
-    others = tuple(p for p in gallery if p.employee_id != registrant)
-    decoded: dict[GalleryPrint, tuple[tuple[Minutiae, ...], tuple[tuple[int, ...], ...]]] = {}
-    for p in others:
-      if (cached := self._decoded.get(p)) is None:
-        presses = self._blocking(self._reader.presses, p.template)
-        n = range(len(presses))
-        own = [self._blocking(self._reader.score, p.template, i, p.template) for i in n]
-        if any(len(row) < len(presses) for row in own):
-          raise ReaderFailure("a print's press scores are fewer than its presses")  # not the IndexError below, as in _press
-        cached = presses, tuple(tuple(-1 if i == j else max(own[i][j], own[j][i]) for j in n) for i in n)
-      decoded[p] = cached
-    self._decoded, self._session, self._others, self._probes = decoded, mode_changes, others, []
-    self._post(RegisterGallery(tuple(OtherPrint(p.print_id, p.employee_id, p.finger, *decoded[p]) for p in others)))
+  def _start_session(self, mode_changes: int) -> None:
+    # Split out of _register_once for C901: the session's scoring, which starts its threads with its first press, and its
+    # RegisterGallery. Nothing is decoded or scored up front: a print's presses matter only once a press resembles it.
+    # Built under _lock: ScoringSession's constructor takes no lock and starts no thread.
+    with self._lock:
+      if self._stopping or self._mode_changes != mode_changes or self._merge is not None:
+        return  # a queued merge runs first
+      others = tuple(p for p in self._gallery if p.employee_id != self._registrant)
+      bar = self._resemblance_bar
+      scoring = ScoringSession(
+        self._matching, others, bar, lambda press: self._delivered(scoring, press), lambda: self._scoring_failed(scoring)
+      )
+      self._scoring, self._outstanding = scoring, 0
+      self._session, self._next_press = mode_changes, 0
+      self._post(RegisterGallery(tuple(OtherRef(p.print_id, p.employee_id, p.finger) for p in others), bar))
+
+  def _delivered(self, scoring: ScoringSession, press: Press) -> None:
+    # A matcher thread, under the session's lock: a press of the current session is posted; the last one out restarts
+    # the press timeout.
+    with self._lock:
+      if self._scoring is not scoring:
+        return
+      self._outstanding -= 1
+      self._post(Pressed(press))
+      if self._outstanding == 0:
+        self._arm_idle()
+
+  def _scoring_failed(self, scoring: ScoringSession) -> None:
+    # A matcher or timer thread, under the session's lock; the session closed itself. Ends the registration as a reader
+    # error does, and supersedes the capture in progress so it posts nothing.
+    with self._lock:
+      if self._scoring is not scoring:
+        return
+      self._end_scoring()
+      self._mode, self._registrant = ReaderMode.READY, None
+      self._mode_changes += 1
+      token = self._token
+      self._post(EnrollFailed("error"))
+    self._wake.set()
+    if token is not None:
+      token.cancel()
+    alert("Fingerprint matching kept failing", f"A registration ended after {FAILURE_LIMIT} matching failures", wait=False)
+
+  def _end_scoring(self) -> ScoringSession | None:
+    # Under _lock: the session's scoring ends, for the caller to close outside it.
+    scoring, self._scoring, self._outstanding = self._scoring, None, 0
+    if self._idle is not None:
+      self._idle.cancel()
+      self._idle = None
+    return scoring
+
+  def _arm_idle(self) -> None:
+    # Under _lock: (re)start the press timeout for the capture in progress, unless results are out; the last of them to
+    # arrive starts it again (_delivered).
+    if self._idle is not None:
+      self._idle.cancel()
+      self._idle = None
+    if (token := self._token) is None or self._outstanding > 0:
+      return
+    self._idle = threading.Timer(self._timings.enroll_idle_timeout, self._idle_expired, args=(token,))
+    self._idle.daemon = True
+    self._idle.start()
+
+  def _idle_expired(self, token: CancelToken) -> None:
+    with self._lock:
+      if self._token is not token or self._outstanding > 0:
+        return
+      self._timed_out = token
+    token.cancel()

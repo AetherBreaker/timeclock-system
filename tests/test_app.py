@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 NY = ZoneInfo("America/New_York")
 NEW_MARGIN = 7
 NEW_MIN_SCORE = 50
+NEW_BAR = 33
 
 
 class FakeReader:
@@ -39,13 +40,13 @@ class FailingClock(Clock):
 
 
 class FakeScanner:
-  """Records the gallery, margin and minimum score the app hands over; every other call does nothing."""
+  """Records the gallery, margin, minimum score and resemblance bar the app hands over; every other call does nothing."""
 
-  def __init__(self, *_args: object) -> None:
-    self.galleries: list[tuple[object, int, int]] = []
+  def __init__(self, *_args: object, **_kwargs: object) -> None:
+    self.galleries: list[tuple[object, int, int, int]] = []
 
-  def set_gallery(self, prints: object, margin: int, min_score: int) -> None:
-    self.galleries.append((prints, margin, min_score))
+  def set_gallery(self, prints: object, margin: int, min_score: int, resemblance_bar: int) -> None:
+    self.galleries.append((prints, margin, min_score, resemblance_bar))
 
   def __getattr__(self, _name: str) -> Callable[..., None]:
     return lambda *_a, **_k: None
@@ -84,6 +85,7 @@ def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str,
 def serve_with(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patches: dict[str, Any]) -> Iterator[dict[str, Any]]:
   fake_reader_module = types.ModuleType("timeclock_system.fprint_reader")
   fake_reader_module.FprintReader = FakeReader  # pyright: ignore[reportAttributeAccessIssue]
+  fake_reader_module.FprintMatching = object  # pyright: ignore[reportAttributeAccessIssue]  # never called: no registration runs
   monkeypatch.setitem(sys.modules, "timeclock_system.fprint_reader", fake_reader_module)
   monkeypatch.delitem(sys.modules, "timeclock_system.app", raising=False)
   app_module = importlib.import_module("timeclock_system.app")
@@ -149,7 +151,7 @@ def wired_scanner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[d
   scanner, sync = FakeScanner(), FakeSync()
   patches = {
     "Clock": RecordingClock,
-    "Scanner": lambda *_a: scanner,
+    "Scanner": lambda *_a, **_k: scanner,
     "DatabaseSync": lambda *_a, **_k: sync,
     "heartbeat_loop": lambda *_a, **_k: asyncio.Event().wait(),
   }
@@ -159,15 +161,18 @@ def wired_scanner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[d
   next(serving, None)  # runs serve_with's teardown, which closes the store
 
 
-async def test_a_settings_change_reaches_the_scanner_margin_and_minimum(wired_scanner: dict[str, Any]) -> None:
+async def test_a_settings_change_reaches_the_scanner_margin_minimum_and_bar(wired_scanner: dict[str, Any]) -> None:
   [startup] = wired_scanner["startup"]
   await invoke_like_nicegui(startup)
   scanner, clock = wired_scanner["scanner"], wired_scanner["clock"]
-  assert scanner.galleries[-1][1:] == (Settings().fingerprint_match_margin, Settings().fingerprint_match_min_score)
-  clock._store.set_settings(Settings(fingerprint_match_margin=NEW_MARGIN, fingerprint_match_min_score=NEW_MIN_SCORE))
+  d = Settings()
+  assert scanner.galleries[-1][1:] == (d.fingerprint_match_margin, d.fingerprint_match_min_score, d.registration_resemblance_bar)
+  clock._store.set_settings(
+    Settings(fingerprint_match_margin=NEW_MARGIN, fingerprint_match_min_score=NEW_MIN_SCORE, registration_resemblance_bar=NEW_BAR)
+  )
   clock.notify_changed({"settings"})
   await invoke_like_nicegui(lambda: None)  # the gallery refresh is a task
-  assert scanner.galleries[-1][1:] == (NEW_MARGIN, NEW_MIN_SCORE)
+  assert scanner.galleries[-1][1:] == (NEW_MARGIN, NEW_MIN_SCORE, NEW_BAR)
 
 
 async def test_a_slow_gallery_read_never_puts_older_settings_back(
@@ -192,7 +197,7 @@ async def test_a_slow_gallery_read_never_puts_older_settings_back(
   await invoke_like_nicegui(lambda: None)
   release.set()
   await invoke_like_nicegui(lambda: None)
-  assert scanner.galleries[-1][1:] == (NEW_MARGIN, NEW_MIN_SCORE)
+  assert scanner.galleries[-1][1:3] == (NEW_MARGIN, NEW_MIN_SCORE)
 
 
 async def test_a_correction_refreshes_the_gallery(wired_scanner: dict[str, Any]) -> None:

@@ -49,7 +49,7 @@ else:
   _RETRY_SOURCE, _RETRY_DOMAIN = "FPrint.DeviceRetry.quark", GLib.quark_to_string(FPrint.DeviceRetry.quark())
 _ERROR_DOMAIN = GLib.quark_to_string(FPrint.device_error_quark())
 LOGGER = logging.getLogger(__name__)
-_SCORED_CACHE_MAX = 1024  # deserialized templates kept for `score`; far above any gallery
+_SCORED_CACHE_MAX = 1024  # deserialized templates a matcher thread keeps; far above any gallery
 
 
 def _reader_error(e: GLib.Error) -> Exception:
@@ -83,7 +83,6 @@ class FprintReader:
     self._device = devices[0]
     # Deserialized once per print (R36.4); rebuilt from each call's gallery, so removed prints drop out.
     self._prints: dict[UUID, FPrint.Print] = {}
-    self._scored: dict[bytes, FPrint.Print] = {}  # `score`'s `other` templates, by bytes
 
   def new_cancel(self) -> Gio.Cancellable:
     """Return a fresh cancellable for one call; `cancel()` is safe from any thread."""
@@ -179,45 +178,12 @@ class FprintReader:
     finally:
       self._device.disconnect(handler)
 
-  def presses(self, template: bytes) -> tuple[Minutiae, ...]:
-    """Decode a template's presses (`_decode_presses`)."""
-    return _decode_presses(template)
-
-  def score(self, press: bytes, index: int, other: bytes) -> tuple[int, ...]:
-    """Score `press`'s press `index` against each of `other`'s presses (bozorth3, as the scans are scored)."""
-    try:
-      if other not in self._scored:
-        if len(self._scored) >= _SCORED_CACHE_MAX:
-          self._scored.clear()
-        self._scored[other] = FPrint.Print.deserialize(other)
-      return tuple(FPrint.Print.deserialize(press).score_press(index, self._scored[other], None))
-    except GLib.Error as e:
-      raise _reader_error(e) from e
-
   def merge(self, presses: Sequence[bytes]) -> bytes:
     """Merge one-press templates into one template, in order."""
     try:
       return bytes(FPrint.Print.new_from_presses([FPrint.Print.deserialize(p) for p in presses]).serialize())
     except GLib.Error as e:
       raise _reader_error(e) from e
-
-
-def _decode_presses(template: bytes) -> tuple[Minutiae, ...]:
-  """Decode a template's presses: (x, y, theta) per detail point, from the FP3 payload after the 3-byte header.
-
-  Pure (GLib.Variant only), so any thread may call it.
-
-  Raises:
-    ReaderFailure: The template doesn't decode.
-  """
-  try:
-    variant = GLib.Variant.new_from_bytes(GLib.VariantType("(issbymsmsia{sv}v)"), GLib.Bytes(template[3:]), False)  # noqa: FBT003
-    nbis = variant.get_child_value(9).get_variant().unpack()  # (a(aiaiai)): per press, its x, y and theta columns
-    return tuple(tuple(zip(x, y, theta, strict=True)) for x, y, theta in nbis[0])
-  except (GLib.Error, LookupError, TypeError, ValueError) as e:
-    # Escaping, these would end the scanner thread. R15: the message names only the error, and `from None` drops the
-    # chained traceback, whose frames' locals hold detail points.
-    raise ReaderFailure(f"undecodable template: {e.message if isinstance(e, GLib.Error) else type(e).__name__}") from None
 
 
 class FprintMatching:
@@ -236,8 +202,21 @@ class FprintMatching:
     return Gio.Cancellable()
 
   def presses(self, template: bytes) -> tuple[Minutiae, ...]:
-    """Decode a template's presses (`_decode_presses`)."""
-    return _decode_presses(template)
+    """Decode a template's presses: (x, y, theta) per detail point, from the FP3 payload after the 3-byte header.
+
+    Pure (GLib.Variant only), so any thread may call it.
+
+    Raises:
+      ReaderFailure: The template doesn't decode.
+    """
+    try:
+      variant = GLib.Variant.new_from_bytes(GLib.VariantType("(issbymsmsia{sv}v)"), GLib.Bytes(template[3:]), False)  # noqa: FBT003
+      nbis = variant.get_child_value(9).get_variant().unpack()  # (a(aiaiai)): per press, its x, y and theta columns
+      return tuple(tuple(zip(x, y, theta, strict=True)) for x, y, theta in nbis[0])
+    except (GLib.Error, LookupError, TypeError, ValueError) as e:
+      # Escaping, these would fail the job with detail points in its traceback. R15: the message names only the error,
+      # and `from None` drops the chained traceback, whose frames' locals hold detail points.
+      raise ReaderFailure(f"undecodable template: {e.message if isinstance(e, GLib.Error) else type(e).__name__}") from None
 
   def score(self, press: bytes, index: int, other: bytes, cancel: Gio.Cancellable) -> tuple[int, ...]:
     """Score `press`'s press `index` against each of `other`'s presses, stopping early if `cancel` fires.
