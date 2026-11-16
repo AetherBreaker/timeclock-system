@@ -1,7 +1,7 @@
 # Punch menu redesign
 
-Draft for the owner's approval. Every decision is logged, with its date, in `2026-11-13-punch-menu-decisions.md`; this
-document is what gets built from them. "My call" marks a choice Claude made that the owner hasn't ruled on. Mockups:
+Owner-approved 2026-11-16. Every decision is logged, with its date, in `2026-11-13-punch-menu-decisions.md`; this
+document is what gets built from them. "My call" marks a choice Claude proposed, approved with the document. Mockups:
 the "Punch Menu Redesign" canvas, https://claude.ai/artifact/WFoPmKj62UVenBQX5fdP1y (1920×1080, the clock's screen),
 "Proposed: …" artboards; "Alternative: clocked in, Clock out below" was not chosen.
 
