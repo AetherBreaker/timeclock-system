@@ -148,6 +148,14 @@ them. The hook's registration in timeclock-schema (`alerts.py`) goes in that rep
 own. This supersedes the earlier spec's punch-menu state line and confirmation notice (§6.4, §6.11 of
 `2026-10-26-timeclock-design.md`).
 
+## Known and accepted
+
+- NiceGUI bundles Roboto at 400, 500, 700 and 900 only, so the mockups' 600 and 800 render as 700 and 900. Fine as is
+  (my call).
+- The gear's tap area (0–136 px across, 0–120 px down) covers the bar's top-left corner, so a tap there opens the gear,
+  as a tap in that corner does today. The bar itself takes no taps.
+- Both update toasts at once partly cover the docked Clock out; they pass taps through, so it still works.
+
 ## Left to the builder
 
 - How the layout is made in NiceGUI (fixed positioning or flow), and the CSS class and token names.
