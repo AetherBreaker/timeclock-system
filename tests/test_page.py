@@ -138,6 +138,25 @@ def ann_punched(store: LocalStore, *punches: tuple[PunchKind, timedelta]) -> Non
     store.insert_punch(Punch(id=uuid4(), employee_id=1, kind=kind, at=datetime.now(UTC) - ago, instance_id="1"), origin="db")
 
 
+def test_punch_buttons_in_a_row_keep_their_full_tap_margin() -> None:
+  # The row's 32 px gap leaves room for 12 px each side; the 16 px rows' split (-8 px) must not apply to it.
+  css = page._THEME_CSS  # pyright: ignore[reportPrivateUsage]
+  rule = ".nicegui-row > .sft-button.sft-kind::after { left: -12px; right: -12px; }"
+  assert rule in css
+  assert css.index(rule) > css.index(".nicegui-row > .sft-button:has(+ .sft-button)::after")  # same specificity: later wins
+
+
+async def test_the_after_punch_screen_lines_up_with_the_menu(controller: KioskController, tmp_path: Path) -> None:
+  # The menu's column sits in the page's 1rem padding; the fixed tap layer doesn't, so it pads 16 px more (pt-12 vs pt-8).
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await controller.punch(PunchKind.CLOCK_IN)
+    await user.should_see("CLOCKED IN")
+    [layer] = user.find(marker="confirm-tap").elements
+    assert "pt-12" in layer.classes
+
+
 def button(user: User, label: str) -> ui.button:
   [found] = user.find(kind=ui.button, content=label).elements
   return found

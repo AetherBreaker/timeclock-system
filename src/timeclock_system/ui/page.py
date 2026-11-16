@@ -109,10 +109,11 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 .sft-state-working { background: var(--sft-working); }
 .sft-state-on_break { background: var(--sft-break); }
 .sft-state-at_lunch { background: var(--sft-lunch); color: var(--sft-black); }
-.sft-below-state { margin-top: 256px; }  /* the screen's pt-8 (32 px) + 256: the name's top at 288 px, under the bar */
+/* The name's top at 288 px, under the bar: on the menu, the page's 1rem padding + the screen's pt-8 + 240; the after-punch
+   layer is fixed outside that padding, so it pads pt-12 instead. */
+.sft-below-state { margin-top: 240px; }
 .sft-week { font-size: 30px; }
 .sft-over { color: var(--sft-yellow); }
-/* Two classes deep, to outrank Quasar's own .q-btn rules whatever order the stylesheets load in. */
 .sft-button.sft-kind { min-height: 112px; min-width: 380px; padding: 0 40px; border-radius: 12px; font-size: 36px;
   font-weight: 600; color: var(--sft-white); }
 .sft-button.sft-kind .q-icon { font-size: 44px; }
@@ -131,12 +132,14 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 .reader-message-success { color: var(--sft-read-green); }
 .reader-message-unrecognized { color: var(--sft-orange); }
 /* Taps land up to 12 px past a button's drawn edge (owner, 2026-11-11), on ::after since Quasar draws a button's shadow
-   with ::before. Where two buttons sit under 24 px apart the gap splits down the middle, so no two areas overlap. */
+   with ::before. In the 16 px rows and columns the gap splits down the middle, so no two areas overlap; the punch row's
+   32 px gap has room for the full 12 px. */
 .sft-button::after, .sft-key::after { content: ""; position: absolute; inset: -12px; }
 .nicegui-row > .sft-button + .sft-button::after { left: -8px; }
 .nicegui-row > .sft-button:has(+ .sft-button)::after { right: -8px; }
 .nicegui-column > .sft-button + .sft-button::after { top: -8px; }
 .nicegui-column > .sft-button:has(+ .sft-button)::after { bottom: -8px; }
+.nicegui-row > .sft-button.sft-kind::after { left: -12px; right: -12px; }
 .sft-pad > .sft-key::after { inset: -4px; }
 .sft-pad > .sft-key:nth-child(3n+1)::after { left: -12px; }
 .sft-pad > .sft-key:nth-child(3n)::after { right: -12px; }
@@ -696,7 +699,7 @@ class _KioskPage:
 
   def _confirmation(self, s: Confirmation) -> None:
     # A double tap anywhere ends it early; the same full-screen layer as the idle screen's.
-    layer = ui.column().classes("fixed inset-0 z-10 items-center gap-6 pt-8").mark("confirm-tap")
+    layer = ui.column().classes("fixed inset-0 z-10 items-center gap-6 pt-12").mark("confirm-tap")  # pt-12: see .sft-below-state
     with layer.on("click", lambda: self._guarded(self._controller.tap)):
       # The menu's bar, in the state the punch left them in, with the punch's sentence under the word.
       with ui.element("div").classes(f"sft-state sft-state-{s.state}").mark("state-bar"):
