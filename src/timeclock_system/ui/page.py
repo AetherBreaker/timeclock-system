@@ -88,9 +88,9 @@ _THEME_CSS = """
   --sft-blue: #298DF0; --sft-orange: #FB8C00; --sft-read-green: #43A047; }
 body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem; }
 .sft-button { min-height: 64px; min-width: 160px; font-size: 1.5rem; }
-.sft-punch { background: var(--sft-yellow) !important; color: var(--sft-black) !important; }
-.sft-plain { background: var(--sft-white) !important; color: var(--sft-black) !important; }
-.sft-key { min-height: 72px; min-width: 96px; font-size: 2rem; background: var(--sft-white) !important;
+/* Plain buttons and PIN keys are yellow too: white with black text looked harsh (owner, 2026-11-16). */
+.sft-punch, .sft-plain { background: var(--sft-yellow) !important; color: var(--sft-black) !important; }
+.sft-key { min-height: 72px; min-width: 96px; font-size: 2rem; background: var(--sft-yellow) !important;
   color: var(--sft-black) !important; }
 .sft-error { color: var(--sft-red); }
 .sft-title { font-size: 2.5rem; font-weight: 600; }

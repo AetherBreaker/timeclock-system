@@ -50,6 +50,10 @@ menu, before a punch; after a punch the problem is a wrong button press (owner).
 10. The fix covers every screen, not just the punch menu and after-punch screen (owner, 2026-11-13): every screen shows
     the colors its CSS always asked for (`sft-plain` and the PIN pad keys white with black text, `sft-punch` yellow).
 
+13. Every button that was to be white with black text (`sft-plain`, the PIN pad keys, the punch menu's Cancel) is
+    yellow with black text instead: white looked harsh. Yellow is tried first; charcoal with white text was the other
+    suggestion (owner, 2026-11-16).
+
 ## How it's built
 
 12. Approach approved (owner, 2026-11-16): switch NiceGUI's default button color off in the shared helpers and color each

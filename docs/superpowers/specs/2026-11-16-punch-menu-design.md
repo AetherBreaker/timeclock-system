@@ -66,14 +66,14 @@ New tokens beside the existing ones in `_THEME_CSS`:
 | Clocked out bar | gray #4A4641 | white |
 | Clock out button | red #BC2F3B | white |
 
-Every pair passes 4.5:1. Cancel stays `.sft-plain` (white, black text).
+Every pair passes 4.5:1. Cancel stays `.sft-plain`, yellow with black text (below).
 
 ## Every button
 
 `_button` and the PIN pad's keys stop asking for NiceGUI's default color, so the `.sft-*` classes decide. Every screen
-then shows what its CSS always asked for: `.sft-plain` buttons (Cancel, Use PIN, Manager override, Back, Skip, …) and the
-pad keys white with black text, `.sft-punch` buttons (Register, Add employee, Fingerprints, Next, OK, …) yellow with
-black text. The gear stays a flat icon in the theme's blue, as today and in the mockups (my call).
+then shows its stylesheet color. Every button that was to be white with black text, `.sft-plain` (Cancel, Use PIN,
+Manager override, Back, Skip, …) and the pad keys, is yellow with black text instead, like `.sft-punch` (Register, Add
+employee, Fingerprints, Next, OK, …): white looked harsh (owner, 2026-11-16, yellow tried first). The gear stays a flat icon in the theme's blue, as today and in the mockups (my call).
 
 ## The punch menu
 
@@ -100,7 +100,7 @@ Top to bottom, centred unless said otherwise (artboards "Proposed: clocked in", 
      drops out, as today. If neither is left, Clock out sits centred alone, like Clock in (my call);
    - on break: End break alone, centred. At lunch: End lunch alone, centred. No Clock out on either.
 6. **The refusal notice** (`Menu.notice`), red, as today.
-7. **Cancel**, white, 160×64, under the punch buttons.
+7. **Cancel**, yellow, 160×64, under the punch buttons.
 
 Unchanged: the hours table docked on the left (`.sft-hours`), the Admin button near the bottom for admins, the reader
 line and status line.

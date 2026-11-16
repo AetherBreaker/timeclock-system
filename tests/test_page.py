@@ -138,6 +138,14 @@ def ann_punched(store: LocalStore, *punches: tuple[PunchKind, timedelta]) -> Non
     store.insert_punch(Punch(id=uuid4(), employee_id=1, kind=kind, at=datetime.now(UTC) - ago, instance_id="1"), origin="db")
 
 
+def test_no_button_is_white() -> None:
+  # Owner, 2026-11-16: white with black text looked harsh; plain buttons and PIN keys are yellow with black text.
+  css = page._THEME_CSS  # pyright: ignore[reportPrivateUsage]
+  assert "background: var(--sft-white)" not in css
+  assert ".sft-punch, .sft-plain { background: var(--sft-yellow) !important;" in css
+  assert ".sft-key { min-height: 72px; min-width: 96px; font-size: 2rem; background: var(--sft-yellow) !important;" in css
+
+
 def test_punch_buttons_in_a_row_keep_their_full_tap_margin() -> None:
   # The row's 32 px gap leaves room for 12 px each side; the 16 px rows' split (-8 px) must not apply to it.
   css = page._THEME_CSS  # pyright: ignore[reportPrivateUsage]
