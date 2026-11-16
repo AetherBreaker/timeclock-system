@@ -90,6 +90,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgirepository
 # timeclock-libfprint's wheel puts the patched library and its FPrint-2.0 typelib in the environment's lib/, which is
 # copied in after this window, so ldconfig can't index it.
 ENV LD_LIBRARY_PATH=/app/.venv/lib GI_TYPELIB_PATH=/app/.venv/lib/girepository-1.0
+# glibc's thread-stack cache would keep each ended registration matcher thread's bozorth3 tables (about 47 MB); glibc
+# reads this only at process start. run_app restarts itself with it when it's missing.
+ENV GLIBC_TUNABLES=glibc.pthread.stack_cache_size=0
 # The host's standby screen names the incoming version from this label during a deploy (standby-screen spec §6.3).
 ARG GIT_TAG
 LABEL org.opencontainers.image.version=$GIT_TAG
