@@ -3,12 +3,15 @@
 Runs inside a clock's app container, on its gallery (spec §Tests, level 2), with glibc's thread-stack cache off as the
 app runs (`__main__.run_app`):
 
-  docker cp scripts/matcher_check.py <app>:/tmp/ && docker exec -e GLIBC_TUNABLES=glibc.pthread.stack_cache_size=0 \
-    <app> /app/.venv/bin/python /tmp/matcher_check.py
+  docker cp scripts/matcher_check.py <app>:/tmp/ && docker exec -u <app uid> \
+    -e GLIBC_TUNABLES=glibc.pthread.stack_cache_size=0 <app> /app/.venv/bin/python /tmp/matcher_check.py
 
 Each of the first `--prints` prints' first press is scored against every one of those prints, as a registration's
-gallery jobs do: on one thread, then split across 2, 4 and 8. R15: it prints only counts, timings, resident memory
-and pass/fail, never a score or a template.
+gallery jobs do, split into 2, 4 and 8 chunks. bozorth3's score of a print against itself can depend on what its
+thread matched before (upstream behaviour, unpatched libfprint included), so one serial pass in another order is no
+reference: each chunk is scored alone, one at a time on a fresh thread, then all at once on their own threads, and
+every score must be equal. R15: it prints only counts, timings, resident memory and pass/fail, never a score or a
+template.
 """
 
 # Standard library imports
@@ -29,8 +32,8 @@ def rss_mb() -> float:
     return next(int(line.split()[1]) / 1024 for line in f if line.startswith("VmRSS:"))
 
 
-def main() -> None:
-  """Score on 1, 2, 4 and 8 threads, compare, and measure a parked matcher thread's memory."""
+def main() -> None:  # noqa: C901  # one check, its steps in order
+  """Score each chunk alone and all chunks at once, compare, and measure a parked matcher thread's memory."""
   parser = argparse.ArgumentParser(description="Check registration matching on threads against one thread.")
   parser.add_argument("--prints", type=int, default=20, help="how many of the gallery's prints to use")
   args = parser.parse_args()
@@ -44,7 +47,7 @@ def main() -> None:
   pairs = [(p, o) for p in range(len(templates)) for o in range(len(templates))]
   print(f"prints: {len(templates)}, scored pairs: {len(pairs)}")
 
-  def score_all(n_threads: int) -> tuple[dict[tuple[int, int], tuple[int, ...]], float]:
+  def score(chunks: list[list[tuple[int, int]]], *, at_once: bool) -> tuple[dict[tuple[int, int], tuple[int, ...]], float]:
     matching, results, lock = FprintMatching(), {}, threading.Lock()
 
     def work(chunk: list[tuple[int, int]]) -> None:
@@ -53,19 +56,23 @@ def main() -> None:
       with lock:
         results.update(out)
 
+    threads = [threading.Thread(target=work, args=(c,), name=f"matcher-{k}") for k, c in enumerate(chunks)]
     t0 = time.monotonic()
-    threads = [threading.Thread(target=work, args=(pairs[k::n_threads],), name=f"matcher-{k}") for k in range(n_threads)]
     for t in threads:
       t.start()
+      if not at_once:
+        t.join()
     for t in threads:
       t.join()
     return results, time.monotonic() - t0
 
-  serial, one = score_all(1)
+  _, one = score([pairs], at_once=False)
   print(f"1 thread: {one:.2f} s")
   for n in (2, 4, 8):
-    scores, took = score_all(n)
-    print(f"{n} threads: {took:.2f} s ({one / took:.2f}x), equal: {scores == serial}")
+    chunks = [pairs[k::n] for k in range(n)]
+    alone, _ = score(chunks, at_once=False)
+    together, took = score(chunks, at_once=True)
+    print(f"{n} threads: {took:.2f} s ({one / took:.2f}x), equal: {together == alone}")
 
   n, matching = 4, FprintMatching()
   before = rss_mb()
