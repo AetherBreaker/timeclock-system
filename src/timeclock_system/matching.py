@@ -28,9 +28,9 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 
-# Matcher threads per registration: fixed from bozorth3's measured memory per thread (46.7 MB, thread_tests.py.in in
-# timeclock-extras; scripts/matcher_check.py on a clock), so all of them together stay under 256 MB. Not the CPU count:
-# a thread past the cores waits its turn rather than costing memory.
+# Matcher threads per registration: fixed from bozorth3's measured memory per thread (46.9 MB in timeclock-extras'
+# thread_tests.py.in and on timeclock-dev's gallery, scripts/matcher_check.py), so all of them together stay under
+# 256 MB. Not the CPU count: a thread past the cores waits its turn rather than costing memory.
 MATCHER_THREADS: Final = 5
 JOB_DEADLINE_SECS: Final = 15.0  # a job not back by then is cancelled and counts as a failure
 CANCEL_GRACE_SECS: Final = 5.0  # a call still running this long after its cancel has its thread abandoned
