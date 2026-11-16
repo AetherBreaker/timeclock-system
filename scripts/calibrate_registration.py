@@ -74,9 +74,9 @@ def score(prints: list[dict], gallery: list[dict]) -> dict:
   for n, p in enumerate(prints, 1):
     fp = objects[p["id"]]
     count = len(presses_of(p["template"]))
-    own = [list(fp.score_press(i, fp)) for i in range(count)]
+    own = [list(fp.score_press(i, fp, None)) for i in range(count)]
     cross = {
-      q["id"]: [list(fp.score_press(i, objects[q["id"]])) for i in range(count)]
+      q["id"]: [list(fp.score_press(i, objects[q["id"]], None)) for i in range(count)]
       for q in gallery
       if q["employee_id"] != p["employee_id"]
     }
@@ -314,15 +314,15 @@ def real_scans(path: Path, out: Path, gallery: list[dict], scores: dict) -> None
   else:
     probes = [FPrint.Print.deserialize(base64.b64decode(r["probe"])) for r in rows]
     prints = {p["id"]: FPrint.Print.deserialize(p["template"]) for p in gallery}
-    both = lambda a, b: max(probes[a].score_press(0, probes[b])[0], probes[b].score_press(0, probes[a])[0])
+    both = lambda a, b: max(probes[a].score_press(0, probes[b], None)[0], probes[b].score_press(0, probes[a], None)[0])
     matched = [k for k, m in enumerate(owner) if m == k]
     cached = {
       "presses": [  # each attributed scan against each press of its person's print, both directions
         None
         if m is None
         else [
-          max(s, prints[rows[m]["best"]].score_press(j, probes[k])[0])
-          for j, s in enumerate(probes[k].score_press(0, prints[rows[m]["best"]]))
+          max(s, prints[rows[m]["best"]].score_press(j, probes[k], None)[0])
+          for j, s in enumerate(probes[k].score_press(0, prints[rows[m]["best"]], None))
         ]
         for k, m in enumerate(owner)
       ],
