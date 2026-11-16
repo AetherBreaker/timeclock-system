@@ -54,6 +54,10 @@ menu, before a punch; after a punch the problem is a wrong button press (owner).
     yellow with black text instead: white looked harsh. Yellow is tried first; charcoal with white text was the other
     suggestion (owner, 2026-11-16).
 
+14. The punch screens scale to the screen (owner, 2026-11-16; v0.13.0's fixed 1920×1080 sizes pushed Clock out off
+    the 1366×768 clocks): widths by the screen's width, heights by its height, so a differently shaped screen squashes
+    or stretches them, with minimums so every box still holds its text; text scales by the smaller factor.
+
 ## How it's built
 
 12. Approach approved (owner, 2026-11-16): switch NiceGUI's default button color off in the shared helpers and color each

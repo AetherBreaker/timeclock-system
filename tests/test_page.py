@@ -147,11 +147,29 @@ def test_no_button_is_white() -> None:
 
 
 def test_punch_buttons_in_a_row_keep_their_full_tap_margin() -> None:
-  # The row's 32 px gap leaves room for 12 px each side; the 16 px rows' split (-8 px) must not apply to it.
+  # The row's gap (32 design px) leaves room for up to 12 px each side; the 16 px rows' split (-8 px) must not apply.
   css = page._THEME_CSS  # pyright: ignore[reportPrivateUsage]
-  rule = ".nicegui-row > .sft-button.sft-kind::after { left: -12px; right: -12px; }"
+  rule = ".nicegui-row > .sft-button.sft-kind::after { left: calc(-1 * min(12px, 16 * var(--sx))); right: calc(-1 * min(12px, 16 * var(--sx))); }"
   assert rule in css
   assert css.index(rule) > css.index(".nicegui-row > .sft-button:has(+ .sft-button)::after")  # same specificity: later wins
+
+
+async def test_the_gear_scales_with_the_screen(controller: KioskController, tmp_path: Path) -> None:
+  # A fixed-size gear overlapped the scaled bar on the 1366x768 clocks (owner, 2026-11-16).
+  css = page._THEME_CSS  # pyright: ignore[reportPrivateUsage]
+  assert ".sft-gear { position: fixed; top: calc(8 * var(--sy)); left: calc(16 * var(--sx)); font-size: calc(30 * var(--st)); }" in css
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    [gear] = user.find(marker="gear").elements
+    assert "size" not in gear.props  # Quasar's size prop is an inline font-size the rule can't scale
+
+
+def test_punch_screens_scale_with_the_screen() -> None:
+  # Sized from 1920x1080 mockups, Clock out ran off the 1366x768 clocks' screens (owner, 2026-11-16): widths follow the
+  # screen's width, heights its height, text the smaller of the two.
+  css = page._THEME_CSS  # pyright: ignore[reportPrivateUsage]
+  assert ":root { --sx: calc(100vw / 1920); --sy: calc(100vh / 1080); --st: min(var(--sx), var(--sy)); }" in css
+  assert ".sft-button.sft-docked { position: fixed; right: calc(64 * var(--sx)); top: calc(720 * var(--sy)); }" in css
 
 
 async def test_the_after_punch_screen_lines_up_with_the_menu(controller: KioskController, tmp_path: Path) -> None:
