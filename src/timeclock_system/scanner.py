@@ -23,7 +23,7 @@ from aeth_ext.errors import alert
 from timeclock_schema.enums import Finger, ScanResult  # the dataclass annotations are evaluated at runtime
 
 # First party imports
-from timeclock_system.matching import FAILURE_LIMIT, ScoringSession
+from timeclock_system.matching import FAILURE_LIMIT, CancelToken, GalleryPrint, ScoringSession
 from timeclock_system.registration import OtherRef, Press
 
 if TYPE_CHECKING:
@@ -34,16 +34,6 @@ if TYPE_CHECKING:
   from timeclock_system.matching import Matching
 
 LOGGER = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class GalleryPrint:
-  """One enrolled print as the matcher consumes it."""
-
-  print_id: UUID
-  employee_id: int
-  template: bytes = field(repr=False)  # R15: keep the template out of tracebacks and alerts
-  finger: Finger
 
 
 @dataclass(frozen=True)
@@ -210,13 +200,6 @@ class ReaderTooHot(Exception):  # noqa: N818
 
 class ReaderFailure(Exception):  # noqa: N818
   """Any other reader error; retried with backoff."""
-
-
-class CancelToken(Protocol):
-  """Cancels the blocking reader call it was passed to; callable from any thread."""
-
-  def cancel(self) -> None:
-    """Cancel the call."""
 
 
 class Reader(Protocol):

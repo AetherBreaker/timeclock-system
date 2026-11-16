@@ -39,7 +39,8 @@ from timeclock_system.clock import (
   check_new_pin,
   normalize_phone,
 )
-from timeclock_system.scanner import GalleryPrint, ScanImage, ScanReport, ScoredPrint
+from timeclock_system.matching import GalleryPrint
+from timeclock_system.scanner import ScanImage, ScanReport, ScoredPrint
 from timeclock_system.store import LocalStore
 
 if TYPE_CHECKING:

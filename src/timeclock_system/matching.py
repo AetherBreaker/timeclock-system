@@ -11,6 +11,10 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
+from uuid import UUID  # noqa: TC003  # the dataclass annotation is evaluated at runtime
+
+# Third party imports
+from timeclock_schema.enums import Finger  # noqa: TC002  # the dataclass annotation is evaluated at runtime
 
 # First party imports
 from timeclock_system.registration import OtherPrint, Press
@@ -18,11 +22,9 @@ from timeclock_system.registration import OtherPrint, Press
 if TYPE_CHECKING:
   # Standard library imports
   from collections.abc import Callable, Sequence
-  from uuid import UUID
 
   # First party imports
   from timeclock_system.registration import Minutiae
-  from timeclock_system.scanner import CancelToken, GalleryPrint
 
 LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +35,23 @@ MATCHER_THREADS: Final = 5
 JOB_DEADLINE_SECS: Final = 15.0  # a job not back by then is cancelled and counts as a failure
 CANCEL_GRACE_SECS: Final = 5.0  # a call still running this long after its cancel has its thread abandoned
 FAILURE_LIMIT: Final = 3  # a registration's failures that end it
+
+
+@dataclass(frozen=True)
+class GalleryPrint:
+  """One enrolled print as the matcher consumes it."""
+
+  print_id: UUID
+  employee_id: int
+  template: bytes = field(repr=False)  # R15: keep the template out of tracebacks and alerts
+  finger: Finger
+
+
+class CancelToken(Protocol):
+  """Cancels the blocking reader call it was passed to; callable from any thread."""
+
+  def cancel(self) -> None:
+    """Cancel the call."""
 
 
 @runtime_checkable

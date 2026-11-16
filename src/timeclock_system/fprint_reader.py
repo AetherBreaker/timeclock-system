@@ -22,10 +22,10 @@ gi.require_version("FPrint", "2.0")
 from gi.repository import FPrint, Gio, GLib  # after require_version, or gi picks whatever FPrint it finds
 
 # First party imports
+from timeclock_system.matching import GalleryPrint
 from timeclock_system.scanner import (
   Capture,
   FingerStatus,
-  GalleryPrint,
   ReaderFailure,
   ReaderGone,
   ReaderTooHot,

@@ -16,14 +16,13 @@ from timeclock_schema.enums import Finger, ScanResult
 
 # First party imports
 from timeclock_system import scanner as scanner_module
+from timeclock_system.matching import CancelToken, GalleryPrint
 from timeclock_system.registration import OtherPrint, OtherRef, Press
 from timeclock_system.scanner import (
-  CancelToken,
   Capture,
   Captured,
   EnrollFailed,
   FingerStatus,
-  GalleryPrint,
   Matched,
   Merged,
   NoMatch,

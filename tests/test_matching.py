@@ -9,9 +9,9 @@ import pytest
 from timeclock_schema.enums import Finger
 
 # First party imports
-from timeclock_system.matching import ScoringSession
+from timeclock_system.matching import GalleryPrint, ScoringSession
 from timeclock_system.registration import OtherPrint, Press
-from timeclock_system.scanner import GalleryPrint, ReaderFailure, ScanCancelled
+from timeclock_system.scanner import ReaderFailure, ScanCancelled
 
 if TYPE_CHECKING:
   # Standard library imports

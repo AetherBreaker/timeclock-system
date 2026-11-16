@@ -45,7 +45,7 @@ from timeclock_schema.shifts import EmployeeState, apply_corrections, build_time
 
 # First party imports
 from timeclock_system.hours import applicable_hours
-from timeclock_system.scanner import GalleryPrint
+from timeclock_system.matching import GalleryPrint
 
 if TYPE_CHECKING:
   # Standard library imports
