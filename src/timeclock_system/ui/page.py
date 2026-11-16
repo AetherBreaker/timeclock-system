@@ -154,6 +154,9 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 .sft-pad > .sft-key:nth-child(-n+3)::after { top: -12px; }
 .sft-pad > .sft-key:nth-last-child(-n+3)::after { bottom: -12px; }
 /* The gear: half again as big, and any tap in its corner of the screen (0-136 px across, 0-120 px down) opens it. */
+/* Scaled with the punch screens (see --sx), so it stays clear of the bar; its size is a rule, not Quasar's size prop,
+   an inline font-size no rule can scale. */
+.sft-gear { position: fixed; top: calc(8 * var(--sy)); left: calc(16 * var(--sx)); font-size: calc(30 * var(--st)); }
 .sft-gear::after { content: ""; position: absolute; top: -8px; left: -16px; width: 136px; height: 120px; }
 /* The update toasts, bottom right above the database line (owner's mockup, 2026-11-12). The stack passes taps through to
    the screen. A toast slides in from the right on leaving display:none; `sft-out` slides it away before the page hides it. */
@@ -469,8 +472,8 @@ class _KioskPage:
 
   def _gear(self) -> None:
     # On the idle screen and the punch menu only; above the idle screen's tap layer (z-10), so tapping it isn't an idle tap.
-    ui.button(icon="settings", on_click=lambda: self._guarded(self._controller.gear)).props("flat round size=30px").classes(
-      "fixed top-2 left-4 z-20 sft-gear"
+    ui.button(icon="settings", on_click=lambda: self._guarded(self._controller.gear)).props("flat round").classes(
+      "z-20 sft-gear"
     ).mark("gear")
 
   def _idle(self, s: Idle) -> None:
