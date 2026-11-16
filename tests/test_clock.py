@@ -122,7 +122,7 @@ async def test_inactive_employee_finishes_their_shift_but_cannot_clock_in(env: E
   env.store.insert_punch(punch_at(3, PunchKind.CLOCK_IN, T - timedelta(hours=2)), origin="db")
   assert (await env.clock.menu_info(3)).valid_next == (PunchKind.CLOCK_OUT, PunchKind.BREAK_START, PunchKind.LUNCH_START)
   await env.clock.record_punch(3, PunchKind.BREAK_START)
-  assert (await env.clock.menu_info(3)).valid_next == (PunchKind.BREAK_END, PunchKind.CLOCK_OUT)
+  assert (await env.clock.menu_info(3)).valid_next == (PunchKind.BREAK_END,)
   env.now += timedelta(minutes=10)
   await env.clock.record_punch(3, PunchKind.BREAK_END)
   env.now += timedelta(minutes=10)
