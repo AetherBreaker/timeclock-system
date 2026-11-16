@@ -1,6 +1,7 @@
 # Standard library imports
 import asyncio
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, time, timedelta
 from importlib.metadata import version
 from typing import TYPE_CHECKING, cast
@@ -19,8 +20,17 @@ from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group,
 
 # First party imports
 from timeclock_system.clock import Clock
-from timeclock_system.registration import PRESSES, WINDOW, OtherPrint, Press
-from timeclock_system.scanner import FingerStatus, Matched, Merged, Pressed, ReaderMode, ReaderPaused, RegisterGallery
+from timeclock_system.registration import PRESSES, WINDOW, OtherPrint, OtherRef, Press
+from timeclock_system.scanner import (
+  Captured,
+  FingerStatus,
+  Matched,
+  Merged,
+  Pressed,
+  ReaderMode,
+  ReaderPaused,
+  RegisterGallery,
+)
 from timeclock_system.store import LocalStore
 from timeclock_system.sync import DbStatus
 from timeclock_system.ui import controller as controller_module, page, text
@@ -722,6 +732,7 @@ async def test_host_toast_downloaded_immediate(controller: KioskController, tmp_
 # -- registration's screens -----------------------------------------------------------------------------------------
 
 CAL_PRINT = uuid4()  # one of Cal's prints, as a registration's gallery names it
+RESEMBLANCE_BAR = Settings().registration_resemblance_bar
 
 
 def scored_press(press_id: int, *, n: int = 40, like_cal: bool = False) -> Press:
@@ -737,10 +748,22 @@ def cals_print(*, careless: bool = False) -> OtherPrint:
   return OtherPrint(CAL_PRINT, 4, Finger.LEFT_INDEX, (scored_press(0).minutiae,) * PRESSES, agreement)
 
 
+def gallery(*others: OtherPrint) -> RegisterGallery:
+  """A register session's gallery as the scanner posts it: the other prints by identity, and the default bar."""
+  return RegisterGallery(tuple(OtherRef(o.print_id, o.employee_id, o.finger) for o in others), RESEMBLANCE_BAR)
+
+
+async def pressed(controller: KioskController, p: Press, *others: OtherPrint) -> None:
+  """A press as the scanner posts it: captured, then scored, carrying the `others` it scores the bar against."""
+  await controller.on_scanner_event(Captured(p.press_id))
+  resembled = {o.print_id: o for o in others if max(p.vs_gallery.get(o.print_id, ()), default=-1) >= RESEMBLANCE_BAR}
+  await controller.on_scanner_event(Pressed(replace(p, resembled=resembled)))
+
+
 async def give_presses(controller: KioskController, others: tuple[OtherPrint, ...] = (), *, like_cal: bool = False) -> None:
-  await controller.on_scanner_event(RegisterGallery(others))
+  await controller.on_scanner_event(gallery(*others))
   for i in range(PRESSES):
-    await controller.on_scanner_event(Pressed(scored_press(i, like_cal=like_cal and i < 2)))  # noqa: PLR2004
+    await pressed(controller, scored_press(i, like_cal=like_cal and i < 2), *others)  # noqa: PLR2004
 
 
 async def bob_registers(controller: KioskController) -> None:
@@ -767,19 +790,48 @@ async def test_registering_counts_replaced_presses_and_shows_advice(controller: 
     await user.open("/")
     await bob_registers(controller)
     await user.should_see("Press your left index on the reader (0 of 5)")
-    await controller.on_scanner_event(RegisterGallery(()))
+    await controller.on_scanner_event(gallery())
     for i in range(PRESSES - 1):
-      await controller.on_scanner_event(Pressed(scored_press(i)))
+      await pressed(controller, scored_press(i))
     await user.should_see("Press your left index on the reader (4 of 5)")
     await user.should_not_see(kind=ui.button, content=text.FORCE_SAVE)
-    await controller.on_scanner_event(Pressed(scored_press(PRESSES - 1, n=10)))
+    await pressed(controller, scored_press(PRESSES - 1, n=10))
     await user.should_see("Press your left index on the reader (5 of 6)")
     assert shown_text(user, "register-advice") == "Press your finger flat on the reader"
-    await controller.on_scanner_event(Pressed(scored_press(PRESSES, n=10)))
+    await pressed(controller, scored_press(PRESSES, n=10))
     await user.should_see("Press your left index on the reader (6 of 7)")
     await user.should_see(kind=ui.button, content=text.CANCEL)
     user.find(kind=ui.button, content=text.FORCE_SAVE).click()
     await user.should_see(text.APPROVE_FORCE)
+
+
+async def test_captures_count_on_the_screen(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await bob_registers(controller)
+    await controller.on_scanner_event(gallery())
+    for i in range(3):
+      await controller.on_scanner_event(Captured(i))
+    await user.should_see("Press your left index on the reader (3 of 5)")
+
+
+async def test_checking_after_the_fifth_capture_until_a_replacement(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await bob_registers(controller)
+    await controller.on_scanner_event(gallery())
+    for i in range(PRESSES - 1):
+      await pressed(controller, scored_press(i))
+    await controller.on_scanner_event(Captured(PRESSES - 1))
+    await user.should_see(text.CHECKING_PRESSES)
+    await user.should_not_see("Press your left index on the reader")
+    await user.should_not_see(kind=ui.button, content=text.FORCE_SAVE)
+    await user.should_see(kind=ui.button, content=text.CANCEL)
+    await controller.on_scanner_event(Pressed(scored_press(PRESSES - 1, n=10)))  # replaced: the prompt comes back
+    await user.should_see("Press your left index on the reader (5 of 6)")
+    assert shown_text(user, "register-advice") == "Press your finger flat on the reader"
+    await user.should_not_see(text.CHECKING_PRESSES)
+    await user.should_see(kind=ui.button, content=text.FORCE_SAVE)
 
 
 async def test_too_similar_review_names_the_print(controller: KioskController, tmp_path: Path) -> None:

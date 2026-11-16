@@ -17,8 +17,9 @@ from timeclock_schema.shifts import EmployeeState
 
 # First party imports
 from timeclock_system.clock import Approval, Clock, HoursSummary, NewEmployee, OverrideGrant
-from timeclock_system.registration import PRESSES, WINDOW, Done, Failure, OtherPrint, Press, TooSimilar
+from timeclock_system.registration import PRESSES, WINDOW, Done, Failure, OtherPrint, OtherRef, Press, TooSimilar
 from timeclock_system.scanner import (
+  Captured,
   EnrollFailed,
   FingerStatus,
   Matched,
@@ -228,11 +229,23 @@ def mias_print(*, careless: bool = False) -> OtherPrint:
   return OtherPrint(MIA_PRINT, MIA, Finger.LEFT_INDEX, (points(),) * PRESSES, agreement)
 
 
+def gallery(*others: OtherPrint) -> RegisterGallery:
+  """A register session's gallery as the scanner posts it: the other prints by identity, and the default bar."""
+  return RegisterGallery(tuple(OtherRef(o.print_id, o.employee_id, o.finger) for o in others), SIMILAR)
+
+
+async def pressed(kiosk: Kiosk, p: Press, *others: OtherPrint) -> None:
+  """A press as the scanner posts it: captured, then scored, carrying the `others` it scores the bar against."""
+  await kiosk.ctl.on_scanner_event(Captured(p.press_id))
+  resembled = {o.print_id: o for o in others if max(p.vs_gallery.get(o.print_id, ()), default=-1) >= SIMILAR}
+  await kiosk.ctl.on_scanner_event(Pressed(replace(p, resembled=resembled)))
+
+
 async def give_presses(kiosk: Kiosk, *, others: tuple[OtherPrint, ...] = (), like_mia: bool = False) -> None:
   """A register session's gallery, then 5 clean presses; with `like_mia` the first two resemble Mia's print."""
-  await kiosk.ctl.on_scanner_event(RegisterGallery(others))
+  await kiosk.ctl.on_scanner_event(gallery(*others))
   for i in range(PRESSES):
-    await kiosk.ctl.on_scanner_event(Pressed(press(i, like_mia=like_mia and i < 2)))  # noqa: PLR2004
+    await pressed(kiosk, press(i, like_mia=like_mia and i < 2), *others)  # noqa: PLR2004
 
 
 async def register_cleanly(kiosk: Kiosk, template: bytes = b"new-template") -> None:
@@ -476,9 +489,9 @@ async def test_presses_advance_kept(kiosk: Kiosk) -> None:
   await bob_registers(kiosk)
   assert kiosk.ctl.screen == Registering(BOB, touched_at=kiosk.t.mono, finger=Finger.LEFT_INDEX)
   assert (kiosk.reader.modes[-1], kiosk.reader.registrants) == (ReaderMode.REGISTER, [BOB])
-  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  await kiosk.ctl.on_scanner_event(gallery())
   for i in range(PRESSES - 1):
-    await kiosk.ctl.on_scanner_event(Pressed(press(i)))
+    await pressed(kiosk, press(i))
     screen = kiosk.ctl.screen
     assert isinstance(screen, Registering)
     assert (screen.kept, screen.advice) == (i + 1, None)
@@ -497,14 +510,14 @@ async def test_presses_advance_kept(kiosk: Kiosk) -> None:
 )
 async def test_failure_shows_advice(kiosk: Kiosk, last: Press, advice: str) -> None:
   await bob_registers(kiosk)
-  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  await kiosk.ctl.on_scanner_event(gallery())
   for i in range(PRESSES - 1):
-    await kiosk.ctl.on_scanner_event(Pressed(press(i)))
-  await kiosk.ctl.on_scanner_event(Pressed(last))
+    await pressed(kiosk, press(i))
+  await pressed(kiosk, last)
   screen = kiosk.ctl.screen
   assert isinstance(screen, Registering)
   assert (screen.kept, screen.advice) == (PRESSES - 1, advice)
-  await kiosk.ctl.on_scanner_event(Pressed(press(5)))  # the replacement passes: the advice goes
+  await pressed(kiosk, press(5))  # the replacement passes: the advice goes
   screen = kiosk.ctl.screen
   assert isinstance(screen, Registering)
   assert (screen.kept, screen.advice) == (PRESSES, None)
@@ -533,20 +546,20 @@ async def test_a_session_takes_the_bars_current_at_its_start(kiosk: Kiosk) -> No
   await bob_registers(kiosk)
   kiosk.store.set_settings(Settings(registration_min_detail_points=41))
   kiosk.clock.notify_changed({"settings"})
-  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  await kiosk.ctl.on_scanner_event(gallery())
   kiosk.store.set_settings(Settings())
   kiosk.clock.notify_changed({"settings"})
   for i in range(PRESSES):
-    await kiosk.ctl.on_scanner_event(Pressed(press(i)))
+    await pressed(kiosk, press(i))
   screen = kiosk.ctl.screen
   assert isinstance(screen, Registering) and screen.advice == text.PRESS_ADVICE[Failure.TOO_FEW]
 
 
 async def test_gave_up_message(kiosk: Kiosk) -> None:
   await bob_registers(kiosk)
-  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  await kiosk.ctl.on_scanner_event(gallery())
   for i in range(PRESSES + BARS.registration_disagreement_retries):
-    await kiosk.ctl.on_scanner_event(Pressed(press(i, agrees=i < PRESSES - 1)))
+    await pressed(kiosk, press(i, agrees=i < PRESSES - 1))
   assert kiosk.ctl.screen == Idle(
     "Couldn't get a clean registration. Try again or use another finger.", until=kiosk.t.mono + controller_module.IDLE_ERROR_SECS
   )
@@ -577,7 +590,7 @@ async def test_press_on_review_screen_ignored(kiosk: Kiosk) -> None:
   await give_presses(kiosk)
   waiting = kiosk.ctl.screen
   assert isinstance(waiting, Registering) and waiting.verdict is not None and waiting.session is not None
-  await kiosk.ctl.on_scanner_event(Pressed(press(5)))
+  await pressed(kiosk, press(5))
   assert kiosk.ctl.screen == waiting
   assert len(waiting.session.kept) == PRESSES
   await kiosk.ctl.cancel()
@@ -585,16 +598,68 @@ async def test_press_on_review_screen_ignored(kiosk: Kiosk) -> None:
   await give_presses(kiosk, others=(mias_print(),), like_mia=True)
   blocked = kiosk.ctl.screen
   assert isinstance(blocked, TooSimilarBlocked)
-  await kiosk.ctl.on_scanner_event(Pressed(press(5)))
+  await pressed(kiosk, press(5))
   assert kiosk.ctl.screen == blocked
   assert blocked.registering.session is not None and len(blocked.registering.session.kept) == PRESSES
   await kiosk.ctl.ask_admin()
   await kiosk.ctl.on_scanner_event(matched(ADA))
   review = kiosk.ctl.screen
   assert isinstance(review, TooSimilarReview)
-  await kiosk.ctl.on_scanner_event(Pressed(press(6)))
+  await pressed(kiosk, press(6))
   assert kiosk.ctl.screen == review
   assert len(blocked.registering.session.kept) == PRESSES
+
+
+async def test_captures_count_before_their_results(kiosk: Kiosk) -> None:
+  await bob_registers(kiosk)
+  await kiosk.ctl.on_scanner_event(gallery())
+  for i in range(3):
+    await kiosk.ctl.on_scanner_event(Captured(i))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Registering)
+  assert (screen.captured, screen.kept, screen.results_out) == (3, 0, True)
+  await kiosk.ctl.on_scanner_event(Pressed(press(0)))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Registering)
+  assert (screen.captured, screen.kept, screen.results_out) == (3, 1, True)
+
+
+async def test_force_save_waits_for_results(kiosk: Kiosk) -> None:
+  # Review Focus: best() and resembled must see every press made, so no forced save while a press's results are out.
+  await bob_registers(kiosk)
+  await kiosk.ctl.on_scanner_event(gallery())
+  for i in range(PRESSES):
+    await pressed(kiosk, press(i, agrees=i < PRESSES - 1))  # the fifth is replaced: one more needed
+  await kiosk.ctl.on_scanner_event(Captured(PRESSES))
+  before = kiosk.ctl.screen
+  await kiosk.ctl.force_save()
+  assert kiosk.ctl.screen == before
+  assert kiosk.reader.merges == []
+  await kiosk.ctl.on_scanner_event(Pressed(press(PRESSES, agrees=False)))
+  await kiosk.ctl.force_save()
+  prompt = kiosk.ctl.screen
+  assert isinstance(prompt, ApprovalPrompt) and isinstance(prompt.change, ForceSave)
+
+
+async def test_captures_after_the_verdict_are_ignored(kiosk: Kiosk) -> None:
+  await bob_registers(kiosk)
+  await give_presses(kiosk)
+  done = kiosk.ctl.screen
+  assert isinstance(done, Registering) and done.verdict is not None
+  await kiosk.ctl.on_scanner_event(Captured(PRESSES))
+  assert kiosk.ctl.screen == done
+
+
+async def test_the_session_uses_the_gallerys_bar(kiosk: Kiosk) -> None:
+  # The matcher threads attach the prints a press reaches the scanner's bar against, taken as the session began; a
+  # newer setting mustn't judge by another. At a bar one above the default, presses like Mia's don't resemble her print.
+  await bob_registers(kiosk)
+  mia = mias_print()
+  await kiosk.ctl.on_scanner_event(RegisterGallery((OtherRef(MIA_PRINT, MIA, Finger.LEFT_INDEX),), SIMILAR + 1))
+  for i in range(PRESSES):
+    await pressed(kiosk, press(i, like_mia=i < 2), mia)  # noqa: PLR2004
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Registering) and screen.verdict == Done(chosen=(0, 1, 2, 3, 4), flagged=())
 
 
 # -- too similar to another person's print (case C) and careless prints (case B) ---------------------------------------
@@ -657,10 +722,10 @@ async def test_an_admin_who_steps_in_leaves_no_reregister_advice(kiosk: Kiosk, a
   careless = OtherPrint(uuid4(), EVE, Finger.RIGHT_THUMB, (points(),) * PRESSES, mias_print(careless=True).agreement)
   on_both = {MIA_PRINT: (0, 0, SIMILAR, 0, SIMILAR), careless.print_id: (SIMILAR,) * PRESSES}
   await bob_registers(kiosk)
-  await kiosk.ctl.on_scanner_event(RegisterGallery((mias_print(), careless)))
+  await kiosk.ctl.on_scanner_event(gallery(mias_print(), careless))
   for i in range(PRESSES):
     p = press(i)
-    await kiosk.ctl.on_scanner_event(Pressed(Press(i, p.minutiae, p.probe, p.vs_session, on_both if i < 2 else {})))  # noqa: PLR2004
+    await pressed(kiosk, Press(i, p.minutiae, p.probe, p.vs_session, on_both if i < 2 else {}), mias_print(), careless)  # noqa: PLR2004
   await kiosk.ctl.ask_admin()
   await kiosk.ctl.on_scanner_event(matched(ADA))
   await kiosk.ctl.allow()
@@ -677,11 +742,11 @@ async def test_the_resembled_print_approves_no_review_of_it(kiosk: Kiosk) -> Non
   ada_print = uuid4()
   adas = OtherPrint(ada_print, ADA, Finger.LEFT_INDEX, (points(),) * PRESSES, mias_print().agreement)
   await bob_registers(kiosk)
-  await kiosk.ctl.on_scanner_event(RegisterGallery((adas,)))
+  await kiosk.ctl.on_scanner_event(gallery(adas))
   for i in range(PRESSES):
     p = press(i)
     like_ada = {ada_print: (0, 0, SIMILAR, 0, SIMILAR)} if i < 2 else {}  # noqa: PLR2004
-    await kiosk.ctl.on_scanner_event(Pressed(Press(i, p.minutiae, p.probe, p.vs_session, like_ada)))
+    await pressed(kiosk, Press(i, p.minutiae, p.probe, p.vs_session, like_ada), adas)
   blocked = kiosk.ctl.screen
   assert isinstance(blocked, TooSimilarBlocked)
   await kiosk.ctl.ask_admin()
@@ -704,10 +769,10 @@ async def test_no_print_the_finger_resembles_approves_its_review(kiosk: Kiosk) -
   adas_careless = OtherPrint(careless, ADA, Finger.RIGHT_INDEX, (points(),) * PRESSES, mias_print(careless=True).agreement)
   like = {MIA_PRINT: (0, 0, SIMILAR + 1, 0, SIMILAR), second: (0, 0, SIMILAR, 0, SIMILAR), careless: (SIMILAR,) * PRESSES}
   await bob_registers(kiosk)
-  await kiosk.ctl.on_scanner_event(RegisterGallery((mias_print(), adas, adas_careless)))
+  await kiosk.ctl.on_scanner_event(gallery(mias_print(), adas, adas_careless))
   for i in range(PRESSES):
     p = press(i)
-    await kiosk.ctl.on_scanner_event(Pressed(Press(i, p.minutiae, p.probe, p.vs_session, like if i < 2 else {})))  # noqa: PLR2004
+    await pressed(kiosk, Press(i, p.minutiae, p.probe, p.vs_session, like if i < 2 else {}), mias_print(), adas, adas_careless)  # noqa: PLR2004
   blocked = kiosk.ctl.screen
   assert isinstance(blocked, TooSimilarBlocked) and blocked.verdict.other.print_id == MIA_PRINT
   await kiosk.ctl.ask_admin()
@@ -757,13 +822,13 @@ async def test_an_admins_pin_steps_in_too(kiosk: Kiosk) -> None:
 
 async def test_force_save_after_five_presses_asks_an_admin(kiosk: Kiosk) -> None:
   await bob_registers(kiosk)
-  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  await kiosk.ctl.on_scanner_event(gallery())
   for i in range(PRESSES - 1):
-    await kiosk.ctl.on_scanner_event(Pressed(press(i)))
+    await pressed(kiosk, press(i))
   before = kiosk.ctl.screen
   await kiosk.ctl.force_save()
   assert kiosk.ctl.screen == before  # not before 5 presses
-  await kiosk.ctl.on_scanner_event(Pressed(press(PRESSES - 1, agrees=False)))
+  await pressed(kiosk, press(PRESSES - 1, agrees=False))
   assert isinstance(kiosk.ctl.screen, Registering) and kiosk.ctl.screen.advice == text.PRESS_ADVICE[Failure.DISAGREES]
   await kiosk.ctl.force_save()
   prompt = kiosk.ctl.screen
@@ -786,9 +851,9 @@ async def test_force_save_after_five_presses_asks_an_admin(kiosk: Kiosk) -> None
 
 async def test_force_save_asks_again_though_an_admin_approved_the_change(kiosk: Kiosk) -> None:
   await approved_reregistration(kiosk)
-  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  await kiosk.ctl.on_scanner_event(gallery())
   for i in range(PRESSES):
-    await kiosk.ctl.on_scanner_event(Pressed(press(i, agrees=i < PRESSES - 1)))
+    await pressed(kiosk, press(i, agrees=i < PRESSES - 1))
   await kiosk.ctl.force_save()
   prompt = kiosk.ctl.screen
   assert isinstance(prompt, ApprovalPrompt) and isinstance(prompt.change, ForceSave)
@@ -803,9 +868,9 @@ async def test_force_save_asks_again_though_an_admin_approved_the_change(kiosk: 
 
 async def test_an_approval_faster_than_the_merge_saves_when_it_lands(kiosk: Kiosk) -> None:
   await bob_registers(kiosk)
-  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  await kiosk.ctl.on_scanner_event(gallery())
   for i in range(PRESSES):
-    await kiosk.ctl.on_scanner_event(Pressed(press(i, agrees=i < PRESSES - 1)))
+    await pressed(kiosk, press(i, agrees=i < PRESSES - 1))
   await kiosk.ctl.force_save()
   await kiosk.ctl.on_scanner_event(matched(ADA))
   screen = kiosk.ctl.screen
@@ -820,10 +885,10 @@ async def test_the_resembled_print_approves_no_forced_save(kiosk: Kiosk) -> None
   # As for a review: the registrant's own finger may be identified as a print its presses resemble.
   ada_print = uuid4()
   await bob_registers(kiosk)
-  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  await kiosk.ctl.on_scanner_event(gallery())
   for i in range(PRESSES):
     p = press(i, agrees=i < PRESSES - 1)
-    await kiosk.ctl.on_scanner_event(Pressed(Press(i, p.minutiae, p.probe, p.vs_session, {ada_print: (SIMILAR,)} if i == 0 else {})))
+    await pressed(kiosk, Press(i, p.minutiae, p.probe, p.vs_session, {ada_print: (SIMILAR,)} if i == 0 else {}))
   await kiosk.ctl.force_save()
   prompt = kiosk.ctl.screen
   assert isinstance(prompt, ApprovalPrompt)
@@ -949,10 +1014,10 @@ async def test_an_allowed_c_alerts_its_flags_and_a_rejected_one_doesnt(kiosk: Ki
   for decide, alerted in ((kiosk.ctl.reject, 0), (kiosk.ctl.allow, 1)):
     await kiosk.ctl.cancel()
     await approved_reregistration(kiosk)
-    await kiosk.ctl.on_scanner_event(RegisterGallery((mias_print(), careless)))
+    await kiosk.ctl.on_scanner_event(gallery(mias_print(), careless))
     for i in range(PRESSES):
       p = press(i)
-      await kiosk.ctl.on_scanner_event(Pressed(Press(i, p.minutiae, p.probe, p.vs_session, on_both if i < 2 else {})))  # noqa: PLR2004
+      await pressed(kiosk, Press(i, p.minutiae, p.probe, p.vs_session, on_both if i < 2 else {}), mias_print(), careless)  # noqa: PLR2004
     review = kiosk.ctl.screen
     assert isinstance(review, TooSimilarReview) and review.verdict == TooSimilar(mias_print(), (0, 1, 2, 3, 4), (careless,), ())
     await kiosk.ctl.on_scanner_event(Merged(b"ann-new"))
@@ -975,8 +1040,8 @@ async def test_cancel_keeps_old_print(kiosk: Kiosk) -> None:
   assert kiosk.ctl.screen == Idle()
   assert await kiosk.clock.prints_by_finger(ANN) == {Finger.LEFT_INDEX: ANN_PRINT}
   await approved_reregistration(kiosk)
-  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
-  await kiosk.ctl.on_scanner_event(Pressed(press(0)))
+  await kiosk.ctl.on_scanner_event(gallery())
+  await pressed(kiosk, press(0))
   await kiosk.ctl.on_scanner_event(EnrollFailed("timeout"))  # the scanner's 30 s without a press
   assert kiosk.ctl.screen == FingerprintActions(
     ANN, "Ann Lee", (Finger.LEFT_INDEX,), touched_at=kiosk.t.mono, message=text.REGISTRATION_TIMED_OUT
@@ -1297,10 +1362,10 @@ async def test_registration_presses_are_green_or_red_never_orange(kiosk: Kiosk) 
   await kiosk.ctl.register()
   await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   assert isinstance(kiosk.ctl.screen, Registering)
-  await kiosk.ctl.on_scanner_event(RegisterGallery(()))
+  await kiosk.ctl.on_scanner_event(gallery())
   await kiosk.ctl.on_scanner_event(DOWN)
   read_at = kiosk.t.mono
-  await kiosk.ctl.on_scanner_event(Pressed(press(0)))
+  await pressed(kiosk, press(0))
   assert kiosk.ctl.reader_indicator is ReaderIndicator.READ
   assert kiosk.ctl.reader_message == ReaderMessage("Scan successful", "success", read_at)
   screen = kiosk.ctl.screen
