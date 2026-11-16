@@ -19,9 +19,6 @@ if TYPE_CHECKING:
   from datetime import datetime
   from zoneinfo import ZoneInfo
 
-  # Third party imports
-  from timeclock_schema.alerts import Firing
-
   # First party imports
   from timeclock_system.clock import HoursSummary
   from timeclock_system.sync import DbStatus
@@ -176,8 +173,6 @@ BLOCK_FULL: Final = "This clock has no employee numbers left"
 NEW_FINGERPRINT: Final = "Register {name}'s fingerprint?"
 EMPLOYEE_ADDED: Final = "Added {name}"
 EMPLOYEE_NUMBER: Final = "Employee number (PIN username): {number}"
-WEEKLY_HOURS_NOTICE: Final = "You've worked over {limit} hours this week"
-WEEKLY_HOURS_EARLY_NOTICE: Final = "You're within {lead} h of {limit} hours this week"
 
 PUNCH_LABELS: Final[Mapping[PunchKind, str]] = MappingProxyType(
   {
@@ -199,14 +194,20 @@ CONFIRMATIONS: Final[Mapping[PunchKind, str]] = MappingProxyType(
     PunchKind.LUNCH_END: "Lunch ended at {time}",
   }
 )
-STATE_LABELS: Final[Mapping[EmployeeState, str]] = MappingProxyType(
+# The state bar on the punch menu and the after-punch screen: the word, then since when (a break or lunch adds how long).
+STATE_WORDS: Final[Mapping[EmployeeState, str]] = MappingProxyType(
   {
-    EmployeeState.OFF: "Clocked out",
-    EmployeeState.WORKING: "Clocked in since {time}",
-    EmployeeState.ON_BREAK: "On break since {time}",
-    EmployeeState.AT_LUNCH: "At lunch since {time}",
+    EmployeeState.OFF: "CLOCKED OUT",
+    EmployeeState.WORKING: "CLOCKED IN",
+    EmployeeState.ON_BREAK: "ON BREAK",
+    EmployeeState.AT_LUNCH: "AT LUNCH",
   }
 )
+STATE_SINCE: Final = "since {time}"
+STATE_SINCE_FOR: Final = "since {time} · {duration}"
+# The hours line under the name (`week_line`).
+WEEK_LEFT: Final = "{left} left to {limit} hours this week"
+WEEK_OVER: Final = "{over} over {limit} hours this week"
 
 
 def format_clock_time(at: datetime, tz: ZoneInfo) -> str:
@@ -233,6 +234,14 @@ def hours_lines(hours: HoursSummary) -> tuple[tuple[str, str], ...]:
   return tuple((label, format_duration(td)) for label, td in rows)
 
 
+def week_line(hours: HoursSummary) -> tuple[str, bool]:
+  """The hours line under the name, and whether the week has reached the limit (`>=`, as the old alert)."""
+  limit = _hours_number(hours.week_limit)
+  if hours.week >= hours.week_limit:
+    return WEEK_OVER.format(over=format_duration(hours.week - hours.week_limit), limit=limit), True
+  return WEEK_LEFT.format(left=format_duration(hours.week_limit - hours.week), limit=limit), False
+
+
 def format_db_status(status: DbStatus, tz: ZoneInfo) -> str:
   """The idle screen's status line, e.g. `"Database connected · last contact 8:02 AM"`."""
   contact = "never" if status.last_contact is None else format_clock_time(status.last_contact, tz)
@@ -242,11 +251,3 @@ def format_db_status(status: DbStatus, tz: ZoneInfo) -> str:
 def _hours_number(td: timedelta) -> str:
   # Whole hours plainly, otherwise truncated hundredths without trailing zeros: 40, 37.5, 0.25.
   return f"{Decimal(td // timedelta(seconds=36)).scaleb(-2).normalize():f}"
-
-
-def alert_notice(firing: Firing) -> str:
-  """The confirmation-screen line for an alert hook the punch reached (§6.11); the weekly-hours type is the only one."""
-  limit = _hours_number(firing.limit)
-  if firing.hook.lead:
-    return WEEKLY_HOURS_EARLY_NOTICE.format(lead=_hours_number(firing.hook.lead), limit=limit)
-  return WEEKLY_HOURS_NOTICE.format(limit=limit)

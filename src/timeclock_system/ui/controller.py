@@ -1,4 +1,4 @@
-"""The kiosk's screen state machine and reader schedule (spec §6.3, §6.4, §6.11; R23, R40.2, R45).
+"""The kiosk's screen state machine and reader schedule (spec §6.3, §6.4; R23, R40.2, R45).
 
 The page only renders `screen`; every input and scanner event comes through one entry point here, under one lock.
 """
@@ -12,14 +12,15 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal, Protocol
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 # Third party imports
 from aeth_ext.errors import alert
 from pydantic import SecretStr
-from timeclock_schema.alerts import CONFIRMATION_NOTICE
-from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, ScanOutcome, ScanResult
+from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, PunchKind, ScanOutcome, ScanResult
 from timeclock_schema.models import EMAIL_PATTERN
+from timeclock_schema.shifts import EmployeeState
 
 # First party imports
 from timeclock_system.app_status import read_banner, read_host_update, write_scan
@@ -52,18 +53,17 @@ from timeclock_system.ui import text
 
 if TYPE_CHECKING:
   # Standard library imports
-  from collections.abc import AsyncGenerator, Callable, Sequence
+  from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
   from pathlib import Path
   from uuid import UUID
   from zoneinfo import ZoneInfo
 
   # Third party imports
-  from timeclock_schema.enums import PunchKind
   from timeclock_schema.models import Employee
 
   # First party imports
   from timeclock_system.app_status import HostUpdate
-  from timeclock_system.clock import Clock
+  from timeclock_system.clock import Clock, HoursSummary
   from timeclock_system.registration import OtherPrint, Press, Verdict
   from timeclock_system.scanner import ScannerEvent
 
@@ -79,6 +79,17 @@ WAKE_SECS = 30  # R40.2
 DOUBLE_TAP_SECS = 0.5  # two taps this close end a confirmation early
 _MAX_DIGITS = 12
 _ADDABLE_ROLES = (EmployeeRole.EMPLOYEE, EmployeeRole.MANAGER)  # never admin (§2)
+# The state a punch leaves the employee in: the after-punch screen's bar.
+_STATE_AFTER: Final[Mapping[PunchKind, EmployeeState]] = MappingProxyType(
+  {
+    PunchKind.CLOCK_IN: EmployeeState.WORKING,
+    PunchKind.CLOCK_OUT: EmployeeState.OFF,
+    PunchKind.BREAK_START: EmployeeState.ON_BREAK,
+    PunchKind.BREAK_END: EmployeeState.WORKING,
+    PunchKind.LUNCH_START: EmployeeState.AT_LUNCH,
+    PunchKind.LUNCH_END: EmployeeState.WORKING,
+  }
+)
 LOGGER = logging.getLogger(__name__)
 
 
@@ -150,13 +161,14 @@ class Rescan:
 
 @dataclass(frozen=True)
 class Confirmation:
-  """A recorded punch, shown until `until`, with any rule warnings and alert notices (§6.11)."""
+  """A recorded punch, shown until `until`: the state it left them in, its sentence, their name, hours and rule warnings."""
 
-  text: str
-  hours: tuple[tuple[str, str], ...]  # text.hours_lines
+  text: str  # text.CONFIRMATIONS
+  name: str
+  state: EmployeeState
+  hours: HoursSummary
   warnings: tuple[str, ...]
   until: float
-  notices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -648,14 +660,13 @@ class KioskController:
       return await self._open_menu(employee_id, auth, notice=refused.message)
     if self._open_scan is not None and self._open_scan.employee_id == employee_id:
       await self._settle_open(ScanOutcome.PUNCHED, outcome.punch.id)  # a manager's scan authorizing another's punch isn't this
-    # The confirmation notice is the clock's one alert action (§6.11); other actions belong to other deliverers.
-    notices = tuple(text.alert_notice(f) for f in outcome.firings if CONFIRMATION_NOTICE in f.hook.actions)
     return Confirmation(
       text.CONFIRMATIONS[kind].format(time=text.format_clock_time(outcome.punch.at, self._tz)),
-      text.hours_lines(outcome.hours),
+      outcome.name,
+      _STATE_AFTER[kind],
+      outcome.hours,
       outcome.warnings,
       until=self._mono() + CONFIRM_SECS,
-      notices=notices,
     )
 
   async def _granted(self, request: OverrideRequest, grant: OverrideGrant) -> Screen:

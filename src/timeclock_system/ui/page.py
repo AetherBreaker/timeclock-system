@@ -11,6 +11,7 @@ import time
 from datetime import UTC, date, datetime
 from importlib.metadata import version
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 # Third party imports
@@ -18,7 +19,8 @@ from nicegui import app, ui
 
 # At runtime: NiceGUI inspects a handler's signature before calling it, which evaluates its annotations (_on_key).
 from nicegui.events import KeyEventArguments  # noqa: TC002
-from timeclock_schema.enums import Finger
+from timeclock_schema.enums import Finger, PunchKind
+from timeclock_schema.shifts import EmployeeState
 
 # First party imports
 from timeclock_system.registration import PRESSES
@@ -51,7 +53,7 @@ from timeclock_system.ui.controller import (
 
 if TYPE_CHECKING:
   # Standard library imports
-  from collections.abc import Callable
+  from collections.abc import Callable, Mapping
   from zoneinfo import ZoneInfo
 
   # Third party imports
@@ -67,6 +69,17 @@ logger = logging.getLogger(__name__)
 BEAT_COLOURS: Final = ("#161514", "#171615")
 BEAT_SECS: Final = 0.25
 BEAT_PX: Final = 4
+# A punch button's color (its `sft-kind-*` class) and Material icon, by kind (owner, 2026-11-13).
+_PUNCH_STYLE: Final[Mapping[PunchKind, tuple[str, str]]] = MappingProxyType(
+  {
+    PunchKind.CLOCK_IN: ("in", "login"),
+    PunchKind.CLOCK_OUT: ("out", "logout"),
+    PunchKind.BREAK_START: ("break", "coffee"),
+    PunchKind.BREAK_END: ("break", "coffee"),
+    PunchKind.LUNCH_START: ("lunch", "restaurant"),
+    PunchKind.LUNCH_END: ("lunch", "restaurant"),
+  }
+)
 LOGO_FILE = "SFT-Logo-June-2022-color.svg"
 # The host's os-release, mounted read-only by the compose file: timeclock-host stamps its version there.
 HOST_OS_RELEASE = Path("/run/host/os-release")
@@ -75,14 +88,40 @@ _THEME_CSS = """
   --sft-blue: #298DF0; --sft-orange: #FB8C00; --sft-read-green: #43A047; }
 body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem; }
 .sft-button { min-height: 64px; min-width: 160px; font-size: 1.5rem; }
-.sft-punch { background: var(--sft-yellow) !important; color: var(--sft-black) !important; }
-.sft-plain { background: var(--sft-white) !important; color: var(--sft-black) !important; }
-.sft-key { min-height: 72px; min-width: 96px; font-size: 2rem; background: var(--sft-white) !important;
+/* Plain buttons and PIN keys are yellow too: white with black text looked harsh (owner, 2026-11-16). */
+.sft-punch, .sft-plain { background: var(--sft-yellow) !important; color: var(--sft-black) !important; }
+.sft-key { min-height: 72px; min-width: 96px; font-size: 2rem; background: var(--sft-yellow) !important;
   color: var(--sft-black) !important; }
 .sft-error { color: var(--sft-red); }
 .sft-title { font-size: 2.5rem; font-weight: 600; }
 /* The hours table (punch menu, confirmation): docked on the left edge, centred vertically (owner, 2026-11-06). */
 .sft-hours { position: fixed; left: 2rem; top: 50%; transform: translateY(-50%); }
+/* The punch menu and after-punch screen (owner, 2026-11-13): a full-width bar in the state's color under the clock line,
+   and punch buttons colored by kind. Clocked out is gray, not red: red is the error color, and a red bar over the green
+   Clock in button is the red-green colorblind pair. */
+:root { --sft-working: #38753B; --sft-break: #386BA8; --sft-lunch: #D98826; --sft-clocked-out: #4A4641;
+  --sft-clock-out: #BC2F3B; }
+.sft-state { position: fixed; left: 0; right: 0; top: 84px; height: 168px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px; color: var(--sft-white); }
+.sft-state-word { font-size: 96px; line-height: 1; font-weight: 800; letter-spacing: 4px; }
+.sft-state-since { font-size: 32px; line-height: 1.2; font-weight: 500; }
+.sft-state-off { background: var(--sft-clocked-out); }
+.sft-state-working { background: var(--sft-working); }
+.sft-state-on_break { background: var(--sft-break); }
+.sft-state-at_lunch { background: var(--sft-lunch); color: var(--sft-black); }
+/* The name's top at 288 px, under the bar: on the menu, the page's 1rem padding + the screen's pt-8 + 240; the after-punch
+   layer is fixed outside that padding, so it pads pt-12 instead. */
+.sft-below-state { margin-top: 240px; }
+.sft-week { font-size: 30px; }
+.sft-over { color: var(--sft-yellow); }
+.sft-button.sft-kind { min-height: 112px; min-width: 380px; padding: 0 40px; border-radius: 12px; font-size: 36px;
+  font-weight: 600; color: var(--sft-white); }
+.sft-button.sft-kind .q-icon { font-size: 44px; }
+.sft-button.sft-kind-in { background: var(--sft-working); }
+.sft-button.sft-kind-out { background: var(--sft-clock-out); }
+.sft-button.sft-kind-break { background: var(--sft-break); }
+.sft-button.sft-kind-lunch { background: var(--sft-lunch); color: var(--sft-black); }
+.sft-button.sft-docked { position: fixed; right: 64px; top: 720px; }
 .reader-ready { color: var(--sft-yellow); }
 .reader-scanning { color: var(--sft-blue); }
 .reader-read { color: var(--sft-read-green); }
@@ -93,12 +132,14 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 .reader-message-success { color: var(--sft-read-green); }
 .reader-message-unrecognized { color: var(--sft-orange); }
 /* Taps land up to 12 px past a button's drawn edge (owner, 2026-11-11), on ::after since Quasar draws a button's shadow
-   with ::before. Where two buttons sit under 24 px apart the gap splits down the middle, so no two areas overlap. */
+   with ::before. In the 16 px rows and columns the gap splits down the middle, so no two areas overlap; the punch row's
+   32 px gap has room for the full 12 px. */
 .sft-button::after, .sft-key::after { content: ""; position: absolute; inset: -12px; }
 .nicegui-row > .sft-button + .sft-button::after { left: -8px; }
 .nicegui-row > .sft-button:has(+ .sft-button)::after { right: -8px; }
 .nicegui-column > .sft-button + .sft-button::after { top: -8px; }
 .nicegui-column > .sft-button:has(+ .sft-button)::after { bottom: -8px; }
+.nicegui-row > .sft-button.sft-kind::after { left: -12px; right: -12px; }
 .sft-pad > .sft-key::after { inset: -4px; }
 .sft-pad > .sft-key:nth-child(3n+1)::after { left: -12px; }
 .sft-pad > .sft-key:nth-child(3n)::after { right: -12px; }
@@ -411,8 +452,12 @@ class _KioskPage:
     except Exception as e:  # noqa: BLE001  # handed on, not swallowed
       self._on_error(e)
 
-  def _button(self, label: str, on_click: Callable[[], object], kind: str = "sft-plain") -> None:
-    ui.button(label, on_click=lambda: self._guarded(on_click)).classes(f"sft-button {kind}").props("unelevated no-caps")
+  def _button(self, label: str, on_click: Callable[[], object], kind: str = "sft-plain", *, icon: str | None = None) -> None:
+    # color=None: NiceGUI's default "primary" has Quasar draw bg-primary text-white over the `.sft-*` rules, which left
+    # every button blue.
+    ui.button(label, icon=icon, color=None, on_click=lambda: self._guarded(on_click)).classes(f"sft-button {kind}").props(
+      "unelevated no-caps"
+    )
 
   def _gear(self) -> None:
     # On the idle screen and the punch menu only; above the idle screen's tap layer (z-10), so tapping it isn't an idle tap.
@@ -428,7 +473,7 @@ class _KioskPage:
       if (self._branding_dir / LOGO_FILE).exists():
         ui.image(f"/branding/{LOGO_FILE}").classes("w-96")
       ui.label(s.message or (text.IDLE_READY if self._controller.reader_awake else text.IDLE_ASLEEP)).classes("sft-title")
-      if s.advice:  # a registration's re-register advice (case B), styled as the confirmation's alert notices
+      if s.advice:  # a registration's re-register advice (case B), yellow as the hours line past its limit
         ui.label(s.advice).classes("text-3xl").style("color: var(--sft-yellow)").mark("reregister-advice")
       self._button(text.USE_PIN, self._controller.use_pin)
     self._gear()
@@ -436,19 +481,40 @@ class _KioskPage:
   def _menu(self, s: Menu) -> None:
     self._gear()
     info = s.info
-    ui.label(info.name).classes("sft-title")
-    state = text.STATE_LABELS[info.state]
-    ui.label(state.format(time=text.format_clock_time(info.since, self._tz)) if info.since else state)
+    with ui.element("div").classes(f"sft-state sft-state-{info.state}").mark("state-bar"):
+      ui.label(text.STATE_WORDS[info.state]).classes("sft-state-word")
+      if info.since is not None:
+        # A break or lunch adds how long it has run, as of the menu's drawing: it closes after 120 s idle.
+        at = text.format_clock_time(info.since, self._tz)
+        if info.state is EmployeeState.WORKING:
+          since = text.STATE_SINCE.format(time=at)
+        else:
+          since = text.STATE_SINCE_FOR.format(time=at, duration=text.format_duration(datetime.now(UTC) - info.since))
+        ui.label(since).classes("sft-state-since").mark("state-since")
     with ui.grid(columns=2).classes("sft-hours gap-x-8 gap-y-0").mark("hours"):
       for label, value in text.hours_lines(info.hours):
         ui.label(label)
         ui.label(value).classes("text-right")
-    with ui.row().classes("gap-4"):
-      for kind in info.valid_next:
-        self._button(text.PUNCH_LABELS[kind], lambda kind=kind: self._controller.punch(kind), "sft-punch")
-    if s.notice:
-      ui.label(s.notice).classes("sft-error")
-    self._button(text.CANCEL, self._controller.cancel)
+    # Clock out docks on the right, below the break and lunch row (owner, 2026-11-13), unless it's the only punch.
+    row = tuple(k for k in info.valid_next if k is not PunchKind.CLOCK_OUT) or info.valid_next
+    with ui.column().classes("sft-below-state items-center gap-12"):
+      ui.label(info.name).classes("sft-title")
+      week, over = text.week_line(info.hours)
+      ui.label(week).classes("sft-week sft-over" if over else "sft-week").mark("week-line")
+      with ui.row().classes("gap-8"):
+        for kind in row:
+          color, icon = _PUNCH_STYLE[kind]
+          self._button(
+            text.PUNCH_LABELS[kind], lambda kind=kind: self._controller.punch(kind), f"sft-kind sft-kind-{color}", icon=icon
+          )
+      if s.notice:
+        ui.label(s.notice).classes("sft-error")
+      self._button(text.CANCEL, self._controller.cancel)
+    if PunchKind.CLOCK_OUT not in row and PunchKind.CLOCK_OUT in info.valid_next:
+      out = PunchKind.CLOCK_OUT
+      self._button(
+        text.PUNCH_LABELS[out], lambda: self._controller.punch(out), "sft-kind sft-kind-out sft-docked", icon=_PUNCH_STYLE[out][1]
+      )
     if info.is_admin:
       # Near the bottom, well away from the punch buttons (owner, 2026-10-27).
       with ui.row().classes("fixed bottom-14 left-0 right-0 justify-center"):
@@ -633,17 +699,22 @@ class _KioskPage:
 
   def _confirmation(self, s: Confirmation) -> None:
     # A double tap anywhere ends it early; the same full-screen layer as the idle screen's.
-    layer = ui.column().classes("fixed inset-0 z-10 items-center gap-6 pt-8").mark("confirm-tap")
+    layer = ui.column().classes("fixed inset-0 z-10 items-center gap-6 pt-12").mark("confirm-tap")  # pt-12: see .sft-below-state
     with layer.on("click", lambda: self._guarded(self._controller.tap)):
-      ui.label(s.text).classes("sft-title")
+      # The menu's bar, in the state the punch left them in, with the punch's sentence under the word.
+      with ui.element("div").classes(f"sft-state sft-state-{s.state}").mark("state-bar"):
+        ui.label(text.STATE_WORDS[s.state]).classes("sft-state-word")
+        ui.label(s.text).classes("sft-state-since").mark("state-since")
       with ui.grid(columns=2).classes("sft-hours gap-x-8 gap-y-0").mark("hours"):
-        for label, value in s.hours:
+        for label, value in text.hours_lines(s.hours):
           ui.label(label)
           ui.label(value).classes("text-right")
-      for warning in s.warnings:
-        ui.label(warning).classes("sft-error")
-      for notice in s.notices:
-        ui.label(notice).classes("text-3xl").style("color: var(--sft-yellow)").mark("alert-notice")
+      with ui.column().classes("sft-below-state items-center gap-12"):
+        ui.label(s.name).classes("sft-title")
+        week, over = text.week_line(s.hours)
+        ui.label(week).classes("sft-week sft-over" if over else "sft-week").mark("week-line")
+        for warning in s.warnings:
+          ui.label(warning).classes("sft-error")
 
   def _pin_pad(self, title: str, shown: str, error: str | None) -> None:
     ui.label(title).classes("sft-title")
@@ -661,5 +732,5 @@ class _KioskPage:
             on_click = lambda key=key: self._controller.digit(key)  # one binding per key
         # Typed as taking nothing: NiceGUI passes the click event only to a parameter without a default.
         guarded: Callable[[], object] = lambda c=on_click: self._guarded(c)
-        ui.button(key, on_click=guarded).classes("sft-key").props("unelevated")
+        ui.button(key, on_click=guarded, color=None).classes("sft-key").props("unelevated")  # color=None: as `_button`
     self._button(text.CANCEL, self._controller.cancel)

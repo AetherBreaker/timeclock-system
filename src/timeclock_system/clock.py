@@ -1,6 +1,6 @@
-"""The clock's domain rules (spec §4.5, §4.6, §6.4-§6.6, §6.11).
+"""The clock's domain rules (spec §4.5, §4.6, §6.4-§6.6).
 
-Punches, PINs, fingerprint bypasses, registration, adding employees, the weekly alert, the gallery and the prune.
+Punches, PINs, fingerprint bypasses, registration, adding employees, the gallery and the prune.
 
 Sync store calls run in `asyncio.to_thread`. The small mirrored tables are cached in memory and reloaded synchronously
 by `notify_changed`.
@@ -19,7 +19,6 @@ from uuid import uuid4
 # Third party imports
 import bcrypt
 from pydantic import SecretBytes, SecretStr
-from timeclock_schema.alerts import AlertContext, Firing, fired_hooks
 from timeclock_schema.enums import (
   BypassReason,
   EmployeeRole,
@@ -142,6 +141,8 @@ class HoursSummary:
 
   week: timedelta
   """Worked plus paid break time, this week."""
+  week_limit: timedelta
+  """`weekly_hours_alert` as a duration: the hours line's limit."""
   today: timedelta
   """Worked plus paid break time, today."""
   breaks: timedelta | None
@@ -169,12 +170,13 @@ class MenuInfo:
 
 @dataclass(frozen=True)
 class PunchOutcome:
-  """A stored punch with the warnings its rules raised and the alert hooks it reached (§6.11)."""
+  """A stored punch with the warnings its rules raised, the hours after it, and who punched."""
 
   punch: Punch
   warnings: tuple[str, ...]
   hours: HoursSummary
-  firings: tuple[Firing, ...]
+  name: str
+  """`Employee.display_name`, for the after-punch screen."""
 
 
 class EmployeeBlockFull(Exception):  # noqa: N818  # a domain signal shown to the admin, like PunchRefused
@@ -410,6 +412,10 @@ class Clock:
     s = self._settings
     # A switched-off lunch or break hides only its start: someone already on one can still end it.
     off = {k for k, on in ((PunchKind.LUNCH_START, s.lunches_enabled), (PunchKind.BREAK_START, s.breaks_enabled)) if not on}
+    # A break or lunch menu offers only the way back to work (owner, 2026-11-13). record_punch still takes a clock-out from
+    # one, as the timeline allows it: a menu drawn before a break started on another clock can still send it.
+    if timeline.state in (EmployeeState.ON_BREAK, EmployeeState.AT_LUNCH):
+      off.add(PunchKind.CLOCK_OUT)
     valid = tuple(k for k in timeline.valid_next if k not in off)
     hours = self._hours_summary(punches, corrections, now)
     is_admin = e.active and e.role is EmployeeRole.ADMIN
@@ -432,6 +438,7 @@ class Clock:
         lengths.extend((now if i.end is None else i.end) - i.start for i in spans if i.start >= day_start)
     return HoursSummary(
       week=week.worked + week.paid_break,
+      week_limit=timedelta(seconds=int(s.weekly_hours_alert * 3600)),  # two decimal places fit whole seconds
       today=day.worked + day.paid_break,
       breaks=sum(breaks, timedelta()) if s.breaks_enabled or breaks else None,
       last_break=breaks[-1] if breaks else timedelta(),
@@ -503,9 +510,7 @@ class Clock:
         cb(p)
     self.notify_changed({"punches"})
     punches = [*punches, *written]
-    # Alerts only inform; nothing here can refuse the punch (§2).
-    firings = fired_hooks(AlertContext(employee_id, punches, corrections, self._settings, self._tz, now))
-    return PunchOutcome(punch, warnings, self._hours_summary(punches, corrections, now), firings)
+    return PunchOutcome(punch, warnings, self._hours_summary(punches, corrections, now), e.display_name)
 
   async def record_scan(self, scan: ScanReport) -> UUID | None:
     """Store a scan in the log; a matched one stays open until `settle_scan`. Never raises: the log must not stop a punch.

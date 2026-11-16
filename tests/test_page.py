@@ -1,7 +1,7 @@
 # Standard library imports
 import asyncio
 import json
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from importlib.metadata import version
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
@@ -15,7 +15,7 @@ from nicegui.events import GenericEventArguments
 from nicegui.testing import user_simulation
 from pydantic import SecretBytes, SecretStr
 from timeclock_schema.enums import EmployeeRole, Finger, PunchKind
-from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group
+from timeclock_schema.models import BusinessHours, Employee, Fingerprint, Group, Punch, Settings
 
 # First party imports
 from timeclock_system.clock import Clock
@@ -29,7 +29,7 @@ from timeclock_system.ui.page import build_root
 
 if TYPE_CHECKING:
   # Standard library imports
-  from collections.abc import AsyncIterator, Sequence
+  from collections.abc import Iterator, Sequence
   from pathlib import Path
 
   # Third party imports
@@ -60,7 +60,7 @@ class RecordingReader:
 
 
 @pytest.fixture
-async def controller(tmp_path: Path) -> AsyncIterator[KioskController]:
+def store(tmp_path: Path) -> Iterator[LocalStore]:
   store = LocalStore(tmp_path / "clock.sqlite3")
   pin_hash = SecretStr(bcrypt.hashpw(b"1234", bcrypt.gensalt(rounds=4)).decode())
   store.replace_table(
@@ -80,10 +80,20 @@ async def controller(tmp_path: Path) -> AsyncIterator[KioskController]:
       Fingerprint(id=print_id, employee_id=employee_id, finger=finger, template=SecretBytes(b"t"), registered_at=NOW, instance_id="1"),
       origin="db",
     )
+  yield store
+  store.close()
+
+
+@pytest.fixture
+async def clock(store: LocalStore) -> Clock:
   clock = Clock(store, instance_id="1", clock_number=1, tz=NY, alert=lambda _s, _b: None)
   await clock.load()
-  yield KioskController(clock, RecordingReader(), tz=NY, status_dir=tmp_path / "status")
-  store.close()
+  return clock
+
+
+@pytest.fixture
+def controller(clock: Clock, tmp_path: Path) -> KioskController:
+  return KioskController(clock, RecordingReader(), tz=NY, status_dir=tmp_path / "status")
 
 
 def offline() -> DbStatus:
@@ -119,6 +129,98 @@ async def test_menu_shows_valid_punch_buttons(controller: KioskController, tmp_p
     await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
     await user.should_see("Ann")
     await user.should_see("Clock in")
+    await user.should_not_see("Clock out")
+
+
+def ann_punched(store: LocalStore, *punches: tuple[PunchKind, timedelta]) -> None:
+  """Store Ann's punches, each at that long before now (the page's own clock runs on real time)."""
+  for kind, ago in punches:
+    store.insert_punch(Punch(id=uuid4(), employee_id=1, kind=kind, at=datetime.now(UTC) - ago, instance_id="1"), origin="db")
+
+
+def test_no_button_is_white() -> None:
+  # Owner, 2026-11-16: white with black text looked harsh; plain buttons and PIN keys are yellow with black text.
+  css = page._THEME_CSS  # pyright: ignore[reportPrivateUsage]
+  assert "background: var(--sft-white)" not in css
+  assert ".sft-punch, .sft-plain { background: var(--sft-yellow) !important;" in css
+  assert ".sft-key { min-height: 72px; min-width: 96px; font-size: 2rem; background: var(--sft-yellow) !important;" in css
+
+
+def test_punch_buttons_in_a_row_keep_their_full_tap_margin() -> None:
+  # The row's 32 px gap leaves room for 12 px each side; the 16 px rows' split (-8 px) must not apply to it.
+  css = page._THEME_CSS  # pyright: ignore[reportPrivateUsage]
+  rule = ".nicegui-row > .sft-button.sft-kind::after { left: -12px; right: -12px; }"
+  assert rule in css
+  assert css.index(rule) > css.index(".nicegui-row > .sft-button:has(+ .sft-button)::after")  # same specificity: later wins
+
+
+async def test_the_after_punch_screen_lines_up_with_the_menu(controller: KioskController, tmp_path: Path) -> None:
+  # The menu's column sits in the page's 1rem padding; the fixed tap layer doesn't, so it pads 16 px more (pt-12 vs pt-8).
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await controller.punch(PunchKind.CLOCK_IN)
+    await user.should_see("CLOCKED IN")
+    [layer] = user.find(marker="confirm-tap").elements
+    assert "pt-12" in layer.classes
+
+
+def button(user: User, label: str) -> ui.button:
+  [found] = user.find(kind=ui.button, content=label).elements
+  return found
+
+
+async def test_a_clocked_out_menu_shows_the_gray_bar_and_clock_in(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("CLOCKED OUT")
+    [bar] = user.find(marker="state-bar").elements
+    assert {"sft-state", "sft-state-off"} <= set(bar.classes)
+    await user.should_not_see(marker="state-since")
+    [week] = user.find(marker="week-line").elements
+    assert cast("ui.label", week).text == "40 hr left to 40 hours this week"
+    assert "sft-over" not in week.classes
+    clock_in = button(user, "Clock in")
+    assert {"sft-kind", "sft-kind-in"} <= set(clock_in.classes)
+    assert clock_in.props["icon"] == "login"
+
+
+async def test_a_working_menu_docks_clock_out(controller: KioskController, store: LocalStore, tmp_path: Path) -> None:
+  ann_punched(store, (PunchKind.CLOCK_IN, timedelta(hours=2)))
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("CLOCKED IN")
+    assert shown_text(user, "state-since").startswith("since ")
+    assert "sft-kind-break" in button(user, "Start break").classes
+    assert "sft-kind-lunch" in button(user, "Start lunch").classes
+    assert {"sft-kind-out", "sft-docked"} <= set(button(user, "Clock out").classes)
+
+
+async def test_with_breaks_and_lunches_off_clock_out_is_centred(
+  controller: KioskController, clock: Clock, store: LocalStore, tmp_path: Path
+) -> None:
+  store.set_settings(Settings(breaks_enabled=False, lunches_enabled=False))
+  clock.notify_changed({"settings"})
+  ann_punched(store, (PunchKind.CLOCK_IN, timedelta(hours=2)))
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("Clock out")
+    classes = set(button(user, "Clock out").classes)
+    assert "sft-kind-out" in classes
+    assert "sft-docked" not in classes
+
+
+async def test_a_long_break_shows_hours_and_no_clock_out(controller: KioskController, store: LocalStore, tmp_path: Path) -> None:
+  ann_punched(store, (PunchKind.CLOCK_IN, timedelta(hours=3)), (PunchKind.BREAK_START, timedelta(minutes=65)))
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await user.should_see("ON BREAK")
+    assert shown_text(user, "state-since").endswith("· 1 hr 5 min")
+    await user.should_see("End break")
     await user.should_not_see("Clock out")
 
 
@@ -181,6 +283,19 @@ async def test_a_double_tap_anywhere_ends_the_confirmation(controller: KioskCont
     user.find(marker="confirm-tap").click()
     user.find(marker="confirm-tap").click()
     await user.should_see(text.IDLE_READY)
+
+
+async def test_the_after_punch_screen_shows_the_new_state(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
+    await controller.punch(PunchKind.CLOCK_IN)
+    await user.should_see("CLOCKED IN")
+    [bar] = user.find(marker="state-bar").elements
+    assert "sft-state-working" in bar.classes
+    assert shown_text(user, "state-since").startswith("Clocked in at")
+    await user.should_see("Ann Lee")
+    assert shown_text(user, "week-line").endswith("left to 40 hours this week")
 
 
 def shown_text(user: User, marker: str) -> str:
@@ -454,6 +569,19 @@ async def test_the_keypad_and_gear_carry_their_touch_classes(controller: KioskCo
     grids = user.find(ui.grid).elements
     assert grids
     assert all("sft-pad" in e.classes for e in grids)
+
+
+async def test_buttons_take_their_color_from_the_stylesheet(controller: KioskController, tmp_path: Path) -> None:
+  # A Quasar `color` prop paints bg-primary over the `.sft-*` rules; only the flat gear keeps the theme's blue.
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    assert all(e.props.get("color") == "primary" for e in user.find(marker="gear").elements)
+    [use_pin] = user.find(kind=ui.button, content=text.USE_PIN).elements
+    assert "color" not in use_pin.props
+    user.find(kind=ui.button, content=text.USE_PIN).click()
+    await user.should_see(text.ENTER_USERNAME)
+    [key] = user.find(kind=ui.button, content="1").elements
+    assert "color" not in key.props
 
 
 async def test_the_version_sits_below_the_reader_line(controller: KioskController, tmp_path: Path) -> None:

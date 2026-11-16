@@ -4,6 +4,7 @@
 import dataclasses
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -13,7 +14,6 @@ import bcrypt
 import pytest
 from pydantic import BaseModel, SecretBytes, SecretStr
 from timeclock_schema import rules as schema_rules
-from timeclock_schema.alerts import WEEKLY_HOURS
 from timeclock_schema.enums import (
   BypassReason,
   CorrectionAction,
@@ -121,7 +121,7 @@ async def test_inactive_employee_finishes_their_shift_but_cannot_clock_in(env: E
   env.store.insert_punch(punch_at(3, PunchKind.CLOCK_IN, T - timedelta(hours=2)), origin="db")
   assert (await env.clock.menu_info(3)).valid_next == (PunchKind.CLOCK_OUT, PunchKind.BREAK_START, PunchKind.LUNCH_START)
   await env.clock.record_punch(3, PunchKind.BREAK_START)
-  assert (await env.clock.menu_info(3)).valid_next == (PunchKind.BREAK_END, PunchKind.CLOCK_OUT)
+  assert (await env.clock.menu_info(3)).valid_next == (PunchKind.BREAK_END,)
   env.now += timedelta(minutes=10)
   await env.clock.record_punch(3, PunchKind.BREAK_END)
   env.now += timedelta(minutes=10)
@@ -179,6 +179,30 @@ async def test_menu_info_since_is_the_last_event_at_lunch_and_none_when_off(env:
   info = await env.clock.menu_info(1)
   assert info.state is EmployeeState.AT_LUNCH
   assert info.since == T - timedelta(hours=1)
+
+
+@pytest.mark.parametrize(
+  ("start", "end"), [(PunchKind.BREAK_START, PunchKind.BREAK_END), (PunchKind.LUNCH_START, PunchKind.LUNCH_END)]
+)
+async def test_a_break_or_lunch_menu_offers_only_its_end(env: Env, start: PunchKind, end: PunchKind) -> None:
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=3)), origin="db")
+  env.store.insert_punch(punch_at(1, start, T - timedelta(minutes=10)), origin="db")
+  assert (await env.clock.menu_info(1)).valid_next == (end,)
+
+
+async def test_a_clock_out_from_a_break_still_records(env: Env) -> None:
+  # The menu no longer offers it, but a menu drawn before a break started on another clock can still send it.
+  env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, T - timedelta(hours=3)), origin="db")
+  env.store.insert_punch(punch_at(1, PunchKind.BREAK_START, T - timedelta(minutes=10)), origin="db")
+  outcome = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
+  assert outcome.punch.kind is PunchKind.CLOCK_OUT
+
+
+async def test_the_hours_carry_the_weekly_limit(env: Env) -> None:
+  assert (await env.clock.menu_info(1)).hours.week_limit == timedelta(hours=40)
+  env.store.set_settings(Settings(weekly_hours_alert=Decimal("37.5")))
+  env.clock.notify_changed({"settings"})
+  assert (await env.clock.menu_info(1)).hours.week_limit == timedelta(hours=37, minutes=30)
 
 
 async def test_a_punch_stamped_later_than_now_waits_for_its_time(env: Env) -> None:
@@ -704,18 +728,8 @@ async def test_hours_summary_counts_the_calendar_day(env: Env) -> None:
   assert (ended.breaks, ended.last_break, ended.on_break) == (timedelta(minutes=27), timedelta(minutes=12), False)
 
 
-async def test_a_punch_reaching_the_weekly_threshold_fires_the_hook(env: Env) -> None:
-  monday = datetime(2026, 10, 26, 8, tzinfo=NY)
-  for day in range(4):
-    env.store.insert_punch(punch_at(1, PunchKind.CLOCK_IN, monday + timedelta(days=day)), origin="db")
-    env.store.insert_punch(punch_at(1, PunchKind.CLOCK_OUT, monday + timedelta(days=day, hours=9.5)), origin="db")
-  env.now = monday + timedelta(days=4)
-  under = await env.clock.record_punch(1, PunchKind.CLOCK_IN)  # 38 h
-  assert under.firings == ()
-  env.now += timedelta(hours=3)
-  over = await env.clock.record_punch(1, PunchKind.CLOCK_OUT)
-  assert over.hours.week == timedelta(hours=41)
-  assert [(f.hook.alert, f.limit) for f in over.firings] == [(WEEKLY_HOURS, timedelta(hours=40))]
+async def test_record_punch_names_who_punched(env: Env) -> None:
+  assert (await env.clock.record_punch(1, PunchKind.CLOCK_IN)).name == "Emp 1"
 
 
 def scan_report(result: ScanResult = ScanResult.MATCHED) -> ScanReport:
