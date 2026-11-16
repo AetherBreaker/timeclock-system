@@ -101,27 +101,35 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
    Clock in button is the red-green colorblind pair. */
 :root { --sft-working: #38753B; --sft-break: #386BA8; --sft-lunch: #D98826; --sft-clocked-out: #4A4641;
   --sft-clock-out: #BC2F3B; }
-.sft-state { position: fixed; left: 0; right: 0; top: 84px; height: 168px; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 8px; color: var(--sft-white); }
-.sft-state-word { font-size: 96px; line-height: 1; font-weight: 800; letter-spacing: 4px; }
-.sft-state-since { font-size: 32px; line-height: 1.2; font-weight: 500; }
+/* Sized from the 1920x1080 mockups, scaled to the screen (owner, 2026-11-16; the 1366x768 clocks lost Clock out off the
+   bottom): one design px is --sx across and --sy down, so widths follow the screen's width and heights its height (a
+   differently shaped screen squashes or stretches them); text and icons take the smaller, --st, so they always fit.
+   Boxes set only minimums, so a box grows around its text rather than clip it. */
+:root { --sx: calc(100vw / 1920); --sy: calc(100vh / 1080); --st: min(var(--sx), var(--sy)); }
+.sft-state { position: fixed; left: 0; right: 0; top: calc(84 * var(--sy)); min-height: calc(168 * var(--sy));
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: calc(8 * var(--sy));
+  color: var(--sft-white); }
+.sft-state-word { font-size: calc(96 * var(--st)); line-height: 1; font-weight: 800; letter-spacing: calc(4 * var(--st)); }
+.sft-state-since { font-size: calc(32 * var(--st)); line-height: 1.2; font-weight: 500; }
 .sft-state-off { background: var(--sft-clocked-out); }
 .sft-state-working { background: var(--sft-working); }
 .sft-state-on_break { background: var(--sft-break); }
 .sft-state-at_lunch { background: var(--sft-lunch); color: var(--sft-black); }
-/* The name's top at 288 px, under the bar: on the menu, the page's 1rem padding + the screen's pt-8 + 240; the after-punch
-   layer is fixed outside that padding, so it pads pt-12 instead. */
-.sft-below-state { margin-top: 240px; }
-.sft-week { font-size: 30px; }
+/* The name's top at 288 design px, under the bar. Above it sit 48 px: on the menu, the page's 1rem padding + the
+   screen's pt-8; the after-punch layer is fixed outside that padding, so it pads pt-12 instead. */
+.sft-below-state { margin-top: calc(288 * var(--sy) - 48px); gap: calc(48 * var(--sy)); }
+.sft-name { font-size: calc(40 * var(--st)); font-weight: 600; }
+.sft-week { font-size: calc(30 * var(--st)); }
 .sft-over { color: var(--sft-yellow); }
-.sft-button.sft-kind { min-height: 112px; min-width: 380px; padding: 0 40px; border-radius: 12px; font-size: 36px;
-  font-weight: 600; color: var(--sft-white); }
-.sft-button.sft-kind .q-icon { font-size: 44px; }
+.sft-punch-row { gap: calc(32 * var(--sx)); }
+.sft-button.sft-kind { min-height: calc(112 * var(--sy)); min-width: calc(380 * var(--sx)); padding: 0 calc(40 * var(--sx));
+  border-radius: calc(12 * var(--st)); font-size: calc(36 * var(--st)); font-weight: 600; color: var(--sft-white); }
+.sft-button.sft-kind .q-icon { font-size: calc(44 * var(--st)); }
 .sft-button.sft-kind-in { background: var(--sft-working); }
 .sft-button.sft-kind-out { background: var(--sft-clock-out); }
 .sft-button.sft-kind-break { background: var(--sft-break); }
 .sft-button.sft-kind-lunch { background: var(--sft-lunch); color: var(--sft-black); }
-.sft-button.sft-docked { position: fixed; right: 64px; top: 720px; }
+.sft-button.sft-docked { position: fixed; right: calc(64 * var(--sx)); top: calc(720 * var(--sy)); }
 .reader-ready { color: var(--sft-yellow); }
 .reader-scanning { color: var(--sft-blue); }
 .reader-read { color: var(--sft-read-green); }
@@ -133,13 +141,13 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 .reader-message-unrecognized { color: var(--sft-orange); }
 /* Taps land up to 12 px past a button's drawn edge (owner, 2026-11-11), on ::after since Quasar draws a button's shadow
    with ::before. In the 16 px rows and columns the gap splits down the middle, so no two areas overlap; the punch row's
-   32 px gap has room for the full 12 px. */
+   scaled gap (32 design px) gives each side up to 12 px, half the gap once it's under 24 px. */
 .sft-button::after, .sft-key::after { content: ""; position: absolute; inset: -12px; }
 .nicegui-row > .sft-button + .sft-button::after { left: -8px; }
 .nicegui-row > .sft-button:has(+ .sft-button)::after { right: -8px; }
 .nicegui-column > .sft-button + .sft-button::after { top: -8px; }
 .nicegui-column > .sft-button:has(+ .sft-button)::after { bottom: -8px; }
-.nicegui-row > .sft-button.sft-kind::after { left: -12px; right: -12px; }
+.nicegui-row > .sft-button.sft-kind::after { left: calc(-1 * min(12px, 16 * var(--sx))); right: calc(-1 * min(12px, 16 * var(--sx))); }
 .sft-pad > .sft-key::after { inset: -4px; }
 .sft-pad > .sft-key:nth-child(3n+1)::after { left: -12px; }
 .sft-pad > .sft-key:nth-child(3n)::after { right: -12px; }
@@ -497,11 +505,11 @@ class _KioskPage:
         ui.label(value).classes("text-right")
     # Clock out docks on the right, below the break and lunch row (owner, 2026-11-13), unless it's the only punch.
     row = tuple(k for k in info.valid_next if k is not PunchKind.CLOCK_OUT) or info.valid_next
-    with ui.column().classes("sft-below-state items-center gap-12"):
-      ui.label(info.name).classes("sft-title")
+    with ui.column().classes("sft-below-state items-center"):
+      ui.label(info.name).classes("sft-name")
       week, over = text.week_line(info.hours)
       ui.label(week).classes("sft-week sft-over" if over else "sft-week").mark("week-line")
-      with ui.row().classes("gap-8"):
+      with ui.row().classes("sft-punch-row"):
         for kind in row:
           color, icon = _PUNCH_STYLE[kind]
           self._button(
@@ -709,8 +717,8 @@ class _KioskPage:
         for label, value in text.hours_lines(s.hours):
           ui.label(label)
           ui.label(value).classes("text-right")
-      with ui.column().classes("sft-below-state items-center gap-12"):
-        ui.label(s.name).classes("sft-title")
+      with ui.column().classes("sft-below-state items-center"):
+        ui.label(s.name).classes("sft-name")
         week, over = text.week_line(s.hours)
         ui.label(week).classes("sft-week sft-over" if over else "sft-week").mark("week-line")
         for warning in s.warnings:

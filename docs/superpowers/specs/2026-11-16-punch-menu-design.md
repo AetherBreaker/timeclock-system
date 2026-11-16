@@ -34,7 +34,11 @@ button press.
 
 ## Constraints
 
-- A 1920×1080 touchscreen in a kiosk browser; NiceGUI 3.18 on Quasar. Sizes below are the mockups' CSS px.
+- Touchscreens of different sizes in a kiosk browser (main-office 1920×1080, main-warehouse and dev 1366×768); NiceGUI
+  3.18 on Quasar. Sizes below are the 1920×1080 mockups' px, scaled to the screen (owner, 2026-11-16): widths and
+  horizontal positions by the screen's width ÷ 1920, heights and vertical positions by its height ÷ 1080 (a differently
+  shaped screen squashes or stretches them), text and icons by the smaller of the two. Boxes set minimums only, so each
+  grows around its text rather than clip it. The hours table, Cancel and the gear keep their fixed sizes.
 - `ui.button`'s `color` defaults to `"primary"`, which Quasar draws as `bg-primary text-white` (#5898D4) over the
   `.sft-punch`/`.sft-plain`/`.sft-key` rules. So every button on the device is that blue, and the yellow and white never
   showed.
