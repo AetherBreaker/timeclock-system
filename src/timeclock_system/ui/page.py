@@ -411,8 +411,12 @@ class _KioskPage:
     except Exception as e:  # noqa: BLE001  # handed on, not swallowed
       self._on_error(e)
 
-  def _button(self, label: str, on_click: Callable[[], object], kind: str = "sft-plain") -> None:
-    ui.button(label, on_click=lambda: self._guarded(on_click)).classes(f"sft-button {kind}").props("unelevated no-caps")
+  def _button(self, label: str, on_click: Callable[[], object], kind: str = "sft-plain", *, icon: str | None = None) -> None:
+    # color=None: NiceGUI's default "primary" has Quasar draw bg-primary text-white over the `.sft-*` rules, which left
+    # every button blue.
+    ui.button(label, icon=icon, color=None, on_click=lambda: self._guarded(on_click)).classes(f"sft-button {kind}").props(
+      "unelevated no-caps"
+    )
 
   def _gear(self) -> None:
     # On the idle screen and the punch menu only; above the idle screen's tap layer (z-10), so tapping it isn't an idle tap.
@@ -661,5 +665,5 @@ class _KioskPage:
             on_click = lambda key=key: self._controller.digit(key)  # one binding per key
         # Typed as taking nothing: NiceGUI passes the click event only to a parameter without a default.
         guarded: Callable[[], object] = lambda c=on_click: self._guarded(c)
-        ui.button(key, on_click=guarded).classes("sft-key").props("unelevated")
+        ui.button(key, on_click=guarded, color=None).classes("sft-key").props("unelevated")  # color=None: as `_button`
     self._button(text.CANCEL, self._controller.cancel)

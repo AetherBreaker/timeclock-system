@@ -456,6 +456,19 @@ async def test_the_keypad_and_gear_carry_their_touch_classes(controller: KioskCo
     assert all("sft-pad" in e.classes for e in grids)
 
 
+async def test_buttons_take_their_color_from_the_stylesheet(controller: KioskController, tmp_path: Path) -> None:
+  # A Quasar `color` prop paints bg-primary over the `.sft-*` rules; only the flat gear keeps the theme's blue.
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    assert all(e.props.get("color") == "primary" for e in user.find(marker="gear").elements)
+    [use_pin] = user.find(kind=ui.button, content=text.USE_PIN).elements
+    assert "color" not in use_pin.props
+    user.find(kind=ui.button, content=text.USE_PIN).click()
+    await user.should_see(text.ENTER_USERNAME)
+    [key] = user.find(kind=ui.button, content="1").elements
+    assert "color" not in key.props
+
+
 async def test_the_version_sits_below_the_reader_line(controller: KioskController, tmp_path: Path) -> None:
   # In the very bottom-left corner, the reader line about 12 px above it; both 16 px from the left edge.
   async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
