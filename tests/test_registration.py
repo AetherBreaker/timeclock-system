@@ -100,11 +100,19 @@ def test_clean_set_done():
     (minutiae(cx=5), Failure.OFF_CENTRE),
   ],
 )
-def test_failing_press_replaced(points: Minutiae, failure: Failure):
+def test_failing_press_replaced_at_once(points: Minutiae, failure: Failure):
+  # Its own checks need no other press: the count rises and its advice shows before five are in (owner, 2026-11-17).
   session = start()
   presses = [press(i, points=points if i == ODD else None) for i in range(PRESSES)]
-  assert run(session, presses)[-1] == NextPress(failure)
+  assert run(session, presses) == [NextPress(None)] * ODD + [NextPress(failure)] + [NextPress(None)] * (PRESSES - ODD - 1)
+  assert (session.replaced, [p.press_id for p in session.kept]) == (1, [0, 1, 3, 4])
   assert session.add(press(5)) == Done(chosen=(0, 1, 3, 4, 5), flagged=())
+
+
+def test_a_first_press_failing_is_replaced_before_any_other():
+  session = start()
+  assert session.add(press(0, points=minutiae(cx=5))) == NextPress(Failure.OFF_CENTRE)
+  assert (session.replaced, session.kept) == (1, ())
 
 
 def test_disagreeing_press_replaced():
@@ -117,10 +125,11 @@ def test_disagreeing_press_replaced():
 def test_edge_touch_is_off_centre_before_short_of_detail():
   edge = minutiae(S.registration_min_detail_points - 1, cx=5)
   presses = [press(i, points=edge if i == ODD else None) for i in range(PRESSES)]
-  assert run(start(), presses)[-1] == NextPress(Failure.OFF_CENTRE)
+  assert run(start(), presses)[ODD] == NextPress(Failure.OFF_CENTRE)
 
 
-def test_worst_replaced_first():
+def test_own_check_failures_go_at_once_disagreement_at_five():
+  # 1 and 2 fail their own checks and go as they come; 3 agrees with none of the others, which only five kept can show.
   session = start()
   presses = [
     press(0),
@@ -128,10 +137,18 @@ def test_worst_replaced_first():
     press(2, points=minutiae(cx=5)),
     press(3, vs_session=dict.fromkeys(range(3), LOW)),
     press(4, vs_session={3: LOW}),
+    press(5, vs_session={3: LOW}),
+    press(6, vs_session={3: LOW}),
   ]
-  assert run(session, presses)[-1] == NextPress(Failure.OFF_CENTRE)
-  assert session.add(press(5, vs_session={3: LOW})) == NextPress(Failure.TOO_FEW)
-  assert session.add(press(6, vs_session={3: LOW})) == NextPress(Failure.DISAGREES)
+  assert run(session, presses) == [
+    NextPress(None),
+    NextPress(Failure.TOO_FEW),
+    NextPress(Failure.OFF_CENTRE),
+    NextPress(None),
+    NextPress(None),
+    NextPress(None),
+    NextPress(Failure.DISAGREES),
+  ]
   assert session.add(press(7, vs_session={3: LOW})) == Done(chosen=(0, 4, 5, 6, 7), flagged=())
 
 
@@ -308,7 +325,7 @@ def test_own_prints_excluded():
 def test_no_gallery():
   session = start()
   presses = [press(i, points=minutiae(cx=5) if i == 0 else None) for i in range(PRESSES)]
-  assert run(session, presses)[-1] == NextPress(Failure.OFF_CENTRE)
+  assert run(session, presses) == [NextPress(Failure.OFF_CENTRE)] + [NextPress(None)] * (PRESSES - 1)
   assert session.add(press(5)) == Done(chosen=(1, 2, 3, 4, 5), flagged=())
 
 
@@ -367,5 +384,5 @@ def test_a_print_first_resembled_by_a_replaced_press_is_still_known():
   off = minutiae(cx=0)
   presses = [press(i, points=off if i == ODD else None, vs_gallery=on_x if i == ODD else None) for i in range(PRESSES)]
   s = start(x)
-  assert run(s, presses)[-1] == NextPress(Failure.OFF_CENTRE)
+  assert run(s, presses)[ODD] == NextPress(Failure.OFF_CENTRE)
   assert s.add(press(5, vs_gallery=on_x, resembled={})) == NextPress(Failure.DISAGREES)

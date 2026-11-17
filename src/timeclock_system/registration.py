@@ -31,10 +31,10 @@ type Minutiae = tuple[tuple[int, int, int], ...]
 
 
 class Failure(StrEnum):
-  """Why a press is replaced, worst first.
+  """Why a press is replaced.
 
-  Off centre first, as centring usually restores missing detail too; then a press failing its own checks before the
-  disagreeing ones, since it drags down the others' agreement. Only `DISAGREES` counts toward giving up: the others are
+  A press failing its own checks (`press_failure`) is replaced as soon as it's judged; `DISAGREES` waits for `PRESSES`
+  kept presses, since a later press may yet agree with it. Only `DISAGREES` counts toward giving up: the others are
   placement, pressure or a wet finger, which the advice corrects.
   """
 
@@ -143,7 +143,7 @@ def failing_presses(p: OtherPrint, settings: Settings) -> frozenset[int]:
 
 
 class Session:
-  """One registration's presses: judged once `PRESSES` are kept, then compared with other people's prints."""
+  """One registration's presses: each checked alone as it comes, then together once `PRESSES` are kept."""
 
   def __init__(self, others: Sequence[OtherRef], settings: Settings) -> None:
     """`others`: every print but the registrant's (a re-registration's old print, their other fingers), in gallery order.
@@ -192,9 +192,10 @@ class Session:
     return tuple(sorted(sorted(self._presses, key=rank, reverse=True)[:PRESSES], key=lambda p: p.press_id))
 
   def add(self, press: Press) -> Verdict:  # noqa: C901, PLR0912, PLR0915  # one decision, read top to bottom
-    """Keep `press`; once `PRESSES` are kept, replace the worst failing one, else judge the finger as a whole.
+    """Replace `press` at once if it fails its own checks, else keep it; once `PRESSES` are kept, judge them together.
 
-    Resemblance pairs a kept press with another person's press scoring at least the resemblance bar. Per other print:
+    Of the kept presses agreeing with too few others, the one agreeing least is replaced; with none, the finger is judged
+    as a whole against other people's prints. Resemblance pairs a kept press with another person's press scoring at least the resemblance bar. Per other print:
     when it mostly fails its own checks, or only its failing (stray) presses are resembled, it's flagged (case B), so no
     careless existing print can fail the registrant's presses. Else the pairs on its stray presses are ignored and the
     rest decide: one kept press alone is replaced (case A). Of several, each agreeing with fewer than
@@ -205,29 +206,29 @@ class Session:
     for pid, other in press.resembled.items():
       if pid not in self._known:
         self._known[pid], self._failing[pid] = other, failing_presses(other, s)
-    self._kept.append(press)
     self._presses.append(press)
+    verdict: Verdict = NextPress(None)
+    outcome = "waiting for more presses"
+    if (own := press_failure(press.minutiae, s)) is not None:
+      # Its own checks need no other press: replaced as it comes, so the count and advice don't wait for five.
+      self._replaced += 1
+      verdict, outcome = NextPress(own), f"replacing press {press.press_id}: {own}"
+    else:
+      self._kept.append(press)
     kept = self._kept
     # agreement[i][j]: press i's with press j, by press_id.
     agreement = {
       p.press_id: {q.press_id: q.vs_session.get(p.press_id, p.vs_session.get(q.press_id, 0)) for q in kept if q is not p} for p in kept
     }
-    verdict: Verdict = NextPress(None)
-    outcome = "waiting for more presses"
-    if len(kept) >= PRESSES:
-      failures: dict[int, Failure] = {}
-      for p in kept:
-        failure = press_failure(p.minutiae, s)
-        if (
-          failure is None
-          and sum(a >= s.registration_agreement_bar for a in agreement[p.press_id].values()) < s.registration_agreement_needed
-        ):
-          failure = Failure.DISAGREES
-        if failure is not None:
-          failures[p.press_id] = failure
+    if len(kept) >= PRESSES:  # only when this press was kept: a replaced one leaves fewer
+      disagreeing = {
+        p.press_id
+        for p in kept
+        if sum(a >= s.registration_agreement_bar for a in agreement[p.press_id].values()) < s.registration_agreement_needed
+      }
       flagged: list[OtherPrint] = []
       similar: list[tuple[int, OtherPrint]] = []
-      if not failures:
+      if not disagreeing:
         for ref in self._others:
           pairs = [
             (p.press_id, j, score)
@@ -245,7 +246,7 @@ class Session:
           if len(failing) * 2 > len(other.presses) or not healthy:
             flagged.append(other)
           elif len(new := {i for i, _ in healthy}) == 1:
-            failures[new.pop()] = Failure.DISAGREES  # case A: the message for a press whose own checks pass
+            disagreeing.add(new.pop())  # case A: the message for a press whose own checks pass
           elif len(new) < len(kept) and (
             strays := [
               i
@@ -254,22 +255,21 @@ class Session:
               < s.registration_agreement_needed
             ]
           ):
-            failures.update(dict.fromkeys(strays, Failure.DISAGREES))  # the registrant's own stray presses
+            disagreeing.update(strays)  # the registrant's own stray presses
           else:
             similar.append((max(score for _, score in healthy), other))
       chosen = tuple(p.press_id for p in kept)
-      if failures:
-        # Lowest agreement: the best score, then the next best (two strays agreeing only with each other tie on the best).
-        worst = min(failures, key=lambda i: (list(Failure).index(failures[i]), sorted(agreement[i].values(), reverse=True)))
-        failure = failures[worst]  # DISAGREES only once no press fails its own checks, which are replaced first and free
-        if failure is Failure.DISAGREES and self._disagreed >= s.registration_disagreement_retries:
-          verdict, outcome = GaveUp(), f"gave up, press {worst} {failure}"
+      if disagreeing:
+        # Lowest agreement: the best score, then the next best (two strays agreeing only with each other tie on the best);
+        # a tie goes to the earlier press.
+        worst = min((i for i in chosen if i in disagreeing), key=lambda i: sorted(agreement[i].values(), reverse=True))
+        if self._disagreed >= s.registration_disagreement_retries:
+          verdict, outcome = GaveUp(), f"gave up, press {worst} {Failure.DISAGREES}"
         else:
           self._replaced += 1
-          if failure is Failure.DISAGREES:
-            self._disagreed += 1
+          self._disagreed += 1
           self._kept = [p for p in kept if p.press_id != worst]
-          verdict, outcome = NextPress(failure), f"replacing press {worst}: {failure}"
+          verdict, outcome = NextPress(Failure.DISAGREES), f"replacing press {worst}: {Failure.DISAGREES}"
       elif similar:
         similar.sort(key=lambda pair: pair[0], reverse=True)  # stable: equal scores keep the gallery's order
         other, *rest = (o for _, o in similar)
@@ -285,7 +285,7 @@ class Session:
       press.press_id,
       len(press.minutiae),
       math.hypot(x - WINDOW[0] / 2, y - WINDOW[1] / 2),
-      max(agreement[press.press_id].values(), default=None),
+      max((q.vs_session.get(press.press_id, press.vs_session.get(q.press_id, 0)) for q in kept if q is not press), default=None),
       best_other,
       outcome,
     )

@@ -627,6 +627,18 @@ async def test_captures_count_before_their_results(kiosk: Kiosk) -> None:
   assert (screen.captured, screen.kept, screen.results_out) == (3, 1, True)
 
 
+async def test_a_press_failing_its_own_checks_raises_the_total_at_once(kiosk: Kiosk) -> None:
+  # Owner, 2026-11-17: a press certain to be replaced adds to the total (PRESSES + replaced) as its result comes in.
+  await bob_registers(kiosk)
+  await kiosk.ctl.on_scanner_event(gallery())
+  await pressed(kiosk, press(0))
+  await pressed(kiosk, press(1, cx=5))
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Registering)
+  assert (screen.captured, screen.kept, screen.replaced) == (2, 1, 1)
+  assert screen.advice == text.PRESS_ADVICE[Failure.OFF_CENTRE]
+
+
 async def test_force_save_waits_for_results(kiosk: Kiosk) -> None:
   # Review Focus: best() and resembled must see every press made, so no forced save while a press's results are out.
   await bob_registers(kiosk)
