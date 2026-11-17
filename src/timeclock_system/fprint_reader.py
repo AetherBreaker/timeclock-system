@@ -250,7 +250,7 @@ def _probe_identify(reader: FprintReader) -> None:
         print(f"press {len(captured)}/5")
       except RetryScan as e:
         print(f"press {len(captured) + 1}/5 (retry: {e})")
-      time.sleep(1.0)  # the scanner's finger_off_pause
+        time.sleep(0.5)  # the scanner's retry_pause; a counted press re-arms at once, as registration does
     template = reader.merge(captured)
     print(f"template_bytes={len(template)}")
     gallery = [GalleryPrint(uuid4(), 0, template, Finger.RIGHT_INDEX)]

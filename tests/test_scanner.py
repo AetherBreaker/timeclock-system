@@ -660,6 +660,33 @@ def test_register_rearms_before_scores_return(make: Callable[..., Harness]) -> N
   assert [h.of(Pressed).press.press_id for _ in range(2)] == [0, 1]
 
 
+def test_register_rearms_without_the_finger_off_pause(make: Callable[..., Harness]) -> None:
+  # A press's capture returns only after the reader saw the lift, so the next press is armed at once (owner, 2026-11-17).
+  h = make(FakeReader(captures=[b"p0", b"p1"]), ScannerTimings(finger_off_pause=10.0), registrant=1)
+  gallery_of(h.event())
+  first_end, _ = h.reader.next_call("capture_end")
+  second_start, _ = h.reader.next_call("capture", timeout=1.0)
+  assert second_start - first_end < 0.5  # noqa: PLR2004
+
+
+@pytest.mark.parametrize(
+  ("capture", "expected"),
+  [(RetryScan("Remove finger"), PressRetry()), (ReaderFailure("usb error"), EnrollFailed("error"))],
+  ids=["retry", "reader error"],
+)
+def test_register_still_pauses_after_a_press_that_failed(
+  make: Callable[..., Harness], capture: Exception, expected: ScannerEvent
+) -> None:
+  # A retry's or a failure's finger may still rest: the retry pause, or before READY's next match, the finger-off pause.
+  timings = ScannerTimings(finger_off_pause=0.3, retry_pause=0.3)
+  h = make(FakeReader(captures=[capture]), timings, registrant=1)
+  gallery_of(h.event())
+  first_end, _ = h.reader.next_call("capture_end")
+  assert h.event() == expected
+  second_start, _ = h.reader.next_call("capture" if isinstance(expected, PressRetry) else "identify")
+  assert second_start - first_end >= 0.3 - TICK
+
+
 def test_captured_then_pressed_in_order(make: Callable[..., Harness]) -> None:
   h = make(FakeReader(captures=[b"p0", b"p1", b"p2"]), FAST, registrant=1)
   gallery_of(h.event())

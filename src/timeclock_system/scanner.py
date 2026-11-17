@@ -247,7 +247,7 @@ class ScannerTimings:
   backoff_max: float = 30.0
   too_hot_pause: float = 60.0
   rearm_every: float = 60.0
-  finger_off_pause: float = 1.0  # after a capture, about twice the 0.54 s tail the spike saw; see _ready_once
+  finger_off_pause: float = 1.0  # after a login or a failed press, about twice the spike's 0.54 s tail; see _ready_once
   failure_limit: float = 180.0  # a ReaderFailure streak this long is fatal
   enroll_idle_timeout: float = 30.0  # a registration's press timeout; it doesn't run while a press's results are out
 
@@ -567,7 +567,7 @@ class Scanner:
       self._last_status = None
     return (early[-1], True) if early else (_decide(capture, gallery, margin, min_score), False)
 
-  def _register_once(self, mode_changes: int) -> None:
+  def _register_once(self, mode_changes: int) -> None:  # noqa: C901  # one press, read top to bottom
     # One capture of the REGISTER session that began at `mode_changes`; the session's first call posts RegisterGallery.
     # A set_mode or stop supersedes the call and posts nothing (its cancel is the user's Cancel, not a failure: R16),
     # while a timed-out press or a reader error ends the session in READY. A capture is posted and handed to the
@@ -604,8 +604,9 @@ class Scanner:
     if add is not None:
       scoring, press_id, probe = add
       scoring.add(press_id, probe)  # outside _lock (module docstring); a no-op if the session ended meanwhile
-    # As _ready_once: a retry's finger may still rest, and a bounce mustn't read as the next press (or, after a failure,
-    # as READY's next match).
+    if isinstance(outcome, Captured):
+      return  # the capture returned after the reader saw the lift: no pause before the next press (owner, 2026-11-17)
+    # A retry's finger may still rest, as may a failed or cancelled press's before READY's next match.
     self._wake.wait(self._timings.retry_pause if isinstance(outcome, PressRetry) else self._timings.finger_off_pause)
 
   def _capture(self, token: CancelToken) -> tuple[bytes | None, PressRetry | EnrollFailed | None]:
