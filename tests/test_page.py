@@ -51,7 +51,8 @@ NOW = datetime(2026, 10, 27, 12, 2, tzinfo=UTC)
 ANN_PRINT, ADA_PRINT = uuid4(), uuid4()
 # The reader's finger signal as the scanner posts it.
 WAITING = FingerStatus(present=False, waiting=True)
-DOWN = FingerStatus(present=True, waiting=False)
+LANDED = FingerStatus(present=True, waiting=True)  # being read
+DOWN = FingerStatus(present=True, waiting=False)  # the image taken
 LIFTED = FingerStatus(present=False, waiting=False)
 
 
@@ -337,9 +338,12 @@ async def test_the_reader_line_shows_live_status_and_messages(controller: KioskC
     await controller.on_scanner_event(WAITING)
     await user.should_see(marker="reader-ready")
     assert shown_text(user, "reader-status") == "Ready"
-    await controller.on_scanner_event(DOWN)
+    await controller.on_scanner_event(LANDED)
     await user.should_see(marker="reader-scanning")
     assert shown_text(user, "reader-status") == "Keep your finger down"
+    await controller.on_scanner_event(DOWN)
+    await user.should_see(marker="reader-lift")
+    assert shown_text(user, "reader-status") == "Lift your finger"
     await controller.on_scanner_event(Matched(print_id=ANN_PRINT, employee_id=1))
     await user.should_see(marker="reader-read")
     assert shown_text(user, "reader-status") == "Lift your finger"
@@ -348,6 +352,15 @@ async def test_the_reader_line_shows_live_status_and_messages(controller: KioskC
     await user.should_see(marker="reader-busy")
     await user.should_not_see(marker="reader-status")
     assert shown_text(user, "reader-message") == "Scan successful", "the message lingers past the live status"
+
+
+async def test_the_reader_line_says_processing_after_an_early_lift(controller: KioskController, tmp_path: Path) -> None:
+  async with user_simulation(build_root(controller, offline, tz=NY, branding_dir=tmp_path, on_error=unexpected_error)) as user:
+    await user.open("/")
+    for status in (WAITING, LANDED, DOWN, LIFTED):
+      await controller.on_scanner_event(status)
+    await user.should_see(marker="reader-processing")
+    assert shown_text(user, "reader-status") == "Processing…"
 
 
 async def test_the_reader_line_shows_on_every_screen(controller: KioskController, tmp_path: Path) -> None:
@@ -410,7 +423,7 @@ async def test_typed_form_text_survives_a_finger_touch_and_errors(controller: Ki
       await asyncio.sleep(0.02)
     phone = next(iter(user.find(marker="field-phone").elements))
     # Review Focus 5: the reader line changes; the form must not be redrawn.
-    await ctl.on_scanner_event(DOWN)
+    await ctl.on_scanner_event(LANDED)
     await user.should_see(marker="reader-scanning")
     assert next(iter(user.find(marker="field-phone").elements)) is phone
     user.find(kind=ui.button, content=text.NEXT).click()

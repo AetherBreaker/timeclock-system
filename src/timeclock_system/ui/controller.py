@@ -99,6 +99,8 @@ class ReaderIndicator(StrEnum):
 
   READY = "ready"  # waiting for a finger: yellow, "Ready"
   SCANNING = "scanning"  # finger down, being read: blue, "Keep your finger down"
+  LIFT = "lift"  # image taken, finger still down, no result yet: blue, "Lift your finger"
+  PROCESSING = "processing"  # a login's finger lifted before its result: blue, "Processing…"
   READ = "read"  # read succeeded, finger still down: green, "Lift your finger"
   UNRECOGNIZED = "unrecognized"  # login read, matched nobody, finger still down: orange, "Lift your finger"
   FAILED = "failed"  # read failed: red, "Couldn't read that, try again"
@@ -532,6 +534,7 @@ class KioskController:
     self._present = False
     self._waiting = False
     self._outcome: ReaderIndicator | None = None  # the press's READ or UNRECOGNIZED; cleared by a new press or the lift
+    self._processing = False  # a login's image is taken and its result not in; registration shows its own (the title)
     self._failed_at: float | None = None  # the last failed read, until a new press or its red ends
     self._message: ReaderMessage | None = None
     self._open_scan: _OpenScan | None = None  # at most one; a new scan settles it first
@@ -564,8 +567,10 @@ class KioskController:
       return ReaderIndicator.PAUSED
     if self._failed_at is not None and (not self._waiting or now - self._failed_at < FAILED_MIN_SECS):
       return ReaderIndicator.FAILED
-    if self._present:
-      return self._outcome or ReaderIndicator.SCANNING
+    if self._present:  # libfprint stops waiting once the image is taken, the finger still down
+      return self._outcome or (ReaderIndicator.SCANNING if self._waiting else ReaderIndicator.LIFT)
+    if self._processing:
+      return ReaderIndicator.PROCESSING
     return ReaderIndicator.READY if self._waiting else ReaderIndicator.BUSY
 
   @property
@@ -719,7 +724,7 @@ class KioskController:
 
   # -- entry points ---------------------------------------------------------------------------------------------
 
-  async def on_scanner_event(self, ev: ScannerEvent) -> None:
+  async def on_scanner_event(self, ev: ScannerEvent) -> None:  # noqa: C901  # one event, read top to bottom
     """Apply one event the scanner posted.
 
     The reader line reports the reader alone; each screen keeps its own error line for who scanned, roles and PINs.
@@ -729,6 +734,8 @@ class KioskController:
       s = self._screen
       message: ReaderMessage | None = None
       scan_id = await self._log_scan(ev)
+      if isinstance(ev, Matched | NoMatch | Retry):
+        self._processing = False
       match ev:
         case FingerStatus():
           self._on_finger_status(s, ev)
@@ -798,6 +805,10 @@ class KioskController:
         write_scan(self._status_dir, self._wall())
       if not isinstance(s, Idle | Confirmation):
         self._screen = replace(s, touched_at=self._mono())
+    if ev.waiting:
+      self._processing = False  # re-armed: a cancelled call's result never comes
+    elif ev.present and (self._waiting or not self._present) and self._mode is ReaderMode.READY:
+      self._processing = True  # the image is taken: a login's result is due
     self._present, self._waiting = ev.present, ev.waiting
 
   async def _on_register(
@@ -813,8 +824,7 @@ class KioskController:
         # the reader, back from the admin's approval, starts a session nobody presses for.
         settings = self._clock.settings().model_copy(update={"registration_resemblance_bar": bar})
         self._screen = replace(s, session=Session(others, settings), kept=0, replaced=0, captured=0, advice=None)
-      case Registering(session=Session(), verdict=None), Captured():
-        self._outcome = ReaderIndicator.READ
+      case Registering(session=Session(), verdict=None), Captured():  # posted after the lift: the indicator said LIFT
         self._screen = replace(s, touched_at=now, captured=s.captured + 1)
         return ReaderMessage(text.SCAN_SUCCESSFUL, "success", now)
       case Registering(session=Session() as session, verdict=None), Pressed(press=press):

@@ -131,7 +131,7 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 .sft-button.sft-kind-lunch { background: var(--sft-lunch); color: var(--sft-black); }
 .sft-button.sft-docked { position: fixed; right: calc(64 * var(--sx)); top: calc(720 * var(--sy)); }
 .reader-ready { color: var(--sft-yellow); }
-.reader-scanning { color: var(--sft-blue); }
+.reader-scanning, .reader-lift, .reader-processing { color: var(--sft-blue); }
 .reader-read { color: var(--sft-read-green); }
 .reader-unrecognized { color: var(--sft-orange); }
 .reader-failed, .reader-paused { color: var(--sft-red); }

@@ -49,6 +49,7 @@ RETRY: Final = "Couldn't read that, try again"
 READER_READY: Final = "Ready"
 READER_SCANNING: Final = "Keep your finger down"
 READER_LIFT: Final = "Lift your finger"
+READER_PROCESSING: Final = "Processing…"
 READER_PAUSED: Final = "Reader paused"
 SCAN_SUCCESSFUL: Final = "Scan successful"
 # The reader line's status, by the controller's ReaderIndicator value.
@@ -56,6 +57,8 @@ READER_STATUS: Final[Mapping[str, str]] = MappingProxyType(
   {
     "ready": READER_READY,
     "scanning": READER_SCANNING,
+    "lift": READER_LIFT,
+    "processing": READER_PROCESSING,
     "read": READER_LIFT,
     "unrecognized": READER_LIFT,
     "failed": RETRY,

@@ -39,6 +39,7 @@ from timeclock_system.sync import DbStatus
 from timeclock_system.ui import controller as controller_module, text
 from timeclock_system.ui.controller import (
   CONFIRM_SECS,
+  FAILED_MIN_SECS,
   IDLE_CLOSE_SECS,
   RESCAN_AFTER_SECS,
   AddEmployeeDetails,
@@ -194,9 +195,11 @@ def matched(employee_id: int) -> Matched:
   return Matched(print_id=MIA_PRINT if employee_id == MIA else ANN_PRINT, employee_id=employee_id)
 
 
-# The reader's finger signal as the scanner posts it.
+# The reader's finger signal as the scanner posts it. libfprint keeps "waiting" while a landed finger is read and clears it
+# once the image is taken (AWAIT_FINGER_OFF), the finger still down.
 WAITING = FingerStatus(present=False, waiting=True)
-DOWN = FingerStatus(present=True, waiting=False)
+LANDED = FingerStatus(present=True, waiting=True)
+DOWN = FingerStatus(present=True, waiting=False)  # the image taken
 LIFTED = FingerStatus(present=False, waiting=False)
 
 # Registration presses, judged by the default bars.
@@ -1171,9 +1174,67 @@ async def test_the_indicator_is_dim_until_the_reader_waits(kiosk: Kiosk) -> None
 
 async def test_a_finger_down_shows_scanning(kiosk: Kiosk) -> None:
   await kiosk.ctl.on_scanner_event(WAITING)
-  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(LANDED)
   assert kiosk.ctl.reader_indicator is ReaderIndicator.SCANNING
   assert kiosk.ctl.screen == Idle()
+
+
+async def test_the_image_taken_says_lift_before_the_result(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(WAITING)
+  await kiosk.ctl.on_scanner_event(LANDED)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.LIFT
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READ
+
+
+async def test_a_lift_before_the_result_shows_processing(kiosk: Kiosk) -> None:
+  await kiosk.ctl.on_scanner_event(WAITING)
+  await kiosk.ctl.on_scanner_event(LANDED)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.PROCESSING
+  read_at = kiosk.t.mono
+  await kiosk.ctl.on_scanner_event(matched(ANN))
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.BUSY
+  assert kiosk.ctl.reader_message == ReaderMessage("Scan successful", "success", read_at)
+  await kiosk.ctl.on_scanner_event(WAITING)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
+
+
+@pytest.mark.parametrize("ending", ["no_match", "retry", "rearm"])
+async def test_processing_ends_with_the_call(kiosk: Kiosk, ending: str) -> None:
+  # A cancelled call (the re-arm, a gallery change) never sends its result: the reader's waiting again ends it too.
+  await kiosk.ctl.on_scanner_event(WAITING)
+  await kiosk.ctl.on_scanner_event(LANDED)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  match ending:
+    case "no_match":
+      await kiosk.ctl.on_scanner_event(NoMatch())
+    case "retry":
+      await kiosk.ctl.on_scanner_event(Retry("Center your finger"))
+      kiosk.t.advance(FAILED_MIN_SECS)
+      await kiosk.ctl.on_scanner_event(WAITING)
+    case _:
+      await kiosk.ctl.on_scanner_event(WAITING)
+  assert kiosk.ctl.reader_indicator is not ReaderIndicator.PROCESSING
+
+
+async def test_registration_says_lift_but_never_processing(kiosk: Kiosk) -> None:
+  # Registration keeps taking presses while their results are out: the screen's title says when it waits on them.
+  await bob_registers(kiosk)
+  await kiosk.ctl.on_scanner_event(gallery())
+  await kiosk.ctl.on_scanner_event(WAITING)
+  await kiosk.ctl.on_scanner_event(LANDED)
+  await kiosk.ctl.on_scanner_event(DOWN)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.LIFT
+  await kiosk.ctl.on_scanner_event(LIFTED)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.BUSY
+  await kiosk.ctl.on_scanner_event(Captured(0))
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.BUSY
+  await kiosk.ctl.on_scanner_event(WAITING)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.READY
 
 
 async def test_a_match_shows_read_until_the_lift(kiosk: Kiosk) -> None:
@@ -1255,7 +1316,7 @@ async def test_a_new_finger_ends_the_red_at_once(kiosk: Kiosk) -> None:
   await kiosk.ctl.on_scanner_event(LIFTED)
   await kiosk.ctl.on_scanner_event(Retry("x"))
   kiosk.t.advance(0.3)
-  await kiosk.ctl.on_scanner_event(DOWN)
+  await kiosk.ctl.on_scanner_event(LANDED)
   assert kiosk.ctl.reader_indicator is ReaderIndicator.SCANNING
 
 
@@ -1357,16 +1418,20 @@ async def test_no_messages_where_a_finger_does_nothing(kiosk: Kiosk) -> None:
   assert kiosk.ctl.reader_message is None
 
 
-async def test_registration_presses_are_green_or_red_never_orange(kiosk: Kiosk) -> None:
+async def test_registration_presses_are_lift_or_red_never_orange(kiosk: Kiosk) -> None:
+  # A press is posted only after its lift, so its read shows as LIFT while the finger is down, its success afterwards.
   await kiosk.pin_login(BOB)
   await kiosk.ctl.register()
   await kiosk.ctl.pick_finger(Finger.LEFT_INDEX)
   assert isinstance(kiosk.ctl.screen, Registering)
   await kiosk.ctl.on_scanner_event(gallery())
+  await kiosk.ctl.on_scanner_event(LANDED)
   await kiosk.ctl.on_scanner_event(DOWN)
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.LIFT
+  await kiosk.ctl.on_scanner_event(LIFTED)
   read_at = kiosk.t.mono
   await pressed(kiosk, press(0))
-  assert kiosk.ctl.reader_indicator is ReaderIndicator.READ
+  assert kiosk.ctl.reader_indicator is ReaderIndicator.BUSY
   assert kiosk.ctl.reader_message == ReaderMessage("Scan successful", "success", read_at)
   screen = kiosk.ctl.screen
   assert isinstance(screen, Registering) and screen.kept == 1
