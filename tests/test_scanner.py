@@ -16,13 +16,13 @@ from timeclock_schema.enums import Finger, ScanResult
 
 # First party imports
 from timeclock_system import scanner as scanner_module
-from timeclock_system.registration import OtherPrint, Press
+from timeclock_system.matching import CancelToken, GalleryPrint
+from timeclock_system.registration import OtherPrint, OtherRef, Press
 from timeclock_system.scanner import (
-  CancelToken,
   Capture,
+  Captured,
   EnrollFailed,
   FingerStatus,
-  GalleryPrint,
   Matched,
   Merged,
   NoMatch,
@@ -99,20 +99,15 @@ class FakeReader:
     *,
     default: Outcome = BLOCK,
     captures: Sequence[Outcome] = (),
-    decoded: Mapping[bytes, tuple[Minutiae, ...] | Exception] | None = None,
-    scores: Mapping[tuple[bytes, int, bytes], tuple[int, ...]] | None = None,
     merge_error: Exception | None = None,
   ) -> None:
     """`script` drives identify and `captures` drives capture, each falling back to `default`.
 
-    `decoded`: what `presses` returns (or raises) per template (else `ONE_PRESS`); `scores`: what `score` returns per
-    (press, index, other) (else a 0 per press of `other`); `merge` joins its presses with b"+" unless `merge_error` is set.
+    `merge` joins its presses with b"+" unless `merge_error` is set.
     """
     self.script: deque[Outcome] = deque(script)
     self.default = default
     self.captures: deque[Outcome] = deque(captures)
-    self.decoded = dict(decoded or {})
-    self.scores = dict(scores or {})
     self.merge_error = merge_error
     self.calls: queue.Queue[tuple[str, float, object]] = queue.Queue()
     self.history: list[tuple[str, object]] = []
@@ -181,18 +176,6 @@ class FakeReader:
     finally:
       self._record("capture_end")
 
-  def presses(self, template: bytes) -> tuple[Minutiae, ...]:
-    self._record("presses", template)
-    decoded = self.decoded.get(template, ONE_PRESS)
-    if isinstance(decoded, Exception):
-      raise decoded
-    return decoded
-
-  def score(self, press: bytes, index: int, other: bytes) -> tuple[int, ...]:
-    self._record("score", (press, index, other))
-    decoded = self.decoded.get(other, ONE_PRESS)
-    return self.scores.get((press, index, other), (0,) * (1 if isinstance(decoded, Exception) else len(decoded)))
-
   def merge(self, presses: Sequence[bytes]) -> bytes:
     self._record("merge", tuple(presses))
     if self.merge_error is not None:
@@ -216,17 +199,79 @@ class FakeReader:
         return names
 
 
+class FakeMatching:
+  """Registration's matcher, called from the matcher threads, with a gate to hold its scores back.
+
+  `presses` decodes from `decoded` (else `ONE_PRESS`); `score` returns from `scores` per (press, index, other) (else a 0
+  per press of `other`). While `gate` is clear, `score` waits for it, or for its cancel (then raises ScanCancelled, counted in `cancelled`).
+  `error`, when set, is raised by every call.
+  """
+
+  def __init__(
+    self,
+    *,
+    decoded: Mapping[bytes, tuple[Minutiae, ...]] | None = None,
+    scores: Mapping[tuple[bytes, int, bytes], tuple[int, ...]] | None = None,
+  ) -> None:
+    self.decoded = dict(decoded or {})
+    self.scores = dict(scores or {})
+    self.gate = threading.Event()
+    self.gate.set()
+    self.error: Exception | None = None
+    self.calls: list[tuple[str, object]] = []
+    self.cancelled = 0
+    self._lock = threading.Lock()
+
+  def new_cancel(self) -> FakeToken:
+    return FakeToken()
+
+  def presses(self, template: bytes) -> tuple[Minutiae, ...]:
+    with self._lock:
+      self.calls.append(("presses", template))
+    if self.error is not None:
+      raise self.error
+    return self.decoded.get(template, ONE_PRESS)
+
+  def score(self, press: bytes, index: int, other: bytes, cancel: CancelToken) -> tuple[int, ...]:
+    assert isinstance(cancel, FakeToken)
+    with self._lock:
+      self.calls.append(("score", (press, index, other)))
+    while not self.gate.wait(0.01):
+      if cancel.event.is_set():
+        with self._lock:
+          self.cancelled += 1
+        raise ScanCancelled
+    if self.error is not None:
+      raise self.error
+    return self.scores.get((press, index, other), (0,) * len(self.decoded.get(other, ONE_PRESS)))
+
+
 class Harness:
-  def __init__(self, reader: FakeReader, timings: ScannerTimings, hooked: queue.Queue[BaseException | None]) -> None:
+  def __init__(
+    self, reader: FakeReader, matching: FakeMatching, timings: ScannerTimings, hooked: queue.Queue[BaseException | None]
+  ) -> None:
     self.reader = reader
+    self.matching = matching
     self.events: queue.Queue[ScannerEvent] = queue.Queue()
+    self.held: list[ScannerEvent] = []  # events `of` passed over, for `event` and later `of` calls
     self.hooked = hooked  # what reached threading.excepthook
-    self.scanner = Scanner(reader, self.events.put, timings=timings)
+    self.scanner = Scanner(reader, self.events.put, matching=matching, timings=timings)
 
   def event(self) -> ScannerEvent:
-    return self.events.get(timeout=WAIT)
+    return self.held.pop(0) if self.held else self.events.get(timeout=WAIT)
+
+  def of[E](self, kind: type[E]) -> E:
+    """The next event of `kind`: a press's results arrive from the matcher threads, between the scanner thread's events."""
+    for i, ev in enumerate(self.held):
+      if isinstance(ev, kind):
+        del self.held[i]
+        return ev
+    while not isinstance(ev := self.events.get(timeout=WAIT), kind):
+      self.held.append(ev)
+    return ev
 
   def no_event(self, within: float) -> None:
+    assert self.held == []
     with pytest.raises(queue.Empty):
       self.events.get(timeout=within)
 
@@ -240,6 +285,7 @@ GALLERY = [
 ]
 MARGIN = 15
 MIN_SCORE = 45
+BAR = 40  # the resemblance bar
 PROBE = b"probe-bytes"
 IMAGE = ScanImage(b"pixels", 2, 3)
 
@@ -267,7 +313,10 @@ def no_match(event: ScannerEvent) -> NoMatch:
 
 @pytest.fixture
 def make(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Harness]]:
-  """Build and start a scanner in `mode` (REGISTER for `registrant` if given) with GALLERY; on teardown stop it and check no threads leak."""
+  """Build and start a scanner in `mode` (REGISTER for `registrant` if given) with GALLERY; on teardown stop it and check no threads leak.
+
+  The matcher threads count: stop must end a registration's scoring.
+  """
   harnesses: list[Harness] = []
   hooked: queue.Queue[BaseException | None] = queue.Queue()
   monkeypatch.setattr(threading, "excepthook", lambda args: hooked.put(args.exc_value))
@@ -280,9 +329,11 @@ def make(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Harness]]:
     margin: int = MARGIN,
     registrant: int | None = None,
     min_score: int = MIN_SCORE,
+    matching: FakeMatching | None = None,
+    bar: int = BAR,
   ) -> Harness:
-    harness = Harness(reader, timings, hooked)
-    harness.scanner.set_gallery(GALLERY, margin, min_score)
+    harness = Harness(reader, matching or FakeMatching(), timings, hooked)
+    harness.scanner.set_gallery(GALLERY, margin, min_score, bar)
     if registrant is None:
       harness.scanner.set_mode(mode)
     else:
@@ -295,21 +346,33 @@ def make(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Harness]]:
   for harness in harnesses:
     harness.scanner.stop()
   for thread in threading.enumerate():
-    if thread.name == "scanner" or isinstance(thread, threading.Timer):
+    if thread.name == "scanner" or thread.name.startswith("matcher") or isinstance(thread, threading.Timer):
       thread.join(WAIT)
       assert not thread.is_alive(), thread
 
 
 PAUSE = ScannerTimings(finger_off_pause=0.3)
+SLOW = ScannerTimings(finger_off_pause=10.0)  # a pause no test waits out
+HELD = Status(present=True, waiting=False)  # a finger down, its image taken: the call returns before its lift
 
 
-def test_ready_pauses_after_a_capture_before_rearming(make: Callable[..., Harness]) -> None:
-  # Review Focus 1: libfprint reports no finger after a capture completes, so the 2 s wait (§6.2) is a real pause.
-  h = make(FakeReader([HIT_A, HIT_B]), PAUSE)
-  matched(h.event(), A)
+def test_ready_rearms_at_once_after_a_scan(make: Callable[..., Harness]) -> None:
+  # identify returns after the lift, so no pause before the next scan (owner, 2026-11-17: no delay for any scan).
+  h = make(FakeReader([Status(present=True, waiting=False), Early(HIT_A), Status(present=False, waiting=False), HIT_A, HIT_B]), SLOW)
   first_end, _ = h.reader.next_call("identify_end")
-  second_start, _ = h.reader.next_call("identify")
-  assert second_start - first_end >= 0.25  # noqa: PLR2004
+  second_start, _ = h.reader.next_call("identify", timeout=1.0)
+  assert second_start - first_end < 0.5  # noqa: PLR2004
+
+
+def test_a_cancel_after_the_lift_rearms_at_once(make: Callable[..., Harness]) -> None:
+  # The finger already lifted when the gallery change cut the call short: nothing rests to be read again.
+  h = make(FakeReader([Status(present=True, waiting=False), Early(HIT_A), Status(present=False, waiting=False), BLOCK]), SLOW)
+  h.reader.next_call("identify")
+  matched(h.of(Matched), A)
+  cancelled = time.monotonic()
+  h.scanner.set_gallery(GALLERY[1:], MARGIN, MIN_SCORE, BAR)
+  started, _ = h.reader.next_call("identify", timeout=1.0)
+  assert started - cancelled < 0.5  # noqa: PLR2004
 
 
 def test_a_mode_change_ends_the_pause(make: Callable[..., Harness]) -> None:
@@ -442,7 +505,7 @@ def test_set_gallery_restarts_identify_with_the_new_gallery(make: Callable[..., 
   h = make(FakeReader())
   _, gallery = h.reader.next_call("identify")
   assert gallery == tuple(GALLERY)
-  h.scanner.set_gallery(GALLERY[1:], MARGIN, MIN_SCORE)
+  h.scanner.set_gallery(GALLERY[1:], MARGIN, MIN_SCORE, BAR)
   _, gallery = h.reader.next_call("identify")
   assert gallery == tuple(GALLERY[1:])
   h.no_event(0.0)
@@ -452,7 +515,7 @@ def test_set_gallery_with_an_equal_gallery_does_not_restart(make: Callable[..., 
   # Every echoed punch rebuilds the gallery; an unchanged one must not cut a capture in progress (R6).
   h = make(FakeReader())
   h.reader.next_call("identify")
-  h.scanner.set_gallery([GalleryPrint(p.print_id, p.employee_id, p.template, p.finger) for p in GALLERY], MARGIN, MIN_SCORE)
+  h.scanner.set_gallery([GalleryPrint(p.print_id, p.employee_id, p.template, p.finger) for p in GALLERY], MARGIN, MIN_SCORE, BAR)
   with pytest.raises(queue.Empty):
     h.reader.next_call("identify_end", timeout=0.3)
 
@@ -462,7 +525,7 @@ def test_set_gallery_with_a_reordered_gallery_applies_from_the_next_identify(mak
   # where the cancel is dropped and the call waits for the next press (main-warehouse, 2026-11-05).
   h = make(FakeReader(), ScannerTimings(rearm_every=0.5))
   h.reader.next_call("identify")
-  h.scanner.set_gallery(GALLERY[::-1], MARGIN, MIN_SCORE)
+  h.scanner.set_gallery(GALLERY[::-1], MARGIN, MIN_SCORE, BAR)
   with pytest.raises(queue.Empty):
     h.reader.next_call("identify_end", timeout=0.3)
   _, gallery = h.reader.next_call("identify")  # after the re-arm
@@ -499,13 +562,15 @@ def test_an_early_no_match_is_posted_once(make: Callable[..., Harness]) -> None:
 
 def test_a_cancel_after_an_early_result_is_no_failure_and_still_pauses(make: Callable[..., Harness]) -> None:
   # Review Focus 1: a finger resting after a match until the call is cancelled isn't read again at once.
-  h = make(FakeReader([Early(HIT_A), BLOCK]), ScannerTimings(finger_off_pause=0.3))
+  h = make(FakeReader([HELD, Early(HIT_A), BLOCK]), ScannerTimings(finger_off_pause=0.3))
   h.reader.next_call("identify")
-  matched(h.event(), A)
+  matched(h.of(Matched), A)
   cancelled = time.monotonic()
-  h.scanner.set_gallery(GALLERY[1:], MARGIN, MIN_SCORE)  # cancels the call still waiting for the lift
+  h.scanner.set_gallery(GALLERY[1:], MARGIN, MIN_SCORE, BAR)  # cancels the call still waiting for the lift
   started, _ = h.reader.next_call("identify")
   assert started - cancelled >= 0.3 - TICK
+  # The finger down, then cleared: the cancelled call never reported its lift.
+  assert [h.event(), h.event()] == [FingerStatus(present=True, waiting=False), FingerStatus(present=False, waiting=False)]
   h.no_event(0.0)
 
 
@@ -514,15 +579,14 @@ def test_a_mode_change_after_an_early_result_posts_nothing_more(make: Callable[.
   matched(h.event(), A)
   h.scanner.register(1)
   gallery_of(h.event())
-  pressed = h.event()
-  assert isinstance(pressed, Pressed)
-  assert pressed.press.probe == b"p0"
+  assert h.event() == Captured(0)
+  assert h.of(Pressed).press.probe == b"p0"
 
 
 def test_a_mode_change_after_an_early_result_waits_out_the_pause(make: Callable[..., Harness]) -> None:
   # An admin's approving finger may still be down: registering at once would read it as the new print's first press.
-  h = make(FakeReader([Early(HIT_A), BLOCK]), PAUSE)
-  matched(h.event(), A)
+  h = make(FakeReader([HELD, Early(HIT_A), BLOCK]), PAUSE)
+  matched(h.of(Matched), A)
   changed = time.monotonic()
   h.scanner.register(1)
   started, _ = h.reader.next_call("capture")
@@ -530,8 +594,8 @@ def test_a_mode_change_after_an_early_result_waits_out_the_pause(make: Callable[
 
 
 def test_stop_ends_the_pause_after_an_early_result(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader([Early(HIT_A), BLOCK]), ScannerTimings(finger_off_pause=10.0))
-  matched(h.event(), A)
+  h = make(FakeReader([HELD, Early(HIT_A), BLOCK]), SLOW)
+  matched(h.of(Matched), A)
   h.scanner.set_mode(ReaderMode.CLOSED)  # cancels the call; the pause that follows ignores mode changes
   [thread] = [t for t in threading.enumerate() if t.name == "scanner"]
   h.scanner.stop()
@@ -542,7 +606,8 @@ def test_stop_ends_the_pause_after_an_early_result(make: Callable[..., Harness])
 FAST = ScannerTimings(finger_off_pause=0.01, retry_pause=0.01)
 TB: tuple[Minutiae, ...] = (((1, 1, 1),), ((2, 2, 2),))  # B's print, two presses
 B_OWN = {(b"tb", 0, b"tb"): (99, 30), (b"tb", 1, b"tb"): (45, 99)}  # B's presses against each other
-B_GALLERY = RegisterGallery((OtherPrint(B, 2, Finger.RIGHT_THUMB, TB, ((-1, 45), (45, -1))),))
+B_REF = OtherRef(B, 2, Finger.RIGHT_THUMB)
+B_OTHER = OtherPrint(B, 2, Finger.RIGHT_THUMB, TB, ((-1, 45), (45, -1)))  # agreement: the higher direction, -1 on itself
 M0, M1, M2 = ((10, 10, 0),), ((20, 20, 0),), ((30, 30, 0),)
 
 
@@ -551,25 +616,32 @@ def gallery_of(event: ScannerEvent) -> RegisterGallery:
   return event
 
 
-def test_register_posts_gallery_without_registrant(make: Callable[..., Harness]) -> None:
-  # Employee 1's own prints (A, A2) never count as resemblance; B's agreement keeps the higher direction, -1 on itself.
-  h = make(FakeReader(decoded={b"tb": TB}, scores=B_OWN), FAST, registrant=1)
-  assert h.event() == B_GALLERY
-  assert [d for name, d in h.reader.history if name == "presses"] == [b"tb"]
+def eventually(predicate: Callable[[], bool]) -> None:
+  deadline = time.monotonic() + WAIT
+  while not predicate():
+    assert time.monotonic() < deadline, "never happened"
+    time.sleep(0.01)
 
 
-def test_register_decodes_each_gallery_print_once(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader(decoded={b"tb": TB, b"tb-new": TB}, scores=B_OWN), FAST, registrant=1)
-  assert h.event() == B_GALLERY
-  h.scanner.set_mode(ReaderMode.READY)
-  h.scanner.register(1)
-  assert h.event() == B_GALLERY
-  # A print whose template changed is decoded again.
-  h.scanner.set_gallery([*GALLERY[:2], GalleryPrint(B, 2, b"tb-new", Finger.RIGHT_THUMB)], MARGIN, MIN_SCORE)
-  h.scanner.set_mode(ReaderMode.READY)
-  h.scanner.register(1)
-  gallery_of(h.event())
-  assert [d for name, d in h.reader.history if name == "presses"] == [b"tb", b"tb-new"]
+def no_matcher_threads() -> bool:
+  return not any(t.name.startswith("matcher") for t in threading.enumerate())
+
+
+def test_register_posts_refs_without_scoring(make: Callable[..., Harness]) -> None:
+  # Employee 1's own prints (A, A2) are nobody else's; nothing is decoded or scored before a press is made.
+  h = make(FakeReader(), FAST, registrant=1)
+  assert h.event() == RegisterGallery((B_REF,), BAR)
+  h.reader.next_call("capture")
+  assert h.matching.calls == []
+  assert no_matcher_threads()
+
+
+def test_set_gallery_carries_the_bar(make: Callable[..., Harness]) -> None:
+  # A press scoring 50 against B resembles it at the default bar of 40, not at 55.
+  matching = FakeMatching(decoded={b"tb": TB}, scores={**B_OWN, (b"p0", 0, b"tb"): (50, 0)})
+  h = make(FakeReader(captures=[b"p0"]), FAST, registrant=1, matching=matching, bar=55)
+  assert h.event() == RegisterGallery((B_REF,), 55)
+  assert h.of(Pressed).press.resembled == {}
 
 
 def test_register_posts_pressed_with_scores(make: Callable[..., Harness]) -> None:
@@ -577,17 +649,148 @@ def test_register_posts_pressed_with_scores(make: Callable[..., Harness]) -> Non
     **B_OWN,
     (b"p0", 0, b"tb"): (12, 34),
     (b"p1", 0, b"tb"): (5, 6),
+    (b"p2", 0, b"tb"): (41, 0),  # resembles B: B's presses and agreement come with the press
     (b"p1", 0, b"p0"): (30,),
     (b"p0", 0, b"p1"): (45,),  # the earlier press's direction scores higher
     (b"p2", 0, b"p0"): (50,),  # the new press's direction scores higher
     (b"p0", 0, b"p2"): (20,),
   }
-  reader = FakeReader(captures=[b"p0", b"p1", b"p2"], decoded={b"tb": TB, b"p0": (M0,), b"p1": (M1,), b"p2": (M2,)}, scores=scores)
-  h = make(reader, FAST, registrant=1)
-  assert h.event() == B_GALLERY
-  assert h.event() == Pressed(Press(0, M0, b"p0", {}, {B: (12, 34)}))
-  assert h.event() == Pressed(Press(1, M1, b"p1", {0: 45}, {B: (5, 6)}))
-  assert h.event() == Pressed(Press(2, M2, b"p2", {0: 50, 1: 0}, {B: (0, 0)}))
+  matching = FakeMatching(decoded={b"tb": TB, b"p0": (M0,), b"p1": (M1,), b"p2": (M2,)}, scores=scores)
+  h = make(FakeReader(captures=[b"p0", b"p1", b"p2"]), FAST, registrant=1, matching=matching)
+  gallery_of(h.event())
+  assert h.of(Pressed) == Pressed(Press(0, M0, b"p0", {}, {B: (12, 34)}))
+  assert h.of(Pressed) == Pressed(Press(1, M1, b"p1", {0: 45}, {B: (5, 6)}))
+  assert h.of(Pressed) == Pressed(Press(2, M2, b"p2", {0: 50, 1: 0}, {B: (41, 0)}, {B: B_OTHER}))
+
+
+def test_register_rearms_before_scores_return(make: Callable[..., Harness]) -> None:
+  matching = FakeMatching()
+  matching.gate.clear()
+  h = make(FakeReader(captures=[b"p0", b"p1"]), FAST, registrant=1, matching=matching)
+  gallery_of(h.event())
+  assert [h.event(), h.event()] == [Captured(0), Captured(1)]  # both made while the first's scores are out
+  h.no_event(0.1)
+  matching.gate.set()
+  assert [h.of(Pressed).press.press_id for _ in range(2)] == [0, 1]
+
+
+def test_register_rearms_without_the_finger_off_pause(make: Callable[..., Harness]) -> None:
+  # A press's capture returns only after the reader saw the lift, so the next press is armed at once (owner, 2026-11-17).
+  h = make(FakeReader(captures=[b"p0", b"p1"]), ScannerTimings(finger_off_pause=10.0), registrant=1)
+  gallery_of(h.event())
+  first_end, _ = h.reader.next_call("capture_end")
+  second_start, _ = h.reader.next_call("capture", timeout=1.0)
+  assert second_start - first_end < 0.5  # noqa: PLR2004
+
+
+def test_register_keeps_the_retry_pause(make: Callable[..., Harness]) -> None:
+  # §6.2's never-spin rule: a failed read waits before the next.
+  h = make(FakeReader(captures=[RetryScan("Remove finger")]), ScannerTimings(retry_pause=0.3), registrant=1)
+  gallery_of(h.event())
+  first_end, _ = h.reader.next_call("capture_end")
+  assert h.of(PressRetry) == PressRetry()
+  second_start, _ = h.reader.next_call("capture")
+  assert second_start - first_end >= 0.3 - TICK
+
+
+@pytest.mark.parametrize("held", [True, False], ids=["finger still down", "finger lifted"])
+def test_a_failed_press_pauses_before_ready_only_for_a_resting_finger(make: Callable[..., Harness], *, held: bool) -> None:
+  # A reader error ends the registration in READY: a finger still down mustn't be read at once as a login.
+  captures = [*([HELD] if held else []), ReaderFailure("usb error")]
+  h = make(FakeReader(captures=captures), ScannerTimings(finger_off_pause=0.3), registrant=1)
+  gallery_of(h.event())
+  first_end, _ = h.reader.next_call("capture_end")
+  assert h.of(EnrollFailed) == EnrollFailed("error")
+  second_start, _ = h.reader.next_call("identify")
+  assert (second_start - first_end >= 0.3 - TICK) is held
+
+
+def test_captured_then_pressed_in_order(make: Callable[..., Harness]) -> None:
+  h = make(FakeReader(captures=[b"p0", b"p1", b"p2"]), FAST, registrant=1)
+  gallery_of(h.event())
+  order: list[tuple[str, int]] = []
+  while sum(kind == "pressed" for kind, _ in order) < 3:  # noqa: PLR2004
+    ev = h.event()
+    assert isinstance(ev, Captured | Pressed)
+    order.append(("captured", ev.press_id) if isinstance(ev, Captured) else ("pressed", ev.press.press_id))
+  assert [i for kind, i in order if kind == "pressed"] == [0, 1, 2]
+  assert all(order.index(("captured", i)) < order.index(("pressed", i)) for i in range(3))
+
+
+@pytest.mark.parametrize("end", ["set_mode", "merge"])
+def test_ending_the_session_closes_the_scoring(make: Callable[..., Harness], end: str) -> None:
+  # Review Focus 2: nothing from an ended registration arrives after it, its jobs are cancelled and its threads end.
+  matching = FakeMatching()
+  matching.gate.clear()
+  h = make(FakeReader(captures=[b"p0"]), FAST, registrant=1, matching=matching)
+  gallery_of(h.event())
+  assert h.event() == Captured(0)
+  eventually(lambda: bool(matching.calls))
+  if end == "set_mode":
+    h.scanner.set_mode(ReaderMode.READY)
+  else:
+    h.scanner.merge([b"p0"])
+    assert h.event() == Merged(b"p0")
+  eventually(lambda: matching.cancelled > 0)
+  matching.gate.set()
+  h.no_event(0.3)
+  eventually(no_matcher_threads)
+
+
+def test_the_idle_timeout_waits_for_outstanding_results(make: Callable[..., Harness]) -> None:
+  # Scores out longer than the timeout don't end the registration; the timeout runs from the last result.
+  matching = FakeMatching()
+  matching.gate.clear()
+  timings = ScannerTimings(enroll_idle_timeout=0.2, finger_off_pause=0.01)
+  h = make(FakeReader(captures=[b"p0"]), timings, registrant=1, matching=matching)
+  gallery_of(h.event())
+  assert h.event() == Captured(0)
+  h.no_event(0.5)
+  released = time.monotonic()
+  matching.gate.set()
+  assert isinstance(h.event(), Pressed)
+  assert h.event() == EnrollFailed("timeout")
+  assert time.monotonic() - released >= timings.enroll_idle_timeout - TICK
+
+
+def test_scoring_failures_end_register(make: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch) -> None:
+  alerts: list[tuple[str, object]] = []
+  monkeypatch.setattr(scanner_module, "alert", lambda reason, *_a, **k: alerts.append((reason, k.get("in_except_block"))))
+  matching = FakeMatching()
+  matching.error = ReaderFailure("matcher hiccup")
+  h = make(FakeReader(captures=[b"p0"]), FAST, registrant=1, matching=matching)
+  gallery_of(h.event())
+  assert h.event() == Captured(0)
+  assert h.event() == EnrollFailed("error")
+  h.reader.next_call("identify")
+  assert h.scanner.mode is ReaderMode.READY
+  assert alerts == [("Fingerprint matching kept failing", False)]  # a condition, not an exception: no traceback
+  h.no_event(0.2)
+
+
+@pytest.mark.parametrize(
+  ("decoded", "scores"),
+  [
+    ({b"p0": ()}, {}),
+    ({}, {(b"p1", 0, b"p0"): ()}),
+    ({b"tb": TB}, {**B_OWN, (b"tb", 0, b"tb"): (99,), (b"p0", 0, b"tb"): (45, 0)}),
+  ],
+  ids=["press decoding to no press", "press scoring nothing against an earlier one", "resembled print scoring short"],
+)
+def test_a_short_matcher_result_ends_register(
+  make: Callable[..., Harness],
+  monkeypatch: pytest.MonkeyPatch,
+  decoded: dict[bytes, tuple[Minutiae, ...]],
+  scores: dict[tuple[bytes, int, bytes], tuple[int, ...]],
+) -> None:
+  # Indexing any of them would raise IndexError: each is a failed job instead, retried until the registration fails.
+  monkeypatch.setattr(scanner_module, "alert", lambda *_a, **_k: None)
+  matching = FakeMatching(decoded=decoded, scores=scores)
+  h = make(FakeReader(captures=[b"p0", b"p1"]), FAST, registrant=1, matching=matching)
+  gallery_of(h.event())
+  assert h.of(EnrollFailed) == EnrollFailed("error")
+  h.reader.next_call("identify")
+  assert h.scanner.mode is ReaderMode.READY
 
 
 def test_register_retry_posts_press_retry_and_restarts_the_idle_timer(make: Callable[..., Harness]) -> None:
@@ -597,9 +800,8 @@ def test_register_retry_posts_press_retry_and_restarts_the_idle_timer(make: Call
   h = make(FakeReader(captures=[slow, RetryScan("Remove finger"), slow, b"p0"]), timings, registrant=1)
   gallery_of(h.event())
   assert h.event() == PressRetry()
-  pressed = h.event()
-  assert isinstance(pressed, Pressed)
-  assert pressed.press.press_id == 0
+  assert h.event() == Captured(0)
+  assert h.of(Pressed).press.press_id == 0
 
 
 def test_register_idle_timeout(make: Callable[..., Harness]) -> None:
@@ -619,57 +821,21 @@ def test_register_reader_error_posts_enroll_failed(make: Callable[..., Harness],
   assert h.scanner.mode is ReaderMode.READY
 
 
-@pytest.mark.parametrize("undecodable", [b"tb", b"p0"], ids=["gallery print", "press"])
-def test_an_undecodable_template_ends_register(make: Callable[..., Harness], undecodable: bytes) -> None:
-  # The reader raises ReaderFailure for a template that doesn't decode: the registration fails, the thread goes on.
-  reader = FakeReader(captures=[b"p0"], decoded={undecodable: ReaderFailure("undecodable template: ValueError")})
-  h = make(reader, FAST, registrant=1)
-  if undecodable == b"p0":
-    gallery_of(h.event())
-  assert h.event() == EnrollFailed("error")
-  h.reader.next_call("identify")
-  assert h.scanner.mode is ReaderMode.READY
-
-
-@pytest.mark.parametrize(
-  ("decoded", "scores", "before"),
-  [
-    ({b"tb": TB}, {**B_OWN, (b"tb", 0, b"tb"): (99,)}, 0),
-    ({b"p0": ()}, {}, 1),
-    ({}, {(b"p1", 0, b"p0"): ()}, 2),
-  ],
-  ids=["gallery print scoring short", "press decoding to no press", "press scoring nothing against an earlier one"],
-)
-def test_a_short_reader_result_ends_register(
-  make: Callable[..., Harness],
-  decoded: dict[bytes, tuple[Minutiae, ...]],
-  scores: dict[tuple[bytes, int, bytes], tuple[int, ...]],
-  before: int,
-) -> None:
-  # Indexing any of them would raise IndexError, which escaping would end the scanner thread. `before`: the events first.
-  h = make(FakeReader(captures=[b"p0", b"p1"], decoded=decoded, scores=scores), FAST, registrant=1)
-  assert [type(h.event()) for _ in range(before)] == [RegisterGallery, Pressed][:before]
-  assert h.event() == EnrollFailed("error")
-  h.reader.next_call("identify")
-  assert h.scanner.mode is ReaderMode.READY
-  if decoded.get(b"p0") == ():  # never scored: libfprint would be asked for a press it doesn't have
-    assert not [d for name, d in h.reader.history if name == "score" and isinstance(d, tuple) and b"p0" in d]
-
-
 def test_set_mode_ends_register(make: Callable[..., Harness]) -> None:
-  # The user's Cancel is not a failed registration (R16); coming back starts a new session.
+  # The user's Cancel is not a failed registration (R16); coming back starts a new session, without the old presses.
   h = make(FakeReader(captures=[b"p0", Status(present=True, waiting=False), BLOCK, b"p1"]), FAST, registrant=1)
   gallery_of(h.event())
-  first = h.event()
-  assert isinstance(first, Pressed)
-  assert h.event() == FingerStatus(present=True, waiting=False)
+  assert h.event() == Captured(0)
+  assert h.of(Pressed).press.press_id == 0
+  assert h.of(FingerStatus) == FingerStatus(present=True, waiting=False)
   h.scanner.set_mode(ReaderMode.READY)
-  assert h.event() == FingerStatus(present=False, waiting=False)  # a cancelled capture may never report the lift
+  assert h.of(FingerStatus) == FingerStatus(present=False, waiting=False)  # a cancelled capture may never report the lift
   h.reader.next_call("identify")
   h.no_event(0.2)
   h.scanner.register(1)
   gallery_of(h.event())
-  assert h.event() == Pressed(Press(0, ONE_PRESS[0], b"p1", {}, {B: (0,)}))
+  assert h.event() == Captured(0)
+  assert h.of(Pressed) == Pressed(Press(0, ONE_PRESS[0], b"p1", {}, {B: (0,)}))
 
 
 def test_set_mode_rejects_register(make: Callable[..., Harness]) -> None:
@@ -789,7 +955,7 @@ def test_new_minimum_applies_without_restarting(make: Callable[..., Harness]) ->
   weak = cap(A, (A, 44), (B, 10))
   holder: list[Harness] = []
   h = make(
-    FakeReader([Do(lambda: holder[0].scanner.set_gallery(GALLERY, MARGIN, 0)), weak, weak]), ScannerTimings(finger_off_pause=0.01)
+    FakeReader([Do(lambda: holder[0].scanner.set_gallery(GALLERY, MARGIN, 0, BAR)), weak, weak]), ScannerTimings(finger_off_pause=0.01)
   )
   holder.append(h)
   # The call running when the minimum changed finishes with the minimum it started with, so it wasn't restarted.
@@ -838,7 +1004,8 @@ def test_new_margin_applies_without_restarting(make: Callable[..., Harness]) -> 
   close = cap(A, (A, 50), (B, 49))
   holder: list[Harness] = []
   h = make(
-    FakeReader([Do(lambda: holder[0].scanner.set_gallery(GALLERY, 0, MIN_SCORE)), close, close]), ScannerTimings(finger_off_pause=0.01)
+    FakeReader([Do(lambda: holder[0].scanner.set_gallery(GALLERY, 0, MIN_SCORE, BAR)), close, close]),
+    ScannerTimings(finger_off_pause=0.01),
   )
   holder.append(h)
   # The call running when the margin changed finishes with the margin it started with, so it wasn't restarted.

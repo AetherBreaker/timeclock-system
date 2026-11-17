@@ -19,7 +19,7 @@ from nicegui import app, ui
 from timeclock_system.app_status import read_open_clip, write_status
 from timeclock_system.clock import Clock
 from timeclock_system.crash_alerts import CrashAlertWriter, register_crash_alert_writer
-from timeclock_system.fprint_reader import FprintReader
+from timeclock_system.fprint_reader import FprintMatching, FprintReader
 from timeclock_system.heartbeat import heartbeat_loop
 from timeclock_system.recorder_watch import recorder_watch_loop
 from timeclock_system.scanner import Scanner
@@ -99,7 +99,7 @@ def serve(project_name: str) -> None:  # noqa: C901, PLR0915 - one linear wiring
     if loop is not None:
       loop.call_soon_threadsafe(lambda: keep("Scanner event", controller.on_scanner_event(ev)))
 
-  scanner = Scanner(reader, post)
+  scanner = Scanner(reader, post, matching=FprintMatching())
   sync = DatabaseSync(clock, store, settings.conninfo(), alert=send_alert)
   controller = KioskController(clock, scanner, tz=settings.tz, status_dir=settings.status_dir)
 
@@ -111,7 +111,7 @@ def serve(project_name: str) -> None:  # noqa: C901, PLR0915 - one linear wiring
     # Settings read after the await: a refresh that stalls in it must not put back what a newer one already applied.
     prints = await clock.gallery()
     s = clock.settings()
-    scanner.set_gallery(prints, s.fingerprint_match_margin, s.fingerprint_match_min_score)
+    scanner.set_gallery(prints, s.fingerprint_match_margin, s.fingerprint_match_min_score, s.registration_resemblance_bar)
 
   async def tick_forever() -> None:
     # An app task, not a page timer, so business hours drive the reader with no browser connected.

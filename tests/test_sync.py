@@ -29,7 +29,7 @@ from psycopg.conninfo import make_conninfo
 from pydantic import SecretBytes, SecretStr
 from timeclock_schema.enums import BypassReason, EmployeeRole, Finger, PunchKind, ScanResult
 from timeclock_schema.migrations import load_migrations
-from timeclock_schema.models import Employee, Fingerprint, FingerprintBypass, FingerprintScan, Punch
+from timeclock_schema.models import Employee, Fingerprint, FingerprintBypass, FingerprintScan, Punch, Settings
 from timeclock_schema.shifts import EmployeeState
 
 # First party imports
@@ -618,7 +618,7 @@ async def test_catch_up_mirrors_the_registration_bars(pg: Pg, rig: Callable[[], 
     pg,
     "UPDATE config.settings SET registration_min_detail_points = 11, registration_max_detail_points = 99,"
     " registration_centre_tolerance = 77, registration_agreement_bar = 55, registration_agreement_needed = 2,"
-    " registration_resemblance_bar = 33, registration_disagreement_retries = 3",
+    " registration_resemblance_bar = 33, registration_disagreement_retries = 3",  # no longer read: the default stays
   )
   r = await rig()
   s = r.clock.settings()
@@ -630,4 +630,4 @@ async def test_catch_up_mirrors_the_registration_bars(pg: Pg, rig: Callable[[], 
     s.registration_agreement_needed,
     s.registration_resemblance_bar,
     s.registration_disagreement_retries,
-  ) == (11, 99, 77, 55, 2, 33, 3)
+  ) == (11, 99, 77, 55, 2, 33, Settings().registration_disagreement_retries)

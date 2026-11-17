@@ -131,7 +131,7 @@ body { background: var(--sft-black); color: var(--sft-white); font-size: 1.5rem;
 .sft-button.sft-kind-lunch { background: var(--sft-lunch); color: var(--sft-black); }
 .sft-button.sft-docked { position: fixed; right: calc(64 * var(--sx)); top: calc(720 * var(--sy)); }
 .reader-ready { color: var(--sft-yellow); }
-.reader-scanning { color: var(--sft-blue); }
+.reader-scanning, .reader-lift, .reader-processing { color: var(--sft-blue); }
 .reader-read { color: var(--sft-read-green); }
 .reader-unrecognized { color: var(--sft-orange); }
 .reader-failed, .reader-paused { color: var(--sft-red); }
@@ -586,13 +586,18 @@ class _KioskPage:
     match s:
       case Registering():
         finger = text.FINGER_LABELS[s.finger].lower()
-        # Each replaced press counts as made and adds one to the total, so the count never goes back.
-        done, total = s.kept + s.replaced, PRESSES + s.replaced
-        ui.label(text.REGISTERING.format(finger=finger, done=done, total=total)).classes("sft-title")
+        # A press counts as it's captured; each replaced press adds one to the total, so the count never goes back. A
+        # press made while the last needed ones are checked waits its turn, uncounted until a replacement needs it.
+        total = PRESSES + s.replaced
+        done = min(s.captured, total)
+        if s.results_out and done == total:
+          ui.label(text.CHECKING_PRESSES).classes("sft-title")
+        else:
+          ui.label(text.REGISTERING.format(finger=finger, done=done, total=total)).classes("sft-title")
         if s.advice:
           ui.label(s.advice).classes("sft-error text-3xl").mark("register-advice")
         with ui.row():
-          if done >= PRESSES and s.verdict is None:  # as `KioskController.force_save`
+          if s.kept + s.replaced >= PRESSES and s.verdict is None and not s.results_out:  # as `KioskController.force_save`
             self._button(text.FORCE_SAVE, self._controller.force_save)
           self._button(text.CANCEL, self._controller.cancel)
       case TooSimilarReview():

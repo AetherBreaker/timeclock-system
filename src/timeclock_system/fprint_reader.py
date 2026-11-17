@@ -22,10 +22,10 @@ gi.require_version("FPrint", "2.0")
 from gi.repository import FPrint, Gio, GLib  # after require_version, or gi picks whatever FPrint it finds
 
 # First party imports
+from timeclock_system.matching import GalleryPrint
 from timeclock_system.scanner import (
   Capture,
   FingerStatus,
-  GalleryPrint,
   ReaderFailure,
   ReaderGone,
   ReaderTooHot,
@@ -49,7 +49,7 @@ else:
   _RETRY_SOURCE, _RETRY_DOMAIN = "FPrint.DeviceRetry.quark", GLib.quark_to_string(FPrint.DeviceRetry.quark())
 _ERROR_DOMAIN = GLib.quark_to_string(FPrint.device_error_quark())
 LOGGER = logging.getLogger(__name__)
-_SCORED_CACHE_MAX = 1024  # deserialized templates kept for `score`; far above any gallery
+_SCORED_CACHE_MAX = 1024  # deserialized templates a matcher thread keeps; far above any gallery
 
 
 def _reader_error(e: GLib.Error) -> Exception:
@@ -83,7 +83,6 @@ class FprintReader:
     self._device = devices[0]
     # Deserialized once per print (R36.4); rebuilt from each call's gallery, so removed prints drop out.
     self._prints: dict[UUID, FPrint.Print] = {}
-    self._scored: dict[bytes, FPrint.Print] = {}  # `score`'s `other` templates, by bytes
 
   def new_cancel(self) -> Gio.Cancellable:
     """Return a fresh cancellable for one call; `cancel()` is safe from any thread."""
@@ -179,8 +178,33 @@ class FprintReader:
     finally:
       self._device.disconnect(handler)
 
+  def merge(self, presses: Sequence[bytes]) -> bytes:
+    """Merge one-press templates into one template, in order."""
+    try:
+      return bytes(FPrint.Print.new_from_presses([FPrint.Print.deserialize(p) for p in presses]).serialize())
+    except GLib.Error as e:
+      raise _reader_error(e) from e
+
+
+class FprintMatching:
+  """Registration's scoring through the patched libfprint (`matching.Matching`), from any number of threads at once.
+
+  libfprint's bozorth3 is thread-local and cancellable (timeclock-libfprint post4). Each thread deserializes the prints
+  it scores into its own FpPrint objects, so no libfprint object is shared between threads.
+  """
+
+  def __init__(self) -> None:
+    """Start with no thread's prints deserialized."""
+    self._local = threading.local()  # per thread: `other` templates' FpPrint objects, by bytes
+
+  def new_cancel(self) -> Gio.Cancellable:
+    """Return a fresh cancellable for one call; `cancel()` is safe from any thread."""
+    return Gio.Cancellable()
+
   def presses(self, template: bytes) -> tuple[Minutiae, ...]:
     """Decode a template's presses: (x, y, theta) per detail point, from the FP3 payload after the 3-byte header.
+
+    Pure (GLib.Variant only), so any thread may call it.
 
     Raises:
       ReaderFailure: The template doesn't decode.
@@ -190,25 +214,26 @@ class FprintReader:
       nbis = variant.get_child_value(9).get_variant().unpack()  # (a(aiaiai)): per press, its x, y and theta columns
       return tuple(tuple(zip(x, y, theta, strict=True)) for x, y, theta in nbis[0])
     except (GLib.Error, LookupError, TypeError, ValueError) as e:
-      # Escaping, these would end the scanner thread. R15: the message names only the error, and `from None` drops the
-      # chained traceback, whose frames' locals hold detail points.
+      # Escaping, these would fail the job with detail points in its traceback. R15: the message names only the error,
+      # and `from None` drops the chained traceback, whose frames' locals hold detail points.
       raise ReaderFailure(f"undecodable template: {e.message if isinstance(e, GLib.Error) else type(e).__name__}") from None
 
-  def score(self, press: bytes, index: int, other: bytes) -> tuple[int, ...]:
-    """Score `press`'s press `index` against each of `other`'s presses (bozorth3, as the scans are scored)."""
-    try:
-      if other not in self._scored:
-        if len(self._scored) >= _SCORED_CACHE_MAX:
-          self._scored.clear()
-        self._scored[other] = FPrint.Print.deserialize(other)
-      return tuple(FPrint.Print.deserialize(press).score_press(index, self._scored[other]))
-    except GLib.Error as e:
-      raise _reader_error(e) from e
+  def score(self, press: bytes, index: int, other: bytes, cancel: Gio.Cancellable) -> tuple[int, ...]:
+    """Score `press`'s press `index` against each of `other`'s presses, stopping early if `cancel` fires.
 
-  def merge(self, presses: Sequence[bytes]) -> bytes:
-    """Merge one-press templates into one template, in order."""
+    Raises:
+      ScanCancelled: `cancel` fired before or during the call.
+      ReaderFailure: Any other libfprint error.
+    """
+    prints: dict[bytes, FPrint.Print] | None = getattr(self._local, "prints", None)
+    if prints is None:
+      prints = self._local.prints = {}
     try:
-      return bytes(FPrint.Print.new_from_presses([FPrint.Print.deserialize(p) for p in presses]).serialize())
+      if other not in prints:
+        if len(prints) >= _SCORED_CACHE_MAX:
+          prints.clear()
+        prints[other] = FPrint.Print.deserialize(other)
+      return tuple(FPrint.Print.deserialize(press).score_press(index, prints[other], cancel))
     except GLib.Error as e:
       raise _reader_error(e) from e
 
@@ -225,12 +250,11 @@ def _probe_identify(reader: FprintReader) -> None:
         print(f"press {len(captured)}/5")
       except RetryScan as e:
         print(f"press {len(captured) + 1}/5 (retry: {e})")
-      time.sleep(1.0)  # the scanner's finger_off_pause
+        time.sleep(0.5)  # the scanner's retry_pause; a counted press re-arms at once, as the scanner does
     template = reader.merge(captured)
     print(f"template_bytes={len(template)}")
     gallery = [GalleryPrint(uuid4(), 0, template, Finger.RIGHT_INDEX)]
     for attempt in range(1, 4):
-      time.sleep(1.0)  # the scanner's finger_off_pause
       print(f"identify {attempt}: press the finger")
       started = time.monotonic()
       try:
@@ -260,7 +284,6 @@ def _soak(reader: FprintReader, minutes: float) -> None:
         # An empty gallery still captures (§6.2's version-2 path), so no enrollment is needed to soak.
         reader.identify([], token, lambda _status: None, lambda _result: None)
         print(f"{time.strftime('%H:%M:%S')} capture")
-        time.sleep(1.0)  # the scanner's finger_off_pause
       except ScanCancelled:
         print(f"{time.strftime('%H:%M:%S')} re-armed")
       except ReaderTooHot:

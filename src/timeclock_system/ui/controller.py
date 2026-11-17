@@ -35,8 +35,9 @@ from timeclock_system.clock import (
   normalize_phone,
 )
 from timeclock_system.hours import is_open
-from timeclock_system.registration import PRESSES, Done, GaveUp, NextPress, Session, TooSimilar
+from timeclock_system.registration import PRESSES, Done, NextPress, Session, TooSimilar
 from timeclock_system.scanner import (
+  Captured,
   EnrollFailed,
   FingerStatus,
   Matched,
@@ -98,6 +99,8 @@ class ReaderIndicator(StrEnum):
 
   READY = "ready"  # waiting for a finger: yellow, "Ready"
   SCANNING = "scanning"  # finger down, being read: blue, "Keep your finger down"
+  LIFT = "lift"  # image taken, finger still down, no result yet: blue, "Lift your finger"
+  PROCESSING = "processing"  # a login's finger lifted before its result: blue, "Processing…"
   READ = "read"  # read succeeded, finger still down: green, "Lift your finger"
   UNRECOGNIZED = "unrecognized"  # login read, matched nobody, finger still down: orange, "Lift your finger"
   FAILED = "failed"  # read failed: red, "Couldn't read that, try again"
@@ -240,6 +243,9 @@ class RegisterPrompt:
 class Registering:
   """A registration in progress: `kept` presses kept and `replaced` dropped so far, and `advice` for the press last dropped.
 
+  `captured` counts every press as it's made; its results arrive later, and are out while it's ahead of the presses
+  judged (`results_out`).
+
   `added` in the add-employee flow's optional step, `change` for an approved gear-menu change; `admin_id` is the admin
   present in either (None: the employee registers alone). `session` judges the presses from `RegisterGallery` on;
   `verdict` holds the passing set while its merge runs.
@@ -257,6 +263,12 @@ class Registering:
   replaced: int = 0
   advice: str | None = None
   verdict: Done | None = None
+  captured: int = 0
+
+  @property
+  def results_out(self) -> bool:
+    """Some press made isn't judged yet."""
+    return self.captured > self.kept + self.replaced
 
 
 @dataclass(frozen=True)
@@ -522,6 +534,7 @@ class KioskController:
     self._present = False
     self._waiting = False
     self._outcome: ReaderIndicator | None = None  # the press's READ or UNRECOGNIZED; cleared by a new press or the lift
+    self._processing = False  # a login's image is taken and its result not in; registration shows its own (the title)
     self._failed_at: float | None = None  # the last failed read, until a new press or its red ends
     self._message: ReaderMessage | None = None
     self._open_scan: _OpenScan | None = None  # at most one; a new scan settles it first
@@ -554,8 +567,10 @@ class KioskController:
       return ReaderIndicator.PAUSED
     if self._failed_at is not None and (not self._waiting or now - self._failed_at < FAILED_MIN_SECS):
       return ReaderIndicator.FAILED
-    if self._present:
-      return self._outcome or ReaderIndicator.SCANNING
+    if self._present:  # libfprint stops waiting once the image is taken, the finger still down
+      return self._outcome or (ReaderIndicator.SCANNING if self._waiting else ReaderIndicator.LIFT)
+    if self._processing:
+      return ReaderIndicator.PROCESSING
     return ReaderIndicator.READY if self._waiting else ReaderIndicator.BUSY
 
   @property
@@ -709,7 +724,7 @@ class KioskController:
 
   # -- entry points ---------------------------------------------------------------------------------------------
 
-  async def on_scanner_event(self, ev: ScannerEvent) -> None:
+  async def on_scanner_event(self, ev: ScannerEvent) -> None:  # noqa: C901  # one event, read top to bottom
     """Apply one event the scanner posted.
 
     The reader line reports the reader alone; each screen keeps its own error line for who scanned, roles and PINs.
@@ -719,6 +734,8 @@ class KioskController:
       s = self._screen
       message: ReaderMessage | None = None
       scan_id = await self._log_scan(ev)
+      if isinstance(ev, Matched | NoMatch | Retry):
+        self._processing = False
       match ev:
         case FingerStatus():
           self._on_finger_status(s, ev)
@@ -739,7 +756,9 @@ class KioskController:
             await self._on_match(s, ev)  # no scan recorded: no open scan to open, move or settle
           else:
             await self._on_scanned_match(s, ev, scan_id)
-        case RegisterGallery() | Pressed() | PressRetry() | Merged() | EnrollFailed() if isinstance(s, Registering | TooSimilarReview):
+        case RegisterGallery() | Captured() | Pressed() | PressRetry() | Merged() | EnrollFailed() if isinstance(
+          s, Registering | TooSimilarReview
+        ):
           message = await self._on_register(s, ev)
         case Merged(template=template):
           self._on_forced_merge(s, template)
@@ -786,23 +805,30 @@ class KioskController:
         write_scan(self._status_dir, self._wall())
       if not isinstance(s, Idle | Confirmation):
         self._screen = replace(s, touched_at=self._mono())
+    if ev.waiting:
+      self._processing = False  # re-armed: a cancelled call's result never comes
+    elif ev.present and (self._waiting or not self._present) and self._mode is ReaderMode.READY:
+      self._processing = True  # the image is taken: a login's result is due
     self._present, self._waiting = ev.present, ev.waiting
 
   async def _on_register(
-    self, s: Registering | TooSimilarReview, ev: RegisterGallery | Pressed | PressRetry | Merged | EnrollFailed
+    self, s: Registering | TooSimilarReview, ev: RegisterGallery | Captured | Pressed | PressRetry | Merged | EnrollFailed
   ) -> ReaderMessage | None:
     # Split out of on_scanner_event for C901. Returns a press's reader message; registration never shows unrecognized:
     # the indicator doesn't tell a new print from a known one, which is the screen's job.
     now = self._mono()
     match s, ev:
-      case Registering(verdict=None), RegisterGallery(others=others):
-        # The bars current now hold for the whole registration, so a settings change applies from the next one. A forced
-        # save's merge runs while the reader, back from the admin's approval, starts a session nobody presses for.
-        self._screen = replace(s, session=Session(others, self._clock.settings()), kept=0, replaced=0, advice=None)
-      case Registering(session=Session() as session, verdict=None), Pressed(press=press):
-        self._outcome = ReaderIndicator.READ
-        self._screen = await self._judged(replace(s, touched_at=now), session, session.add(press))
+      case Registering(verdict=None), RegisterGallery(others=others, resemblance_bar=bar):
+        # The bars current now hold for the whole registration, so a settings change applies from the next one; the
+        # resemblance bar is the scanner's, which chose the prints each press carries. A forced save's merge runs while
+        # the reader, back from the admin's approval, starts a session nobody presses for.
+        settings = self._clock.settings().model_copy(update={"registration_resemblance_bar": bar})
+        self._screen = replace(s, session=Session(others, settings), kept=0, replaced=0, captured=0, advice=None)
+      case Registering(session=Session(), verdict=None), Captured():  # posted after the lift: the indicator said LIFT
+        self._screen = replace(s, touched_at=now, captured=s.captured + 1)
         return ReaderMessage(text.SCAN_SUCCESSFUL, "success", now)
+      case Registering(session=Session() as session, verdict=None), Pressed(press=press):
+        self._screen = await self._judged(replace(s, touched_at=now), session, session.add(press))
       case Registering(), PressRetry():
         self._screen, self._failed_at = replace(s, touched_at=now), now
         return ReaderMessage(text.RETRY, "error", now)
@@ -826,8 +852,6 @@ class KioskController:
     match verdict:
       case NextPress(failure=failure):
         return s if failure is None else replace(s, advice=text.PRESS_ADVICE[failure])
-      case GaveUp():
-        return await self._not_saved(s, text.REGISTRATION_GAVE_UP)
       case Done():
         self._reader.merge([p.probe for p in session.kept])
         return replace(s, verdict=verdict)
@@ -1140,10 +1164,19 @@ class KioskController:
         self._screen = ApprovalPrompt(SimilarReview(s.registering, s.verdict), touched_at=self._mono())
 
   async def force_save(self) -> None:
-    """Once `PRESSES` presses are made, an admin may save the registration's best ones past its checks; asked every time."""
+    """Once `PRESSES` presses are judged, an admin may save the registration's best ones past its checks; asked every time.
+
+    Not while a press's results are out: the best presses and the prints they resemble must count every press made.
+    """
     async with self._transition():
       s = self._screen
-      if isinstance(s, Registering) and s.session is not None and s.verdict is None and s.kept + s.replaced >= PRESSES:
+      if (
+        isinstance(s, Registering)
+        and s.session is not None
+        and s.verdict is None
+        and s.kept + s.replaced >= PRESSES
+        and not s.results_out
+      ):
         force = ForceSave(s, s.session.best(), s.session.resembled)
         self._reader.merge([p.probe for p in force.chosen])
         self._screen = ApprovalPrompt(force, touched_at=self._mono())

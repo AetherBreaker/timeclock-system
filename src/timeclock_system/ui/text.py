@@ -49,6 +49,7 @@ RETRY: Final = "Couldn't read that, try again"
 READER_READY: Final = "Ready"
 READER_SCANNING: Final = "Keep your finger down"
 READER_LIFT: Final = "Lift your finger"
+READER_PROCESSING: Final = "Processing…"
 READER_PAUSED: Final = "Reader paused"
 SCAN_SUCCESSFUL: Final = "Scan successful"
 # The reader line's status, by the controller's ReaderIndicator value.
@@ -56,6 +57,8 @@ READER_STATUS: Final[Mapping[str, str]] = MappingProxyType(
   {
     "ready": READER_READY,
     "scanning": READER_SCANNING,
+    "lift": READER_LIFT,
+    "processing": READER_PROCESSING,
     "read": READER_LIFT,
     "unrecognized": READER_LIFT,
     "failed": RETRY,
@@ -73,9 +76,9 @@ NOT_YOUR_FINGER: Final = "That fingerprint doesn't match. Try again."
 REGISTER_PROMPT: Final = "Register your fingerprint"
 REGISTER: Final = "Register"
 REGISTERING: Final = "Press your {finger} on the reader ({done} of {total})"  # the finger label, lower-cased
+CHECKING_PRESSES: Final = "Checking your presses…"  # every press needed is made; their results are still out
 REGISTRATION_TIMED_OUT: Final = "Registration timed out"
 REGISTRATION_FAILED: Final = "Registration failed, try again"
-REGISTRATION_GAVE_UP: Final = "Couldn't get a clean registration. Try again or use another finger."
 # Why a registration press was dropped, as the advice for its replacement.
 PRESS_ADVICE: Final[Mapping[Failure, str]] = MappingProxyType(
   {
