@@ -250,12 +250,11 @@ def _probe_identify(reader: FprintReader) -> None:
         print(f"press {len(captured)}/5")
       except RetryScan as e:
         print(f"press {len(captured) + 1}/5 (retry: {e})")
-        time.sleep(0.5)  # the scanner's retry_pause; a counted press re-arms at once, as registration does
+        time.sleep(0.5)  # the scanner's retry_pause; a counted press re-arms at once, as the scanner does
     template = reader.merge(captured)
     print(f"template_bytes={len(template)}")
     gallery = [GalleryPrint(uuid4(), 0, template, Finger.RIGHT_INDEX)]
     for attempt in range(1, 4):
-      time.sleep(1.0)  # the scanner's finger_off_pause
       print(f"identify {attempt}: press the finger")
       started = time.monotonic()
       try:
@@ -285,7 +284,6 @@ def _soak(reader: FprintReader, minutes: float) -> None:
         # An empty gallery still captures (§6.2's version-2 path), so no enrollment is needed to soak.
         reader.identify([], token, lambda _status: None, lambda _result: None)
         print(f"{time.strftime('%H:%M:%S')} capture")
-        time.sleep(1.0)  # the scanner's finger_off_pause
       except ScanCancelled:
         print(f"{time.strftime('%H:%M:%S')} re-armed")
       except ReaderTooHot:

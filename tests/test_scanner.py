@@ -352,15 +352,27 @@ def make(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Harness]]:
 
 
 PAUSE = ScannerTimings(finger_off_pause=0.3)
+SLOW = ScannerTimings(finger_off_pause=10.0)  # a pause no test waits out
+HELD = Status(present=True, waiting=False)  # a finger down, its image taken: the call returns before its lift
 
 
-def test_ready_pauses_after_a_capture_before_rearming(make: Callable[..., Harness]) -> None:
-  # Review Focus 1: libfprint reports no finger after a capture completes, so the 2 s wait (§6.2) is a real pause.
-  h = make(FakeReader([HIT_A, HIT_B]), PAUSE)
-  matched(h.event(), A)
+def test_ready_rearms_at_once_after_a_scan(make: Callable[..., Harness]) -> None:
+  # identify returns after the lift, so no pause before the next scan (owner, 2026-11-17: no delay for any scan).
+  h = make(FakeReader([Status(present=True, waiting=False), Early(HIT_A), Status(present=False, waiting=False), HIT_A, HIT_B]), SLOW)
   first_end, _ = h.reader.next_call("identify_end")
-  second_start, _ = h.reader.next_call("identify")
-  assert second_start - first_end >= 0.25  # noqa: PLR2004
+  second_start, _ = h.reader.next_call("identify", timeout=1.0)
+  assert second_start - first_end < 0.5  # noqa: PLR2004
+
+
+def test_a_cancel_after_the_lift_rearms_at_once(make: Callable[..., Harness]) -> None:
+  # The finger already lifted when the gallery change cut the call short: nothing rests to be read again.
+  h = make(FakeReader([Status(present=True, waiting=False), Early(HIT_A), Status(present=False, waiting=False), BLOCK]), SLOW)
+  h.reader.next_call("identify")
+  matched(h.of(Matched), A)
+  cancelled = time.monotonic()
+  h.scanner.set_gallery(GALLERY[1:], MARGIN, MIN_SCORE, BAR)
+  started, _ = h.reader.next_call("identify", timeout=1.0)
+  assert started - cancelled < 0.5  # noqa: PLR2004
 
 
 def test_a_mode_change_ends_the_pause(make: Callable[..., Harness]) -> None:
@@ -550,13 +562,15 @@ def test_an_early_no_match_is_posted_once(make: Callable[..., Harness]) -> None:
 
 def test_a_cancel_after_an_early_result_is_no_failure_and_still_pauses(make: Callable[..., Harness]) -> None:
   # Review Focus 1: a finger resting after a match until the call is cancelled isn't read again at once.
-  h = make(FakeReader([Early(HIT_A), BLOCK]), ScannerTimings(finger_off_pause=0.3))
+  h = make(FakeReader([HELD, Early(HIT_A), BLOCK]), ScannerTimings(finger_off_pause=0.3))
   h.reader.next_call("identify")
-  matched(h.event(), A)
+  matched(h.of(Matched), A)
   cancelled = time.monotonic()
   h.scanner.set_gallery(GALLERY[1:], MARGIN, MIN_SCORE, BAR)  # cancels the call still waiting for the lift
   started, _ = h.reader.next_call("identify")
   assert started - cancelled >= 0.3 - TICK
+  # The finger down, then cleared: the cancelled call never reported its lift.
+  assert [h.event(), h.event()] == [FingerStatus(present=True, waiting=False), FingerStatus(present=False, waiting=False)]
   h.no_event(0.0)
 
 
@@ -571,8 +585,8 @@ def test_a_mode_change_after_an_early_result_posts_nothing_more(make: Callable[.
 
 def test_a_mode_change_after_an_early_result_waits_out_the_pause(make: Callable[..., Harness]) -> None:
   # An admin's approving finger may still be down: registering at once would read it as the new print's first press.
-  h = make(FakeReader([Early(HIT_A), BLOCK]), PAUSE)
-  matched(h.event(), A)
+  h = make(FakeReader([HELD, Early(HIT_A), BLOCK]), PAUSE)
+  matched(h.of(Matched), A)
   changed = time.monotonic()
   h.scanner.register(1)
   started, _ = h.reader.next_call("capture")
@@ -580,8 +594,8 @@ def test_a_mode_change_after_an_early_result_waits_out_the_pause(make: Callable[
 
 
 def test_stop_ends_the_pause_after_an_early_result(make: Callable[..., Harness]) -> None:
-  h = make(FakeReader([Early(HIT_A), BLOCK]), ScannerTimings(finger_off_pause=10.0))
-  matched(h.event(), A)
+  h = make(FakeReader([HELD, Early(HIT_A), BLOCK]), SLOW)
+  matched(h.of(Matched), A)
   h.scanner.set_mode(ReaderMode.CLOSED)  # cancels the call; the pause that follows ignores mode changes
   [thread] = [t for t in threading.enumerate() if t.name == "scanner"]
   h.scanner.stop()
@@ -669,22 +683,26 @@ def test_register_rearms_without_the_finger_off_pause(make: Callable[..., Harnes
   assert second_start - first_end < 0.5  # noqa: PLR2004
 
 
-@pytest.mark.parametrize(
-  ("capture", "expected"),
-  [(RetryScan("Remove finger"), PressRetry()), (ReaderFailure("usb error"), EnrollFailed("error"))],
-  ids=["retry", "reader error"],
-)
-def test_register_still_pauses_after_a_press_that_failed(
-  make: Callable[..., Harness], capture: Exception, expected: ScannerEvent
-) -> None:
-  # A retry's or a failure's finger may still rest: the retry pause, or before READY's next match, the finger-off pause.
-  timings = ScannerTimings(finger_off_pause=0.3, retry_pause=0.3)
-  h = make(FakeReader(captures=[capture]), timings, registrant=1)
+def test_register_keeps_the_retry_pause(make: Callable[..., Harness]) -> None:
+  # §6.2's never-spin rule: a failed read waits before the next.
+  h = make(FakeReader(captures=[RetryScan("Remove finger")]), ScannerTimings(retry_pause=0.3), registrant=1)
   gallery_of(h.event())
   first_end, _ = h.reader.next_call("capture_end")
-  assert h.event() == expected
-  second_start, _ = h.reader.next_call("capture" if isinstance(expected, PressRetry) else "identify")
+  assert h.of(PressRetry) == PressRetry()
+  second_start, _ = h.reader.next_call("capture")
   assert second_start - first_end >= 0.3 - TICK
+
+
+@pytest.mark.parametrize("held", [True, False], ids=["finger still down", "finger lifted"])
+def test_a_failed_press_pauses_before_ready_only_for_a_resting_finger(make: Callable[..., Harness], *, held: bool) -> None:
+  # A reader error ends the registration in READY: a finger still down mustn't be read at once as a login.
+  captures = [*([HELD] if held else []), ReaderFailure("usb error")]
+  h = make(FakeReader(captures=captures), ScannerTimings(finger_off_pause=0.3), registrant=1)
+  gallery_of(h.event())
+  first_end, _ = h.reader.next_call("capture_end")
+  assert h.of(EnrollFailed) == EnrollFailed("error")
+  second_start, _ = h.reader.next_call("identify")
+  assert (second_start - first_end >= 0.3 - TICK) is held
 
 
 def test_captured_then_pressed_in_order(make: Callable[..., Harness]) -> None:

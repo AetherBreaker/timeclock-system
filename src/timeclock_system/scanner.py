@@ -247,7 +247,7 @@ class ScannerTimings:
   backoff_max: float = 30.0
   too_hot_pause: float = 60.0
   rearm_every: float = 60.0
-  finger_off_pause: float = 1.0  # after a login or a failed press, about twice the spike's 0.54 s tail; see _ready_once
+  finger_off_pause: float = 1.0  # only after a call cut short with the finger down; see _ready_once
   failure_limit: float = 180.0  # a ReaderFailure streak this long is fatal
   enroll_idle_timeout: float = 30.0  # a registration's press timeout; it doesn't run while a press's results are out
 
@@ -301,6 +301,7 @@ class Scanner:
     self._thread = threading.Thread(target=self._run, name="scanner", daemon=True)
     self._opened = False  # scanner thread only, like _backoff and _last_status
     self._last_status: FingerStatus | None = None  # the current call's last posted status; None once it ends
+    self._held = False  # the last call ended with a finger still down: cut short before its lift
     self._backoff = timings.backoff_start  # doubles per ReaderFailure, reset by a completed capture
     self._failing_since: float | None = None  # start of the current ReaderFailure streak, reset with _backoff
     # The REGISTER session, scanner thread only: the _mode_changes it began at, and its next capture's press_id.
@@ -517,11 +518,12 @@ class Scanner:
       return
     self._backoff = self._timings.backoff_start
     self._failing_since = None
-    # §6.2: no re-capture straight away. identify returns after the lift, but a call cancelled while the finger rests
-    # (the re-arm, a gallery or mode change) returns before it; the pause keeps a bounce or that resting finger from
-    # being read as the next press. After an early result only stop ends it: a mode change then (registration after an
-    # admin's approving finger) must not start reading while that finger may still rest.
-    (self._stopped if posted else self._wake).wait(self._timings.finger_off_pause)
+    # identify returns after the lift, so the next scan is armed at once (owner, 2026-11-17). Only a call cut short while
+    # the finger rests (the re-arm, a gallery or mode change) returns before it: the pause keeps that finger from being
+    # read again. After an early result only stop ends it: a mode change then (registration after an admin's approving
+    # finger) must not start reading while that finger may still rest.
+    if self._held:
+      (self._stopped if posted else self._wake).wait(self._timings.finger_off_pause)
 
   def _identify_once(self) -> tuple[Matched | NoMatch | Retry, bool]:
     """The one matcher boundary (R36.3): the only `reader.identify` call, which version 2 replaces.
@@ -562,6 +564,7 @@ class Scanner:
       rearm.cancel()
       with self._lock:
         self._token = None
+      self._held = self._last_status is not None and self._last_status.present
       if self._last_status not in {None, _NO_FINGER}:
         self._post(_NO_FINGER)  # a cancelled call may never report the lift
       self._last_status = None
@@ -604,10 +607,12 @@ class Scanner:
     if add is not None:
       scoring, press_id, probe = add
       scoring.add(press_id, probe)  # outside _lock (module docstring); a no-op if the session ended meanwhile
-    if isinstance(outcome, Captured):
-      return  # the capture returned after the reader saw the lift: no pause before the next press (owner, 2026-11-17)
-    # A retry's finger may still rest, as may a failed or cancelled press's before READY's next match.
-    self._wake.wait(self._timings.retry_pause if isinstance(outcome, PressRetry) else self._timings.finger_off_pause)
+    # As _ready_once: no pause unless the call was cut short with the finger down, so READY's next match (after a failed
+    # or cancelled press) doesn't read it. A retry keeps §6.2's never-spin pause.
+    if isinstance(outcome, PressRetry):
+      self._wake.wait(self._timings.retry_pause)
+    elif self._held:
+      self._wake.wait(self._timings.finger_off_pause)
 
   def _capture(self, token: CancelToken) -> tuple[bytes | None, PressRetry | EnrollFailed | None]:
     # Split out of _register_once for C901: one capture, as its probe or what to post instead. None for both: a merge,
@@ -623,6 +628,7 @@ class Scanner:
     except ReaderTooHot, ReaderFailure:
       return None, EnrollFailed("error")
     finally:
+      self._held = self._last_status is not None and self._last_status.present
       if self._last_status not in {None, _NO_FINGER}:
         self._post(_NO_FINGER)  # a cancelled capture may never report the lift
       self._last_status = None
