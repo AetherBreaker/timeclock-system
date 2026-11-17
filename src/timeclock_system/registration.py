@@ -34,8 +34,8 @@ class Failure(StrEnum):
   """Why a press is replaced.
 
   A press failing its own checks (`press_failure`) is replaced as soon as it's judged; `DISAGREES` waits for `PRESSES`
-  kept presses, since a later press may yet agree with it. Only `DISAGREES` counts toward giving up: the others are
-  placement, pressure or a wet finger, which the advice corrects.
+  kept presses, since a later press may yet agree with it. A registration never gives up (owner, 2026-11-17): it ends
+  on a passing set, the press timeout or Cancel.
   """
 
   OFF_CENTRE = "off centre"
@@ -106,12 +106,7 @@ class Done:
   flagged: tuple[OtherPrint, ...]
 
 
-@dataclass(frozen=True)
-class GaveUp:
-  """Every allowed disagreeing press went by without a passing set."""
-
-
-type Verdict = NextPress | TooSimilar | Done | GaveUp
+type Verdict = NextPress | TooSimilar | Done
 
 
 def press_failure(minutiae: Minutiae, settings: Settings) -> Failure | None:
@@ -158,7 +153,6 @@ class Session:
     self._kept: list[Press] = []
     self._presses: list[Press] = []  # every press added, kept or replaced, for `best`
     self._replaced = 0
-    self._disagreed = 0  # the replaced presses that count toward `registration_disagreement_retries`
 
   @property
   def kept(self) -> tuple[Press, ...]:
@@ -263,13 +257,9 @@ class Session:
         # Lowest agreement: the best score, then the next best (two strays agreeing only with each other tie on the best);
         # a tie goes to the earlier press.
         worst = min((i for i in chosen if i in disagreeing), key=lambda i: sorted(agreement[i].values(), reverse=True))
-        if self._disagreed >= s.registration_disagreement_retries:
-          verdict, outcome = GaveUp(), f"gave up, press {worst} {Failure.DISAGREES}"
-        else:
-          self._replaced += 1
-          self._disagreed += 1
-          self._kept = [p for p in kept if p.press_id != worst]
-          verdict, outcome = NextPress(Failure.DISAGREES), f"replacing press {worst}: {Failure.DISAGREES}"
+        self._replaced += 1
+        self._kept = [p for p in kept if p.press_id != worst]
+        verdict, outcome = NextPress(Failure.DISAGREES), f"replacing press {worst}: {Failure.DISAGREES}"
       elif similar:
         similar.sort(key=lambda pair: pair[0], reverse=True)  # stable: equal scores keep the gallery's order
         other, *rest = (o for _, o in similar)

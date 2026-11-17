@@ -35,7 +35,7 @@ from timeclock_system.clock import (
   normalize_phone,
 )
 from timeclock_system.hours import is_open
-from timeclock_system.registration import PRESSES, Done, GaveUp, NextPress, Session, TooSimilar
+from timeclock_system.registration import PRESSES, Done, NextPress, Session, TooSimilar
 from timeclock_system.scanner import (
   Captured,
   EnrollFailed,
@@ -852,8 +852,6 @@ class KioskController:
     match verdict:
       case NextPress(failure=failure):
         return s if failure is None else replace(s, advice=text.PRESS_ADVICE[failure])
-      case GaveUp():
-        return await self._not_saved(s, text.REGISTRATION_GAVE_UP)
       case Done():
         self._reader.merge([p.probe for p in session.kept])
         return replace(s, verdict=verdict)

@@ -558,17 +558,18 @@ async def test_a_session_takes_the_bars_current_at_its_start(kiosk: Kiosk) -> No
   assert isinstance(screen, Registering) and screen.advice == text.PRESS_ADVICE[Failure.TOO_FEW]
 
 
-async def test_gave_up_message(kiosk: Kiosk) -> None:
+async def test_disagreeing_presses_keep_asking_for_more(kiosk: Kiosk) -> None:
+  # No cap on rescans (owner, 2026-11-17): every disagreeing press raises the total and the registration goes on.
+  n = 20
   await bob_registers(kiosk)
   await kiosk.ctl.on_scanner_event(gallery())
-  for i in range(PRESSES + BARS.registration_disagreement_retries):
+  for i in range(PRESSES - 1 + n):
     await pressed(kiosk, press(i, agrees=i < PRESSES - 1))
-  assert kiosk.ctl.screen == Idle(
-    "Couldn't get a clean registration. Try again or use another finger.", until=kiosk.t.mono + controller_module.IDLE_ERROR_SECS
-  )
-  assert kiosk.reader.modes[-1] is ReaderMode.READY
-  assert kiosk.reader.merges == []
-  assert not await kiosk.clock.has_fingerprint(BOB)
+  screen = kiosk.ctl.screen
+  assert isinstance(screen, Registering)
+  assert (screen.kept, screen.replaced, screen.verdict) == (PRESSES - 1, n, None)
+  assert screen.advice == text.PRESS_ADVICE[Failure.DISAGREES]
+  assert kiosk.reader.modes[-1] is ReaderMode.REGISTER
 
 
 async def test_registration_timeout_shows_message(kiosk: Kiosk) -> None:

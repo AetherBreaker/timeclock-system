@@ -13,7 +13,6 @@ from timeclock_system.registration import (
   WINDOW,
   Done,
   Failure,
-  GaveUp,
   Minutiae,
   NextPress,
   OtherPrint,
@@ -78,7 +77,7 @@ def start(*others: OtherPrint) -> Session:
   return Session(tuple(OtherRef(o.print_id, o.employee_id, o.finger) for o in others), S)
 
 
-def run(session: Session, presses: list[Press]) -> list[NextPress | TooSimilar | Done | GaveUp]:
+def run(session: Session, presses: list[Press]) -> list[NextPress | TooSimilar | Done]:
   return [session.add(p) for p in presses]
 
 
@@ -158,7 +157,7 @@ def test_press_check_failures_never_give_up():
     (minutiae(cx=5), Failure.OFF_CENTRE),
     (minutiae(S.registration_max_detail_points + 1), Failure.TOO_MANY),
   ]
-  n = len(free) * (S.registration_disagreement_retries + 1)
+  n = len(free) * 4
   session = start()
   run(session, [press(i) for i in range(PRESSES - 1)])
   verdicts = run(session, [press(PRESSES - 1 + k, points=free[k % len(free)][0]) for k in range(n)])
@@ -167,18 +166,16 @@ def test_press_check_failures_never_give_up():
   assert session.replaced == n
 
 
-def test_gives_up_after_the_disagreeing_presses():
-  limit, light = S.registration_disagreement_retries, minutiae(S.registration_min_detail_points - 1)
+def test_disagreeing_presses_never_end_the_registration():
+  # No cap on rescans (owner, 2026-11-17): a registration ends on a passing set, the press timeout or Cancel.
+  n = 20
   session = start()
   run(session, [press(i) for i in range(PRESSES - 1)])
-  ids = iter(range(PRESSES - 1, PRESSES + 2 * limit))
-  verdicts: list[NextPress | TooSimilar | Done | GaveUp] = []
-  for k in range(limit + 1):
-    i = next(ids)
-    verdicts.append(session.add(press(i, vs_session=dict.fromkeys(range(i), LOW))))
-    if k < limit:
-      verdicts.append(session.add(press(next(ids), points=light)))  # free: it doesn't count toward giving up
-  assert verdicts == [NextPress(Failure.DISAGREES), NextPress(Failure.TOO_FEW)] * limit + [GaveUp()]
+  strays = [press(i, vs_session=dict.fromkeys(range(i), LOW)) for i in range(PRESSES - 1, PRESSES - 1 + n)]
+  assert run(session, strays) == [NextPress(Failure.DISAGREES)] * n
+  last = PRESSES - 1 + n
+  assert session.add(press(last)) == Done(chosen=(0, 1, 2, 3, last), flagged=())
+  assert session.replaced == n
 
 
 def test_best_presses_ranked_by_agreement_alone():

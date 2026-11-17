@@ -79,7 +79,6 @@ REGISTERING: Final = "Press your {finger} on the reader ({done} of {total})"  # 
 CHECKING_PRESSES: Final = "Checking your presses…"  # every press needed is made; their results are still out
 REGISTRATION_TIMED_OUT: Final = "Registration timed out"
 REGISTRATION_FAILED: Final = "Registration failed, try again"
-REGISTRATION_GAVE_UP: Final = "Couldn't get a clean registration. Try again or use another finger."
 # Why a registration press was dropped, as the advice for its replacement.
 PRESS_ADVICE: Final[Mapping[Failure, str]] = MappingProxyType(
   {
