@@ -17,14 +17,15 @@ The owner's first registration test of the matcher-thread branch on timeclock-de
    replaced as soon as its result is in, before five presses, with its advice.
 5. **No cap on rescans.** A registration no longer gives up after `registration_disagreement_retries` disagreeing
    presses: it ends on a passing set, the press timeout or Cancel. The clock stops reading the setting.
+6. **Disagreeing presses stay judged at five, one replacement at a time** (unchanged). The owner turned down counting
+   every press failing at five ("isn't quite such a good idea"), and asked whether a press can be ruled out with
+   confidence around the third or fourth press. Claude replayed timeclock-dev's registered prints press by press: too
+   many presses with no agreeing partner at press 3 or 4 found one by press 5, even presses far below the agreement bar,
+   so no early rule-out reached high confidence (the figures went to the owner in chat). The owner kept today's rule.
 
 ## Open
 
-6. **Disagreeing presses before five.** The owner turned down counting every press failing at five ("isn't quite such a
-   good idea"), and asked whether a press can be ruled out with confidence around the third or fourth press. Claude
-   replayed timeclock-dev's registered prints press by press: too many presses with no agreeing partner at press 3 or 4
-   found one by press 5, even presses far below the agreement bar, so no early rule-out reached high confidence (the
-   figures went to the owner in chat). Awaiting the owner.
+None.
 
 ## Claude's calls
 
