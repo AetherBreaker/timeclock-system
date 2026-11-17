@@ -15,7 +15,6 @@ The owner's first registration test of the matcher-thread branch on timeclock-de
    are out. The screen's title says "Checking your presses…" once every needed press is made and results are still out.
 4. **A press failing its own checks raises the total at once** (off centre, too few or too many detail points). It's
    replaced as soon as its result is in, before five presses, with its advice.
-
 5. **No cap on rescans.** A registration no longer gives up after `registration_disagreement_retries` disagreeing
    presses: it ends on a passing set, the press timeout or Cancel. The clock stops reading the setting.
 
@@ -32,7 +31,6 @@ The owner's first registration test of the matcher-thread branch on timeclock-de
 - "Rescan attempts" read as the registration's give-up cap, the only cap on presses.
 - `registration_disagreement_retries` stays in timeclock-schema and the backend until this release is on every clock;
   a schema change drops it then (the clock stops selecting it first, so no clock's sync breaks).
-
 - LIFT and PROCESSING are blue, as "Keep your finger down" is: no result is known yet.
 - The hardware probe's register loop (`fprint_reader.py`) drops its 1 s sleep after a counted press and keeps 0.5 s after
   a retry, as the scanner does.
