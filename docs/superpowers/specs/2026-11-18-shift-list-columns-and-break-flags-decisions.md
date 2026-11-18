@@ -18,18 +18,19 @@ breaks and lunches that run long or end at a clock-out). Each decision is record
 6. **Only an ended break is flagged.** A break in progress isn't, until its end punch.
 7. **A break ended at a clock-out is flagged.** A short one gets a different flag from a long one: ending a shift on a
    short break can be abuse.
+8. **Breaks off, but a card holds break punches:** the 2026-11-13 rule stands for that card (it shows Breaks and
+   Worked), and its columns fall out of line with the others that week. A rare case; may be revisited.
+9. **Lunches off hides the Lunch column** the same way: off while `lunches_enabled` is false, except on a card holding a
+   lunch punch.
+10. **One chip for a long break ended at a clock-out:** "Break not ended", in place of Long break. Under the long-break
+    threshold it's "Left on break". Each turns grey with ", reviewed".
+11. **Lunch ended at a clock-out:** a long one is "Lunch not ended"; a short one isn't flagged (lunch is unpaid).
+12. **"Ended at a clock-out" means exactly:** the clock's own end punch 1 µs before the clock-out, or an end implied by
+    the clock-out itself. An End break then Clock out back to back doesn't count.
 
 ## Open
 
-- A. Breaks off, but a shown shift has break punches (the 2026-11-13 rule shows them so nothing recorded is hidden):
-  columns off everywhere, or on for every card that week?
-- B. Lunches off (`lunches_enabled` false): is the Lunch column off too?
-- C. A long break ended at a clock-out: one chip in place of Long break, or both? Does "short" mean under the long
-  threshold?
-- D. Lunch ended at a clock-out: lunch is unpaid, so the abuse flag doesn't apply. A long one flagged as not ended, a
-  short one not at all?
-- E. "Ended at a clock-out": exactly (the clock's end punch 1 µs before, or an end implied by the clock-out), or within
-  a minute (also catching End break then Clock out back to back)?
+None.
 
 ## Claude's calls
 
