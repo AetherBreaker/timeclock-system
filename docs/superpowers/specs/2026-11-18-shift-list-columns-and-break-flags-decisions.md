@@ -33,7 +33,16 @@ breaks and lunches that run long or end at a clock-out). Each decision is record
 
 ## Open
 
-None.
+Raised after the final review (2026-11-18), shipped as built meanwhile:
+
+- A. **The editor misorders the clock's end-and-out pair about half the time** (pre-existing). The editor holds times in
+  whole milliseconds and breaks ties by id, so the break end the clock writes 1 µs before a clock-out can sort after
+  it: the break then ends at the clock-out and its end punch shows as a red stray. Shifts flagged "Left on break" or
+  "not ended" lead managers there. Proposed fix: carry the database's order to the browser (a sequence index in
+  `punch_json`, compared before the id).
+- B. **"Add when the break really ended below"** fits an automatic clock-out (no end punch), but a clock-out made on
+  a break already wrote an end punch, so the manager changes it rather than adds one. Proposed: "Set when the break
+  really ended below".
 
 ## Claude's calls
 
