@@ -82,7 +82,7 @@ the owner's to choose.
 
 ## Part 2: settings (timeclock-schema)
 
-Migration `0026` adds to `config.settings`, each `integer NOT NULL` with `CHECK (... >= 0)`:
+The next free migration (0028 as of 2026-11-18; 0026 and 0027 went to the report work) adds to `config.settings`, each `integer NOT NULL` with `CHECK (... >= 0)`:
 
 | Column | Default | Meaning |
 |---|---|---|
@@ -91,7 +91,8 @@ Migration `0026` adds to `config.settings`, each `integer NOT NULL` with `CHECK 
 | `lunch_grace_minutes` | 15 (Claude's call) | How far past `lunch_expected_minutes` a lunch may run before the page flags it |
 
 `Settings` gains the three fields with docstrings saying the same. Only the page reads them: a clock's settings
-SELECT names its own columns. The migration's header comment follows 0023's style. Release as 0.18.0.
+SELECT names its own columns. The migration's header comment follows 0023's style. Release as the next minor (0.20.0
+as of 2026-11-18).
 
 ## Part 3: the flags (timeclock-backend)
 
@@ -106,6 +107,8 @@ clock-out that ends it. One still in progress is never flagged (decision 6).
 - **Long:** its length reaches the threshold (at today's settings a break of exactly 30:00 is long).
 - **Ended at the clock-out** (decision 12): its end is the shift's clock-out time, or 1 µs before it (the clock writes
   the end punch 1 µs before a clock-out made on a break). Nothing looser: End break then Clock out back to back isn't.
+  Both sides compare times cut to the millisecond, an end 0 or 1 ms before the clock-out counting (Claude's call): the
+  editor's times are whole milliseconds, so it can't see a 1 µs gap, and no two punches made by hand land within 2 ms.
 
 ### The flags (decisions 7, 10, 11)
 
@@ -149,16 +152,17 @@ shifts like the others. Its Mark as correct confirms that break's start punch. T
   ended below, or mark it as correct if it's right."
 - Long lunch and Lunch not ended: the same with "lunch" and the lunch threshold.
 
-The editor works the flags out from the draft, so chips and callouts follow edits live, as today. Its page context
-gains `breakGraceMinutes`, `lunchExpectedMinutes` and `lunchGraceMinutes` (`breakLimitMinutes` is already there). The
-editor's title chips (`shift_editor.py`) use the same rules. `editor/rules.js` mirrors `rules.py`, and the drift test
-covers the new flags.
+The callouts follow the draft, so marking or correcting a break removes its callout at once, as today. The title
+chips (`shift_editor.py`, drawn in Python) keep showing the saved shift, as today, and change after the save (Claude's
+call: moving them into the browser means a JS copy of every chip's label). The page context gains
+`breakGraceMinutes`, `lunchExpectedMinutes` and `lunchGraceMinutes` (`breakLimitMinutes` is already there).
+`editor/rules.js` mirrors `rules.py`, and the drift test covers the new flags.
 
 ## Delivery
 
-1. timeclock-schema: migration and fields; release 0.18.0 from the main session.
-2. timeclock-backend: on top of the other session's move to schema 0.17 once it merges, bump to 0.18.0 and build parts
-   1 and 3; PR, merge, `poe release-and-pin` (the backend applies 0026 at startup).
+1. timeclock-schema, from a fresh `origin/main`: migration and fields; release from the main session.
+2. timeclock-backend, from a fresh `origin/main` (v0.21.0 as of 2026-11-18): bump to the new schema and build parts 1
+   and 3; PR, merge, `poe release-and-pin` (the backend applies the migration at startup).
 3. TODO #19 is checked off once it ships.
 
 ## Left to the builder
