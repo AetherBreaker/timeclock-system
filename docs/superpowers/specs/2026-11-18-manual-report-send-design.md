@@ -39,8 +39,12 @@ The page reads the enrolled list itself and sends the chosen addresses in its re
 - *(My call)* The button sits in the gear menu, as a new "Reports (developers only)" section under "Database
   (developers only)": **Send payroll report…**. Non-developers never see the section.
 - It follows the page's database *(owner)*. Switched to the test database, the dialog reads the test database's
-  enrolled list, the request goes into the test database, and the backend builds from test data. The email's subject
-  starts with `TEST — ` *(my call on the exact prefix)*.
+  enrolled list, the request goes into the test database, and the backend builds from test data.
+- *(My call)* A test send is marked everywhere a copy could travel, because the test database holds a copy of
+  production's punches and an unmarked workbook would look real:
+  - the subject starts with `TEST — `
+  - attachment file names and workbook titles start with `TEST `
+  - the body says it was built from test data
 
 ## The dialog
 
@@ -63,6 +67,8 @@ Sent to 1 address at 10:42 AM          ← or "Waiting for the backend…" / "Fa
   clears them.
 - **Send:** reads "Send to N" and is disabled at 0 *(my call)*. Pressing it disables it until the outcome arrives, so a
   double click can't make two requests *(my call)*.
+- **Several requests for one week may wait at once** *(owner)*. Developers may each send their own at the same time, so
+  nothing below the page refuses a second request while another is waiting.
 - **Test database:** a line under the title says the report is built from test data and its subject starts with
   `TEST — ` *(my call)*.
 - **No enrolled addresses:** the dialog says so and offers no Send.
@@ -120,12 +126,16 @@ table".
 **A listener per database** (production and test), started beside the settings listeners in `startup.py`. It listens on
 `report_sends`. On every connect or reconnect, and on every ping, it takes pending rows oldest first, one at a time:
 - **Claim:** set `status = 'sending'` with a `FOR UPDATE SKIP LOCKED` pick, so a ping burst can't send a row twice.
+- **No expiry** *(owner)*: a waiting request is sent however long the backend was away.
+- **Re-check before sending** *(my call)*: every address must still be enrolled for `report`, and `requested_by` must
+  still hold `timeclock_report_senders`. If not, the row fails with the reason and nothing is sent. Without this, an
+  address removed while a request waited could still get payroll.
 - **Build and send:** the same workbooks and email as the scheduled job.
   - Source database: the row's own database.
   - Groups: those of the registry entry named by `report`.
   - Week: `week_start` to `week_start + 6`.
   - To: exactly the row's `recipients`.
-  - Subject: `TEST — ` is prefixed in the test database.
+  - In the test database: the `TEST` markings under "Who and where".
   - *(My call)* The body gains a line saying who sent it by hand and when, so recipients know it's a corrected resend.
 - **Outcome:** set `sent` or `failed`, with `finished_at`. A failure also stores `error` and alerts, as a scheduled
   failure does *(my call: the person may have closed the dialog)*. There's no automatic retry; they can press Send
