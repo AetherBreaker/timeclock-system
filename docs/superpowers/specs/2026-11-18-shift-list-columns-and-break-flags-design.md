@@ -1,6 +1,6 @@
 # Shift list columns and break flags
 
-Draft for the owner's approval, 2026-11-18. The owner's decisions are numbered as in the decisions log
+Owner-approved 2026-11-18. The owner's decisions are numbered as in the decisions log
 (`2026-11-18-shift-list-columns-and-break-flags-decisions.md`); everything marked "Claude's call" is open to correction.
 
 ## Intent
