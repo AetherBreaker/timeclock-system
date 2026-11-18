@@ -238,3 +238,4 @@ persisted_data/
 /docs/superpowers/plans
 # Fingerprint images captured for review; never committed
 fingerprint-samples/
+/recordings
