@@ -9,10 +9,10 @@ Corrections often land after Monday's scheduled payroll email has gone out. A de
 that week's report by hand, to only the addresses they pick from the enrolled list. The selection is not saved
 *(owner)*.
 
-- **Goals:** one dialog on the corrections page that sends last week's payroll workbooks now, to chosen enrolled
-  addresses, and shows whether it went out.
-- **Non-goals:** choosing another week; reports other than the payroll report; editing the enrolled list on the page;
-  a send-history view; retrying a manual send automatically.
+- **Goals:** one dialog on the corrections page that sends a chosen week's payroll workbooks now (last week by
+  default), to chosen enrolled addresses, and shows whether it went out.
+- **Non-goals:** reports other than the payroll report; editing the enrolled list on the page; a send-history view;
+  retrying a manual send automatically.
 - **Anti-goals:**
   - payroll emailed to an address that isn't enrolled
   - a manual send that silently doesn't happen
@@ -50,7 +50,7 @@ The page reads the enrolled list itself and sends the chosen addresses in its re
 
 ```
 Send the payroll report
-Week of Mon Nov 9 – Sun Nov 15
+  ‹  Nov 9 to 15, 2026  ›   Last week
 [Select all]
 ☐ jacob.ogden@sweetfiretobacco.com
 ☐ payroll@example.com
@@ -58,9 +58,12 @@ Week of Mon Nov 9 – Sun Nov 15
 Sent to 1 address at 10:42 AM          ← or "Waiting for the backend…" / "Failed: <reason>"
 ```
 
-- **The week:** the last full Monday-to-Sunday week in America/New_York, worked out when the dialog opens. That's the
-  week Monday's run covers. The request carries that Monday, so what the title shows is what gets sent, even across
-  midnight *(my call)*.
+- **The week:** a week selector like the shift list's *(owner)*: back and forward arrows around the week's label
+  (`text.week_label`, "Nov 9 to 15, 2026"), and a link button that returns to the default.
+  - It opens on the last full Monday-to-Sunday week in America/New_York, the week Monday's run covers.
+  - The request carries the shown week's Monday, so what the selector shows is what gets sent, even across midnight.
+  - *(My call)* Only ended weeks: the forward arrow stops at last week, and the link reads **Last week** where the
+    shift list's reads "This week". The database refuses an unended week anyway, since its report would be partial.
 - **The addresses:** the shown database's `backend.report_recipients` rows for `payroll_report`, sorted, all unticked
   *(my call: the point is choosing targets, so "everyone" isn't the one-click default)*.
 - **Select all** ticks every box *(owner)*. *(My call)* While every box is ticked, it reads **Select none** and
