@@ -9,8 +9,8 @@ Corrections often land after Monday's scheduled payroll email has gone out. A de
 that week's report by hand, to only the addresses they pick from the enrolled list. The selection is not saved
 *(owner)*.
 
-- **Goals:** one dialog on the corrections page that sends a chosen week's payroll workbooks now (last week by
-  default), to chosen enrolled addresses, and shows whether it went out.
+- **Goals:** a button on the shift list that sends the payroll workbooks for the week the list is showing, now, to
+  chosen enrolled addresses, and shows whether it went out.
 - **Non-goals:** reports other than the payroll report; editing the enrolled list on the page; a send-history view;
   retrying a manual send automatically.
 - **Anti-goals:**
@@ -36,8 +36,8 @@ The page reads the enrolled list itself and sends the chosen addresses in its re
 ## Who and where
 
 - Developers only *(owner)*: accounts whose `backend.editors.developer` is true in production.
-- *(My call)* The button sits in the gear menu, as a new "Reports (developers only)" section under "Database
-  (developers only)": **Send payroll report…**. Non-developers never see the section.
+- The button sits on the shift list page *(owner)*: **Send payroll report…**. Non-developers never see it.
+  - *(My call on the spot)* It goes at the end of the list's control row, after the "This week" link.
 - It follows the page's database *(owner)*. Switched to the test database, the dialog reads the test database's
   enrolled list, the request goes into the test database, and the backend builds from test data.
 - *(My call)* A test send is marked everywhere a copy could travel, because the test database holds a copy of
@@ -49,8 +49,10 @@ The page reads the enrolled list itself and sends the chosen addresses in its re
 ## The dialog
 
 ```
+Shifts   ‹  Nov 9 to 15, 2026  ›   This week   ...   [Send payroll report…]     ← developers only
+
 Send the payroll report
-  ‹  Nov 9 to 15, 2026  ›   Last week
+Nov 9 to 15, 2026
 [Select all]
 ☐ jacob.ogden@sweetfiretobacco.com
 ☐ payroll@example.com
@@ -58,12 +60,12 @@ Send the payroll report
 Sent to 1 address at 10:42 AM          ← or "Waiting for the backend…" / "Failed: <reason>"
 ```
 
-- **The week:** a week selector like the shift list's *(owner)*: back and forward arrows around the week's label
-  (`text.week_label`, "Nov 9 to 15, 2026"), and a link button that returns to the default.
-  - It opens on the last full Monday-to-Sunday week in America/New_York, the week Monday's run covers.
-  - The request carries the shown week's Monday, so what the selector shows is what gets sent, even across midnight.
-  - *(My call)* Only ended weeks: the forward arrow stops at last week, and the link reads **Last week** where the
-    shift list's reads "This week". The database refuses an unended week anyway, since its report would be partial.
+- **The week:** whatever week the shift list is showing when the button is pressed *(owner)*. The dialog has no
+  selector of its own.
+  - The dialog's title line is that week's label (`text.week_label`, "Nov 9 to 15, 2026").
+  - The request carries that week's Monday: the Monday the list resolved, including when the list shows the current
+    week by default.
+  - Any week may be sent, a week still in progress included *(owner)*. Its report is whatever has been punched so far.
 - **The addresses:** the shown database's `backend.report_recipients` rows for `payroll_report`, sorted, all unticked
   *(my call: the point is choosing targets, so "everyone" isn't the one-click default)*.
 - **Select all** ticks every box *(owner)*. *(My call)* While every box is ticked, it reads **Select none** and
@@ -101,7 +103,7 @@ Sent to 1 address at 10:42 AM          ← or "Waiting for the backend…" / "Fa
 
 **What the database enforces on insert** (a `BEFORE INSERT` trigger or equivalent):
 - `recipients` is non-empty, has no duplicates, and every address is in `backend.report_recipients` for `report`.
-- `week_start` is a Monday, and its week has ended in America/New_York (`backend.environment.tz`).
+- `week_start` is a Monday; any week, ended or not *(owner)*.
 - `requested_by` is `current_user`, `status` is `pending`, and `finished_at`/`error` are null, whatever the insert said.
 - The badge is stamped from `current_user`, as 0015 stamps `db_login`. **A `SECURITY DEFINER` function would stamp its
   owner instead**, so the insert itself, or any checking trigger, runs as the badge.
@@ -157,7 +159,9 @@ again". They are never resent automatically, since the email may already have go
 ## Page
 
 - The page reads and inserts as the signed-in badge through `editor_transaction`, in the database it shows.
-- The section and dialog appear only when `signin.developer`; the database checks again.
+- The button and dialog appear only when `signin.developer`; the database checks again.
+- The shift list hands the dialog the Monday it resolved for its shown week (its `data[2]`), not its `week` query value,
+  which is None for the current week.
 
 ## Rollout
 
