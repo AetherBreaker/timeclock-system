@@ -27,6 +27,9 @@ breaks and lunches that run long or end at a clock-out). Each decision is record
 11. **Lunch ended at a clock-out:** a long one is "Lunch not ended"; a short one isn't flagged (lunch is unpaid).
 12. **"Ended at a clock-out" means exactly:** the clock's own end punch 1 µs before the clock-out, or an end implied by
     the clock-out itself. An End break then Clock out back to back doesn't count.
+13. **How the flags are built:** three `config.settings` columns in timeclock-schema; the flags worked out from the
+    punches in `rules.py` (mirrored in `editor/rules.js`); Mark as correct reuses the editor's existing button (a
+    same-values correction). Not a separate review table, not rules in timeclock-schema.
 
 ## Open
 
