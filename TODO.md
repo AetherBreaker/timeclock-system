@@ -24,4 +24,3 @@ A deferred item needs its own design before it's built.
 17. [ ] *Deferred.* **Mouse clicks get their position** (owner, 2026-11-13): a mouse that reports only movement can't give the screen recorder a click's position, so its clicks have no ring. The clock itself would report the exact position of the clicks it receives.
 18. [ ] **Drop the weekly-hours alert hook in timeclock-schema** (2026-11-16): the punch menu's hours line replaced its only action, the after-punch notice, and the clock no longer checks alert hooks. In schema's next change, remove the hook's registration in `alerts.py` and update `Settings.weekly_hours_alert`'s docstring (it's now the hours line's
     limit).
-19. [x] **Mark a shift in the backend editor as potentially needing attention if break goes over a certain duration** Or if a break and a clock out happens at the same time (meaning someone forgot to end break.). Also applies for lunches.
