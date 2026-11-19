@@ -27,7 +27,7 @@ The payroll report's send day and time change by editing the database, without a
 
 ## Design
 
-**Table** (timeclock-schema migration 0028):
+**Table** (timeclock-schema migration 0029):
 
 ```sql
 CREATE TABLE backend.report_schedules (
@@ -75,9 +75,9 @@ UPDATE backend.report_schedules SET cron = '0 6 * * MON' WHERE report = 'payroll
 A Sunday time reports the week before last, since the current week hasn't finished.
 
 **Rollout:**
-1. Schema release (v0.20.0).
+1. Schema release (v0.21.0).
 2. Backend release-and-pin.
-3. The outer repo records both pins, plus v0.22.1's.
+3. The outer repo records both pins, plus the backend pins since v0.20.0.
 
 ## Left to the builder
 
