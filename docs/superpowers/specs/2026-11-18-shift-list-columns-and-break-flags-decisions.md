@@ -30,10 +30,16 @@ breaks and lunches that run long or end at a clock-out). Each decision is record
 13. **How the flags are built:** three `config.settings` columns in timeclock-schema; the flags worked out from the
     punches in `rules.py` (mirrored in `editor/rules.js`); Mark as correct reuses the editor's existing button (a
     same-values correction). Not a separate review table, not rules in timeclock-schema.
+14. **The editor orders punches by their exact times** (2026-11-19, raised as A below). It holds times in whole
+    milliseconds and broke ties by id, so the break end the clock writes 1 µs before a clock-out could sort after it
+    and show as a stray. The order is now settled before the rounding: the page sends each time's dropped
+    microseconds, and the editor compares them before the id.
+15. **The not-ended callout says "Set when the break really ended below"** (2026-11-19, raised as B below): a
+    clock-out made on a break already wrote an end punch, which the manager changes rather than adds.
 
 ## Open
 
-Raised after the final review (2026-11-18), shipped as built meanwhile:
+Nothing open. Raised after the final review (2026-11-18), shipped as built meanwhile, settled as decisions 14 and 15:
 
 - A. **The editor misorders the clock's end-and-out pair about half the time** (pre-existing). The editor holds times in
   whole milliseconds and breaks ties by id, so the break end the clock writes 1 µs before a clock-out can sort after
@@ -47,6 +53,7 @@ Raised after the final review (2026-11-18), shipped as built meanwhile:
 ## Claude's calls
 
 - `lunch_grace_minutes` defaults to 15.
+- The lunch callout changes the way decision 15 changes the break's: "Set when the lunch really ended below".
 - "Mark as correct" is the existing editor button (a same-values correction of the punch), as the too-many-breaks
   callout uses; nothing new is stored.
 - A break ended by an automatic clock-out (it writes no break end) counts as not ended, never as the short-break flag:
